@@ -2,7 +2,7 @@ import os
 import sys
 import threading
 import time
-from typing import List, Dict, Any, Optional  # noqa: F401
+from typing import Any, Dict, List, Optional  # noqa: F401
 
 import jax.numpy as jnp
 import numpy as np
@@ -14,12 +14,11 @@ from pydantic import BaseModel
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-from chronos_esm.data import load_bathymetry_mask  # noqa: E402
-from chronos_esm import io as model_io  # noqa: E402
+
 from chronos_esm.coupler import regrid  # noqa: E402
+from chronos_esm.data import load_bathymetry_mask  # noqa: E402
 from chronos_esm.main import ModelParams, init_model, step_coupled  # noqa: E402
 from chronos_esm.ocean import diagnostics as ocean_diagnostics  # noqa: E402
-
 
 app = FastAPI()
 
@@ -58,7 +57,8 @@ class SimulationRunner:
             print("Realistic mask loaded.")
         except Exception as e:
             print(
-                f"Failed to load realistic mask: {e}. Falling back to simple continents."
+                f"Failed to load realistic mask: {e}. "
+                "Falling back to simple continents."
             )
             # Fallback to simple continents if download fails
             mask = jnp.ones((96, 192))

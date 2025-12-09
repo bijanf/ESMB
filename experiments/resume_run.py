@@ -17,9 +17,9 @@ import xarray as xr
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from chronos_esm import data  # noqa: E402
+from chronos_esm import main  # noqa: E402
 from chronos_esm import io as model_io  # noqa: E402
 from chronos_esm import logging as c_log  # noqa: E402
-from chronos_esm import main  # noqa: E402
 from chronos_esm.atmos import qtcm  # noqa: E402
 from chronos_esm.coupler import state as coupled_state  # noqa: E402
 from chronos_esm.ice import driver as ice_driver  # noqa: E402

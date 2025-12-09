@@ -11,7 +11,6 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 
-
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

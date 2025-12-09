@@ -12,17 +12,16 @@ Tests include:
 import sys
 from pathlib import Path
 
+import pytest  # noqa: F401
+from scipy.sparse.linalg import cg as scipy_cg
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
-from scipy.sparse.linalg import cg as scipy_cg
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm.ocean.solver import (
-    create_diagonal_preconditioner,
+from chronos_esm.ocean.solver import (  # noqa: E402
     jacobi_preconditioner,
     solve_cg,
     solve_poisson_2d,
@@ -79,6 +78,7 @@ class TestCGSolver:
         # Solve with JAX CG
         def A_func(x):
             return A_jax @ x
+
         x_jax, info = solve_cg(A_func, b_jax, x0, max_iter=200, tol=1e-6)
 
         # Solve with SciPy CG
@@ -154,8 +154,10 @@ class TestCGSolver:
 
         def objective(b):
             """Solve A*x = b and return 0.5*x^T*A*x - b^T*x."""
+
             def A_func(x):
                 return A @ x
+
             x0 = jnp.zeros(n)
             x, _ = solve_cg(A_func, b, x0, max_iter=100, tol=1e-8)
 

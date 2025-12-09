@@ -1,4 +1,3 @@
-
 """
 Control Run Experiment.
 
@@ -16,10 +15,12 @@ import jax.numpy as jnp
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm import data, main  # noqa: E402
+from chronos_esm import data  # noqa: E402
 from chronos_esm import io as model_io  # noqa: E402
+from chronos_esm import main  # noqa: E402
 from chronos_esm.atmos import dynamics as atmos_driver  # noqa: E402
 from chronos_esm.coupler import state as coupled_state  # noqa: E402
+
 # from chronos_esm.ice import driver as ice_driver  # noqa: E402 # Unused
 from chronos_esm.land import driver as land_driver  # noqa: E402
 from chronos_esm.ocean import veros_driver  # noqa: E402
@@ -56,7 +57,6 @@ def setup_control_run():
     sst_ic = temp_ic[0] + 273.15
 
     # Initialize Land
-
 
     land = land_driver.init_land_state(ny, nx)
 
@@ -114,8 +114,9 @@ def run_control(years: float = 1.0):
 
     # Compile the step function (scan over 1 month)
     # We accumulate fields for monthly means
-    # Define Accumulator structure (using a simple tuple for now to avoid JIT issues with custom classes if not careful,
-    # but NamedTuple is fine in JAX)
+    # Define Accumulator structure
+    # (using a simple tuple for now to avoid JIT issues with custom classes if
+    # not careful, but NamedTuple is fine in JAX)
 
     class Accumulator(NamedTuple):
         # Atmos
