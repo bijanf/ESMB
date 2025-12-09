@@ -2,17 +2,19 @@
 #SBATCH --job-name=chronos_control
 #SBATCH --output=logs/control_%j.log
 #SBATCH --error=logs/control_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --partition=gpu
+#SBATCH --qos=gpumedium
+#SBATCH --account=poem
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=32
 #SBATCH --gres=gpu:1
-#SBATCH --qos=priority
-#SBATCH --account=poem
+#SBATCH --mem=64G
+#SBATCH --time=7-00:00:00
 
-# Load necessary modules (Adjust these based on your HPC environment)
-module load cuda/11.8 # Required for GPU support
-# module load python/3.10
+# Load necessary modules
+module load anaconda
+module load cuda/12.1
 
 # Activate Virtual Environment
 source venv/bin/activate
