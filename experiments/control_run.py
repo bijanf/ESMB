@@ -16,8 +16,8 @@ import jax.numpy as jnp
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from chronos_esm import data  # noqa: E402
-from chronos_esm import io as model_io  # noqa: E402
 from chronos_esm import main  # noqa: E402
+from chronos_esm import io as model_io  # noqa: E402
 from chronos_esm.atmos import dynamics as atmos_driver  # noqa: E402
 from chronos_esm.coupler import state as coupled_state  # noqa: E402
 
@@ -221,7 +221,8 @@ def run_control(years: float = 1.0):
         means = jax.tree_util.tree_map(lambda x: x / steps_per_month, accumulated)
 
         # Save Monthly Mean
-        # We need to package this into a structure that save_state_to_netcdf can handle,
+        # We need to package this into a structure that save_state_to_netcdf
+        # can handle, OR we create a custom saver for means.
         # OR we create a custom saver for means.
         # For simplicity, let's create a "MeanState" object that looks like CoupledState but with mean values.
         # However, CoupledState requires specific types.

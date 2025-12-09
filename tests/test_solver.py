@@ -12,11 +12,11 @@ Tests include:
 import sys
 from pathlib import Path
 
-import pytest  # noqa: F401
-from scipy.sparse.linalg import cg as scipy_cg
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest  # noqa: F401
+from scipy.sparse.linalg import cg as scipy_cg
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))

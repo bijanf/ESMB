@@ -155,7 +155,8 @@ def resume_run(target_years: float = 100.0):
             break
 
         logger.info(
-            f"Month {month} complete in {t_end - t_start:.2f}s. T_mean={t_mean:.2f}K. Saving output..."
+            f"Month {month} complete in {t_end - t_start:.2f}s. "
+            f"T_mean={t_mean:.2f}K. Saving output..."
         )
         model_io.save_state_to_netcdf(
             current_state, output_dir / f"state_{month:04d}.nc"

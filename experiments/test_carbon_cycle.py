@@ -59,12 +59,17 @@ def run_carbon_test():
 
     print("\n--- Carbon Mass Changes (Arbitrary Units) ---")
     print(
-        f"Atmos: {c_atmos_0:.2f} -> {c_atmos_1:.2f} (Delta: {c_atmos_1 - c_atmos_0:.2f})"
+        f"Atmos: {c_atmos_0:.2f} -> {c_atmos_1:.2f} "
+        f"(Delta: {c_atmos_1 - c_atmos_0:.2f})"
     )
     print(
-        f"Ocean: {c_ocean_0:.2f} -> {c_ocean_1:.2f} (Delta: {c_ocean_1 - c_ocean_0:.2f})"
+        f"Ocean: {c_ocean_0:.2f} -> {c_ocean_1:.2f} "
+        f"(Delta: {c_ocean_1 - c_ocean_0:.2f})"
     )
-    print(f"Land:  {c_land_0:.2f} -> {c_land_1:.2f} (Delta: {c_land_1 - c_land_0:.2f})")
+    print(
+        f"Land:  {c_land_0:.2f} -> {c_land_1:.2f} "
+        f"(Delta: {c_land_1 - c_land_0:.2f})"
+    )
 
     # total_0 = (
     #     c_atmos_0 * 1.0
