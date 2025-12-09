@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chronos_esm"
+version = "0.1.0"
+description = "Chronos Earth System Model"
+requires-python = ">=3.9"
+
+# Tools Configuration
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+extend-exclude = '''
+# A regex preceded with ^/ will apply only to the top level of the source
+# tree.
+^/venv
+^/.venv
+^/outputs
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+skip = ["venv", ".venv", "outputs"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false 
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+exclude = ["venv", "outputs", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["scipy.*", "netCDF4.*", "matplotlib.*", "jax.*", "pooch.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
