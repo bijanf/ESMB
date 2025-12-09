@@ -9,10 +9,8 @@ Verifies:
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from chronos_esm import main
-from chronos_esm.config import DT_ATMOS, RHO_WATER
 
 
 def run_carbon_test():
@@ -68,9 +66,9 @@ def run_carbon_test():
     )
     print(f"Land:  {c_land_0:.2f} -> {c_land_1:.2f} (Delta: {c_land_1 - c_land_0:.2f})")
 
-    total_0 = (
-        c_atmos_0 * 1.0
-    )  # Need proper conversion factors for strict conservation check
+    # total_0 = (
+    #     c_atmos_0 * 1.0
+    # )  # Need proper conversion factors for strict conservation check
     # But we can check direction.
 
     # Check Fluxes

@@ -1,3 +1,4 @@
+
 """
 Control Run Experiment.
 
@@ -7,18 +8,21 @@ Runs the coupled model with WOA18 initial conditions for a specified duration.
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm import data, main
-from chronos_esm.atmos import dynamics as atmos_driver
-from chronos_esm.coupler import state as coupled_state
-from chronos_esm.ocean import veros_driver
+from chronos_esm import data, main  # noqa: E402
+from chronos_esm import io as model_io  # noqa: E402
+from chronos_esm.atmos import dynamics as atmos_driver  # noqa: E402
+from chronos_esm.coupler import state as coupled_state  # noqa: E402
+# from chronos_esm.ice import driver as ice_driver  # noqa: E402 # Unused
+from chronos_esm.land import driver as land_driver  # noqa: E402
+from chronos_esm.ocean import veros_driver  # noqa: E402
 
 
 def setup_control_run():
@@ -29,6 +33,7 @@ def setup_control_run():
     # Create Ocean State with loaded ICs
     # Velocities zero
     ny, nx = temp_ic.shape[1], temp_ic.shape[2]
+    # ny, nx = 96, 192
     nz = temp_ic.shape[0]
 
     ocean = veros_driver.OceanState(
@@ -51,8 +56,7 @@ def setup_control_run():
     sst_ic = temp_ic[0] + 273.15
 
     # Initialize Land
-    # Default initialization
-    from chronos_esm.land import driver as land_driver
+
 
     land = land_driver.init_land_state(ny, nx)
 
@@ -95,8 +99,6 @@ def run_control(years: float = 1.0):
 
     # Save initial state
     logger.info("Saving initial state (state_0000.nc)...")
-    from chronos_esm import io as model_io
-
     model_io.save_state_to_netcdf(state, output_dir / "state_0000.nc")
 
     t0 = time.time()
@@ -114,8 +116,6 @@ def run_control(years: float = 1.0):
     # We accumulate fields for monthly means
     # Define Accumulator structure (using a simple tuple for now to avoid JIT issues with custom classes if not careful,
     # but NamedTuple is fine in JAX)
-
-    from typing import NamedTuple
 
     class Accumulator(NamedTuple):
         # Atmos
@@ -227,7 +227,7 @@ def run_control(years: float = 1.0):
         # Easier to just save the dictionary of means.
 
         # Convert to numpy for saving
-        means_np = jax.tree_util.tree_map(lambda x: np.array(x), means)
+        # means_np = jax.tree_util.tree_map(lambda x: np.array(x), means)
 
         # Save means
         mean_filename = output_dir / f"mean_{month:04d}.nc"

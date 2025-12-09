@@ -2,23 +2,24 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import List, Dict, Any, Optional  # noqa: F401
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-from chronos_esm.coupler import regrid
-from chronos_esm.data import load_bathymetry_mask
-from chronos_esm.main import ModelParams, init_model, step_coupled
-from chronos_esm.ocean import diagnostics as ocean_diagnostics
+from chronos_esm.data import load_bathymetry_mask  # noqa: E402
+from chronos_esm import io as model_io  # noqa: E402
+from chronos_esm.coupler import regrid  # noqa: E402
+from chronos_esm.main import ModelParams, init_model, step_coupled  # noqa: E402
+from chronos_esm.ocean import diagnostics as ocean_diagnostics  # noqa: E402
+
 
 app = FastAPI()
 

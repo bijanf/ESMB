@@ -1,3 +1,4 @@
+
 """
 Reproduction script for simulation crash.
 Runs a short segment of the control run to check for stability/crashes.
@@ -9,16 +10,16 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import numpy as np
+# numpy as np  # Unused
 
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm import data, main
-from chronos_esm.atmos import dynamics as atmos_driver
-from chronos_esm.config import DT_ATMOS
-from chronos_esm.coupler import state as coupled_state
-from chronos_esm.ocean import veros_driver
+from chronos_esm import data, main  # noqa: E402
+from chronos_esm.atmos import dynamics as atmos_driver  # noqa: E402
+# from chronos_esm.config import DT_ATMOS # Unused
+from chronos_esm.coupler import state as coupled_state  # noqa: E402
+from chronos_esm.ocean import veros_driver  # noqa: E402
 
 
 def setup_control_run():

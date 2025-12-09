@@ -41,7 +41,8 @@ class TestCGSolver:
         b = jnp.array([2.0, 6.0, 12.0])
         x0 = jnp.zeros(3)
 
-        A_func = lambda x: A @ x
+        def A_func(x):
+            return A @ x
 
         x_cg, info = solve_cg(A_func, b, x0, max_iter=100, tol=1e-8)
         x_true = jnp.array([1.0, 2.0, 3.0])
@@ -56,7 +57,8 @@ class TestCGSolver:
         assert info["num_iters"] <= 10
 
         print(
-            f"✓ Test 1 passed: Diagonal system solved in {info['num_iters']} iterations"
+            f"✓ Test 1 passed: Diagonal system solved in "
+            f"{info['num_iters']} iterations"
         )
 
     def test_random_spd_matrix(self):
@@ -75,7 +77,8 @@ class TestCGSolver:
         x0 = jnp.zeros(n)
 
         # Solve with JAX CG
-        A_func = lambda x: A_jax @ x
+        def A_func(x):
+            return A_jax @ x
         x_jax, info = solve_cg(A_func, b_jax, x0, max_iter=200, tol=1e-6)
 
         # Solve with SciPy CG
@@ -90,7 +93,8 @@ class TestCGSolver:
 
         print(
             f"✓ Test 2 passed: Random SPD system - JAX: {info['num_iters']} iters, "
-            f"SciPy: {scipy_info} status, max diff: {jnp.max(jnp.abs(x_jax - x_scipy)):.2e}"
+            f"SciPy: {scipy_info} status, "
+            f"max diff: {jnp.max(jnp.abs(x_jax - x_scipy)):.2e}"
         )
 
     def test_2d_poisson(self):
@@ -131,7 +135,8 @@ class TestCGSolver:
         # Note: May not formally "converge" to tolerance but solution is accurate
 
         print(
-            f"✓ Test 3 passed: 2D Poisson - converged in {info['num_iters']} iterations, "
+            f"✓ Test 3 passed: 2D Poisson - converged in "
+            f"{info['num_iters']} iterations, "
             f"relative error: {rel_error:.2e}"
         )
 
@@ -149,7 +154,8 @@ class TestCGSolver:
 
         def objective(b):
             """Solve A*x = b and return 0.5*x^T*A*x - b^T*x."""
-            A_func = lambda x: A @ x
+            def A_func(x):
+                return A @ x
             x0 = jnp.zeros(n)
             x, _ = solve_cg(A_func, b, x0, max_iter=100, tol=1e-8)
 
@@ -165,7 +171,8 @@ class TestCGSolver:
         assert jnp.linalg.norm(grad_b) > 0
 
         print(
-            f"✓ Test 4 passed: Gradient flow works, grad norm: {jnp.linalg.norm(grad_b):.2e}"
+            f"✓ Test 4 passed: Gradient flow works, grad norm: "
+            f"{jnp.linalg.norm(grad_b):.2e}"
         )
 
     def test_preconditioner_efficiency(self):
@@ -180,7 +187,8 @@ class TestCGSolver:
         b = jnp.ones(n)
         x0 = jnp.zeros(n)
 
-        A_func = lambda x: A @ x
+        def A_func(x):
+            return A @ x
 
         # Solve without preconditioning
         _, info_no_precond = solve_cg(A_func, b, x0, max_iter=500, tol=1e-6)
@@ -220,7 +228,8 @@ class TestJITCompilation:
         b = jnp.ones(n)
         x0 = jnp.zeros(n)
 
-        A_func = lambda x: A @ x
+        def A_func(x):
+            return A @ x
 
         # First call will compile
         x1, info1 = solve_cg(A_func, b, x0, max_iter=100, tol=1e-6)
@@ -232,7 +241,7 @@ class TestJITCompilation:
         assert jnp.array_equal(x1, x2)
         assert info1["num_iters"] == info2["num_iters"]
 
-        print(f"✓ JIT test passed: Solver compiles and runs consistently")
+        print("✓ JIT test passed: Solver compiles and runs consistently")
 
 
 if __name__ == "__main__":

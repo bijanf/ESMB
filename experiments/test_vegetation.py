@@ -11,14 +11,14 @@ import jax
 import jax.numpy as jnp
 
 from chronos_esm.config import DT_ATMOS
-from chronos_esm.land import driver, vegetation
+from chronos_esm.land import vegetation
 
 
 def run_point_test():
     print("Running Vegetation Point Test...")
 
     # Setup single point
-    ny, nx = 1, 1
+    # ny, nx = 1, 1
 
     # Initial state: Bare soil, some moisture
     temp = jnp.array([[295.0]])  # 22C, good for growth

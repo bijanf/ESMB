@@ -16,15 +16,15 @@ import xarray as xr
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm import data
-from chronos_esm import io as model_io
-from chronos_esm import logging as c_log
-from chronos_esm import main
-from chronos_esm.atmos import qtcm
-from chronos_esm.coupler import state as coupled_state
-from chronos_esm.ice import driver as ice_driver
-from chronos_esm.land import driver as land_driver
-from chronos_esm.ocean import veros_driver
+from chronos_esm import data  # noqa: E402
+from chronos_esm import io as model_io  # noqa: E402
+from chronos_esm import logging as c_log  # noqa: E402
+from chronos_esm import main  # noqa: E402
+from chronos_esm.atmos import qtcm  # noqa: E402
+from chronos_esm.coupler import state as coupled_state  # noqa: E402
+from chronos_esm.ice import driver as ice_driver  # noqa: E402
+from chronos_esm.land import driver as land_driver  # noqa: E402
+from chronos_esm.ocean import veros_driver  # noqa: E402
 
 
 def load_latest_state(output_dir: Path):
