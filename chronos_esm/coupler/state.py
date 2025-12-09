@@ -2,12 +2,12 @@
 Coupled state definitions.
 """
 
-from typing import NamedTuple, Tuple
+from typing import NamedTuple  # noqa: F401
 
 import jax.numpy as jnp
 
 from chronos_esm.atmos.dynamics import AtmosState
-from chronos_esm.ocean.veros_driver import OceanState
+from chronos_esm.ocean.veros_driver import OceanState  # noqa: F401
 
 
 class FluxState(NamedTuple):

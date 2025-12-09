@@ -5,7 +5,7 @@ T63 Resolution Earth System Model.
 
 from typing import NamedTuple
 
-import jax.numpy as jnp
+import jax.numpy as jnp  # noqa: F401
 
 # ============================================================================
 # Grid Definitions (T63 Resolution)

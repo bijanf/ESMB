@@ -4,7 +4,7 @@ Data loader for Chronos-ESM.
 Handles downloading and regridding of initial conditions and forcing data.
 """
 
-import os
+import os  # noqa: F401
 
 import jax.numpy as jnp
 import numpy as np
@@ -19,6 +19,10 @@ DATA_REGISTRY = pooch.create(
     path=pooch.os_cache("chronos_esm"),
     base_url="https://www.ncei.noaa.gov/thredds-ocean/fileServer/ncei/woa/temperature/decav/5deg/",
     registry={
+        "mask": "https://github.com/bijanf/chronos-esm-data/raw/main/"
+        "woa18_mask_04.nc",  # noqa: E501
+        "temp": "https://github.com/bijanf/chronos-esm-data/raw/main/"
+        "woa18_temp_04.nc",  # noqa: E501
         "woa18_decav_t00_5d.nc": None,  # We'll skip hash check for simplicity or add later
     },
 )

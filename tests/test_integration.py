@@ -5,15 +5,17 @@ Integration tests for the full coupled model.
 import sys
 from pathlib import Path
 
-import jax
+import jax  # noqa: F401
 import jax.numpy as jnp
-import pytest
+import numpy as np  # noqa: F401
+import pytest  # noqa: F401
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm import main
-from chronos_esm.coupler import state as coupled_state
+from chronos_esm import main  # noqa: E402
+from chronos_esm.atmos import dynamics  # noqa: E402
+from chronos_esm.coupler import state as coupled_state  # noqa: E402
 
 
 class TestIntegration:
@@ -66,8 +68,8 @@ class TestIntegration:
         assert jnp.isfinite(grad)
         # Increasing CO2 should increase temp -> positive gradient
         # (Physics might be slow to respond in 2 steps, but gradient should exist)
-        # Note: 2 steps might be too short for CO2 to heat up via radiation -> ocean -> atmos loop?
-        # Radiation heats atmos directly. So yes, should be positive.
+        # Note: 2 steps might be too short for CO2 to heat up via radiation ->
+        # ocean -> atmos loop? Radiation heats atmos directly. So yes, should be positive.
 
         # assert grad > 0 # Commented out as magnitude depends on physics tuning
 

@@ -26,7 +26,7 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 
-from chronos_esm.config import ATMOS_GRID, EARTH_RADIUS
+from chronos_esm.config import ATMOS_GRID
 
 
 class SpectralTransform(NamedTuple):

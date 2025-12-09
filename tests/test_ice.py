@@ -5,14 +5,14 @@ Tests for the Sea Ice component.
 import sys
 from pathlib import Path
 
-import jax
+import jax  # noqa: F401
 import jax.numpy as jnp
-import pytest
+import pytest  # noqa: F401
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm.ice import driver, thermodynamics
+from chronos_esm.ice import driver, thermodynamics  # noqa: E402
 
 
 class TestIcePhysics:

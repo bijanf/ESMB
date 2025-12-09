@@ -7,14 +7,15 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import numpy as np
-import pytest
+import numpy as np  # noqa: F401
+import pytest  # noqa: F401
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm.config import OCEAN_GRID
-from chronos_esm.ocean import mixing, veros_driver
+from chronos_esm.config import OCEAN_GRID  # noqa: E402, F401
+from chronos_esm.ocean import mixing  # noqa: E402
+from chronos_esm.ocean import veros_driver  # noqa: E402
 
 
 class TestOceanMixing:

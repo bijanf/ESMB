@@ -7,12 +7,12 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import pytest
+import pytest  # noqa: F401
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm.proxy import forward_ops, loss, sensor
+from chronos_esm.proxy import forward_ops, loss, sensor  # noqa: E402
 
 
 class TestProxyOps:
@@ -80,8 +80,8 @@ class TestLoss:
         # Index 2: Ignored
         # Mean: 9 / 2 = 4.5
 
-        l = loss.mse_loss(model, obs, mask)
-        assert jnp.isclose(l, 4.5)
+        loss_val = loss.mse_loss(model, obs, mask)
+        assert jnp.isclose(loss_val, 4.5)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,7 @@ Implements:
 3. Albedo parameterization
 """
 
-from functools import partial
-from typing import NamedTuple, Tuple
+from typing import Callable, NamedTuple, Tuple  # noqa: F401
 
 import jax
 import jax.numpy as jnp

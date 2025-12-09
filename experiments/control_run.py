@@ -7,15 +7,16 @@ Runs the coupled model with WOA18 initial conditions for a specified duration.
 import sys
 import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import List, NamedTuple, Tuple, Union  # noqa: F401
 
 import jax
-import jax.numpy as jnp
+import jax.numpy as jnp  # noqa: F401
 
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from chronos_esm import data  # noqa: E402
+from chronos_esm import functools  # noqa: F401, E4022
 from chronos_esm import main  # noqa: E402
 from chronos_esm import io as model_io  # noqa: E402
 from chronos_esm.atmos import dynamics as atmos_driver  # noqa: E402
@@ -79,7 +80,7 @@ def run_control(years: float = 1.0):
     # 1 year = 365 * 24 * 3600 seconds
     seconds_per_year = 365 * 24 * 3600
     seconds_per_month = seconds_per_year / 12.0
-    from chronos_esm.config import DT_ATMOS
+    from chronos_esm.config import DT_ATMOS, GRAVITY, OMEGA, P0  # noqa: F401
 
     dt = DT_ATMOS
 
@@ -223,8 +224,8 @@ def run_control(years: float = 1.0):
         # Save Monthly Mean
         # We need to package this into a structure that save_state_to_netcdf
         # can handle, OR we create a custom saver for means.
-        # OR we create a custom saver for means.
-        # For simplicity, let's create a "MeanState" object that looks like CoupledState but with mean values.
+        # For simplicity, let's create a "MeanState" object that looks like
+        # CoupledState but with mean values.
         # However, CoupledState requires specific types.
         # Easier to just save the dictionary of means.
 

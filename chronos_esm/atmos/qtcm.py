@@ -166,8 +166,8 @@ def step_atmos(
     # Heat Flux = Net Solar - Net Longwave - Latent - Sensible
     # Simplified: Just return net downward heat flux
     # Latent flux [W/m^2] = L_v * Evap [kg/m^2/s]
-    latent_flux = 2.5e6 * evap
-    sensible_flux = 1004.0 * sensible  # Check units: sensible calc was K-based?
+    # latent_flux = 2.5e6 * evap
+    # sensible_flux = 1004.0 * sensible  # Check units: sensible calc was K-based?
     # Wait, sensible in code above: c_d * U * (SST - T). Units: m/s * K.
     # Heat flux = rho * Cp * sensible_kinematic
     rho_air = 1.225

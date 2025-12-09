@@ -17,7 +17,7 @@ Method:
 """
 
 from functools import partial
-from typing import NamedTuple, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple, Union  # noqa: F401
 
 import jax
 import jax.numpy as jnp
@@ -58,7 +58,7 @@ def init_atmos_state(
     """Initialize the atmospheric state."""
     # Grid
     lat = jnp.linspace(-90, 90, ny)
-    lon = jnp.linspace(0, 360, nx, endpoint=False)
+    # lon = jnp.linspace(0, 360, nx, endpoint=False)
     lat_rad = jnp.deg2rad(lat)
 
     # Initial Conditions (Jablonowski-Williamson inspired basic state)

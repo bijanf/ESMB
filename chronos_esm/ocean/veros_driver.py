@@ -8,7 +8,13 @@ from typing import NamedTuple, Optional, Tuple
 import jax
 import jax.numpy as jnp
 
-from chronos_esm.config import DT_OCEAN, EARTH_RADIUS, GRAVITY, OCEAN_GRID, RHO_WATER
+from chronos_esm.config import (  # noqa: F401
+    DT_OCEAN,
+    GRAVITY,
+    OCEAN_GRID,
+    OMEGA,
+    RHO_WATER,
+)
 from chronos_esm.ocean import mixing, solver
 
 
