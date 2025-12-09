@@ -12,7 +12,7 @@ scipy>=1.10.0
 pytest
 xarray
 netCDF4
-pooch>=7.0.0
+pooch>=1.6.0
 
 # Optional: for future visualization
 matplotlib>=3.7.0
