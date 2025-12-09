@@ -13,14 +13,15 @@ import jax.numpy as jnp
 BEMIS_A = 16.5
 BEMIS_B = 4.80
 
+
 def bemis_d18o(sst_c: jnp.ndarray, d18o_sw: jnp.ndarray = 0.0) -> jnp.ndarray:
     """
     Forward operator for planktonic foraminifera d18O using Bemis et al. (1998).
-    
+
     Args:
         sst_c: Sea Surface Temperature [C]
         d18o_sw: Seawater d18O [permil] (default 0.0 or passed from salinity)
-        
+
     Returns:
         d18o_c: Calcite d18O [permil]
     """
@@ -30,11 +31,11 @@ def bemis_d18o(sst_c: jnp.ndarray, d18o_sw: jnp.ndarray = 0.0) -> jnp.ndarray:
 def salinity_to_d18o_sw(salinity: jnp.ndarray) -> jnp.ndarray:
     """
     Simple linear relationship between Salinity and d18O_sw.
-    
+
     d18O_sw = alpha * S + beta
     Global relationship approx: d18O_sw = 0.5 * S - 17.5 (rough approx)
     Or regional.
-    
+
     For now, return 0.0 or a simple placeholder.
     """
     # Placeholder: assume constant 0.0 SMOW for now unless requested

@@ -2,14 +2,13 @@
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import jax.numpy as jnp
 
 # Simple 3x3 diagonal  system
-A = jnp.array([[2.0, 0.0, 0.0],
-               [0.0, 3.0, 0.0],
-               [0.0, 0.0, 4.0]])
+A = jnp.array([[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]])
 b = jnp.array([2.0, 6.0, 12.0])
 x_true = jnp.array([1.0, 2.0, 3.0])
 

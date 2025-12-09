@@ -1,23 +1,23 @@
-
-import sys
 import os
+import sys
+import threading
+import time
+from typing import Any, Dict, List, Optional
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-from fastapi import FastAPI, BackgroundTasks
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-import uvicorn
-import threading
-import time
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-from chronos_esm.main import init_model, step_coupled, ModelParams
 from chronos_esm.coupler import regrid
 from chronos_esm.data import load_bathymetry_mask
+from chronos_esm.main import ModelParams, init_model, step_coupled
 from chronos_esm.ocean import diagnostics as ocean_diagnostics
 
 app = FastAPI()
@@ -31,6 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Global Simulation State
 class SimulationRunner:
     def __init__(self):
@@ -41,12 +42,12 @@ class SimulationRunner:
         self.thread = None
         self.lock = threading.Lock()
         self.step_count = 0
-        self.target_year = 2025.0 # Default target year (1 year run)
+        self.target_year = 2025.0  # Default target year (1 year run)
         self.BASE_YEAR = 2024.0
-        
+
     def initialize(self):
         print("Initializing model...")
-        
+
         # Load realistic Land Mask from WOA18 data
         print("Loading realistic land mask...")
         try:
@@ -55,16 +56,18 @@ class SimulationRunner:
             mask = mask_bool.astype(float)
             print("Realistic mask loaded.")
         except Exception as e:
-            print(f"Failed to load realistic mask: {e}. Falling back to simple continents.")
+            print(
+                f"Failed to load realistic mask: {e}. Falling back to simple continents."
+            )
             # Fallback to simple continents if download fails
             mask = jnp.ones((96, 192))
             mask = mask.at[:, 60:90].set(0.0)
             mask = mask.at[:, 140:170].set(0.0)
             mask = mask.at[:5, :].set(1.0)
             mask = mask.at[-5:, :].set(1.0)
-        
+
         self.params = ModelParams(mask=mask)
-        
+
         self.state = init_model()
         self.regridder = regrid.Regridder()
         self.step_count = 0
@@ -76,7 +79,7 @@ class SimulationRunner:
     def step(self):
         if self.state is None:
             return
-        
+
         with self.lock:
             self.state = step_coupled(self.state, self.params, self.regridder)
             self.step_count += 1
@@ -84,11 +87,13 @@ class SimulationRunner:
             # self.state.atmos.temp.block_until_ready()
 
     def run_loop(self):
-        STEPS_PER_BATCH = 2000 # Run 2000 steps per UI update (approx 8 hours per frame at dt=15)
-        
+        STEPS_PER_BATCH = (
+            2000  # Run 2000 steps per UI update (approx 8 hours per frame at dt=15)
+        )
+
         while self.is_running:
             # Check for target year
-            current_year = self.BASE_YEAR + float(self.state.time) / (3600*24*360) 
+            current_year = self.BASE_YEAR + float(self.state.time) / (3600 * 24 * 360)
             if self.target_year is not None and current_year >= self.target_year:
                 print(f"Target year {self.target_year} reached. Stopping.")
                 self.is_running = False
@@ -96,16 +101,17 @@ class SimulationRunner:
 
             # Batch stepping
             for _ in range(STEPS_PER_BATCH):
-                if not self.is_running: break
+                if not self.is_running:
+                    break
                 self.step()
-            
+
             # Small sleep to yield thread
             time.sleep(0.001)
 
     def start(self):
         if self.state is None:
             self.initialize()
-            
+
         if not self.is_running:
             self.is_running = True
             self.thread = threading.Thread(target=self.run_loop)
@@ -123,8 +129,8 @@ class SimulationRunner:
 
     def update_params(self, new_params: dict):
         # Handle target_year separately as it's not in ModelParams
-        if 'target_year' in new_params:
-            self.target_year = new_params.pop('target_year')
+        if "target_year" in new_params:
+            self.target_year = new_params.pop("target_year")
             print(f"Updated target_year: {self.target_year}")
 
         # Update specific fields in ModelParams
@@ -137,33 +143,33 @@ class SimulationRunner:
     def get_snapshot(self):
         if self.state is None:
             return None
-            
+
         with self.lock:
             # Extract fields and convert to numpy (CPU)
             # Downsample for visualization if needed, but 96x192 is small enough
-            
+
             # Atmos
             temp_atm = np.array(self.state.atmos.temp)
             vort_atm = np.array(self.state.atmos.vorticity)
             co2_atm = np.array(self.state.atmos.co2)
             u_atm = np.array(self.state.atmos.u)
             v_atm = np.array(self.state.atmos.v)
-            
+
             # Fluxes
             precip = np.array(self.state.fluxes.precip)
-            
+
             # Ocean (Surface)
-            temp_ocn = np.array(self.state.ocean.temp[0]) # Surface
-            
+            temp_ocn = np.array(self.state.ocean.temp[0])  # Surface
+
             # Land
             temp_land = np.array(self.state.land.temp)
-            
+
             # Metrics
             global_temp = float(np.mean(temp_atm))
             amoc_index = float(ocean_diagnostics.compute_amoc_index(self.state.ocean))
-            
+
             # Time in years (approx)
-            current_year = self.BASE_YEAR + float(self.state.time) / (3600*24*360)
+            current_year = self.BASE_YEAR + float(self.state.time) / (3600 * 24 * 360)
 
             # Helper to sanitize NaNs
             def sanitize(arr):
@@ -184,40 +190,48 @@ class SimulationRunner:
                     "v_atm": sanitize(v_atm),
                     "precip": sanitize(precip),
                     "temp_ocn": sanitize(temp_ocn),
-                    "temp_land": sanitize(temp_land)
-                }
+                    "temp_land": sanitize(temp_land),
+                },
             }
 
+
 runner = SimulationRunner()
+
 
 class UpdateParamsRequest(BaseModel):
     co2_ppm: Optional[float] = None
     solar_constant: Optional[float] = None
     target_year: Optional[float] = None
 
+
 @app.on_event("startup")
 async def startup_event():
     runner.initialize()
+
 
 @app.post("/start")
 async def start_simulation():
     runner.start()
     return {"status": "started"}
 
+
 @app.post("/stop")
 async def stop_simulation():
     runner.stop()
     return {"status": "stopped"}
+
 
 @app.post("/reset")
 async def reset_simulation():
     runner.reset()
     return {"status": "reset"}
 
+
 @app.post("/step")
 async def step_simulation():
     runner.step()
     return {"status": "stepped", "step": runner.step_count}
+
 
 @app.post("/update_params")
 async def update_params(request: UpdateParamsRequest):
@@ -225,12 +239,14 @@ async def update_params(request: UpdateParamsRequest):
     runner.update_params(params_to_update)
     return {"status": "updated", "params": runner.params._asdict()}
 
+
 @app.get("/state")
 async def get_state():
     snapshot = runner.get_snapshot()
     if snapshot is None:
         return {"status": "not_initialized"}
     return snapshot
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
