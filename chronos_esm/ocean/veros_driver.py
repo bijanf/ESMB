@@ -183,7 +183,7 @@ def step_ocean(
     # u = -(r*px + f*py) / (rho * (f^2 + r^2))
     # v =  (f*px - r*py) / (rho * (f^2 + r^2))
     
-    r_drag = 2.0e-5 # Rayleigh friction coefficient [1/s] ~ 1/(14 hours)
+    r_drag = 1.0e-4 # Rayleigh friction coefficient [1/s] ~ 1/(2.7 hours)
     
     denom = RHO_WATER * (f_clamped**2 + r_drag**2)
     
