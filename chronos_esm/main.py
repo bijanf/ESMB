@@ -26,6 +26,7 @@ class ModelParams(NamedTuple):
     """Parameters for the model run."""
 
     co2_ppm: float = 280.0
+    co2_increase_rate: float = 0.0  # Fractional increase per year (e.g. 0.01 for 1%)
     solar_constant: float = 1361.0
     mask: Optional[jnp.ndarray] = None  # Land mask (True=Ocean)
 
@@ -56,109 +57,298 @@ def step_coupled(
 ) -> coupled_state.CoupledState:
     """
     Perform one coupled time step.
+    Propagates Atmosphere/Land with DT_ATMOS for N steps.
+    Propagates Ocean/Ice with DT_OCEAN for 1 step.
     """
+    
+    # Calculate sub-steps
+    # DT_OCEAN is e.g. 900s, DT_ATMOS is 30s -> 30 sub-steps
+    n_substeps = int(DT_OCEAN / DT_ATMOS)
 
-    # 1. Atmosphere Step
-    beta = jnp.ones_like(state.fluxes.sst)
+    # 1. Sub-step Loop for Atmosphere & Land
+    
+    def atmos_land_step(carry, _):
+        # Unpack carry
+        (current_state, acc_fluxes) = carry
+        
+        # -----------------------------------------------------
+        # ATMOSPHERE & LAND DYNAMICS
+        # -----------------------------------------------------
+        
+        # 0. Apply CO2 Forcing (Prescribed)
+        seconds_per_year = 365.0 * 24.0 * 3600.0
+        years_elapsed = current_state.time / seconds_per_year
+        current_co2_ppm = params.co2_ppm * jnp.power(1.0 + params.co2_increase_rate, years_elapsed)
+        co2_field = jnp.ones_like(current_state.atmos.co2) * current_co2_ppm
+        current_state = current_state._replace(atmos=current_state.atmos._replace(co2=co2_field))
 
-    if hasattr(params, "mask") and params.mask is not None:
-        ocean_mask = params.mask  # 1=Ocean, 0=Land
+        # 1. Surface Fluxes logic (Beta calculation)
+        beta = jnp.ones_like(current_state.fluxes.sst)
+        ocean_mask = params.mask if (hasattr(params, "mask") and params.mask is not None) else 1.0
+        # Cast to float to ensure correct arithmetic
+        if hasattr(ocean_mask, 'dtype') and ocean_mask.dtype == bool:
+             ocean_mask = ocean_mask.astype(jnp.float32)
+        
         land_mask = 1.0 - ocean_mask
+        
+        
 
-        # Land Beta
-        if hasattr(state, "land") and state.land is not None:
-            BUCKET_DEPTH = 0.15
-            _, veg_fraction = vegetation.compute_land_properties(state.land.lai)
-            bucket_beta = state.land.soil_moisture / BUCKET_DEPTH
-            bucket_beta = jnp.clip(bucket_beta, 0.0, 1.0)
-            land_beta = bucket_beta * (1.0 + veg_fraction)
-            land_beta = jnp.clip(land_beta, 0.0, 1.0)
-            beta = ocean_mask * 1.0 + land_mask * land_beta
 
-    # Carbon Cycle Coupling
-    dic_surf = regridder.ocean_to_atmos(state.ocean.dic[0])
-    pco2_sea = dic_surf * (280.0 / 2000.0)
-    pco2_air = state.atmos.co2
+        if hasattr(current_state, "land") and current_state.land is not None:
+             # Simple Land Beta
+             BUCKET_DEPTH = 0.15
+             _, veg_fraction = vegetation.compute_land_properties(current_state.land.lai)
+             bucket_beta = current_state.land.soil_moisture / BUCKET_DEPTH
+             bucket_beta = jnp.clip(bucket_beta, 0.0, 1.0)
+             land_beta = bucket_beta * (1.0 + veg_fraction)
+             land_beta = jnp.clip(land_beta, 0.0, 1.0)
+             beta = ocean_mask * 1.0 + land_mask * land_beta
+        
+        # 1. Physics & Fluxes
+        # -------------------
+        
+        # A. Land Fluxes (Peek)
+        # We need fluxes to drive Atmos, but Land state update needs Precip from Atmos.
+        # Solution: Run step_land with dummy precip to get fluxes. 
+        # Fluxes depend on State(t) and T_air(t), not Precip(t) (explicitly).
+        
+        # Calculate Driving Winds and Drag for Land
+        topo_height = current_state.atmos.phi_s / 9.81
+        z0 = 0.0001 + 0.001 * topo_height
+        z0 = jnp.clip(z0, 0.0001, 5.0)
+        k_von_karman = 0.4
+        z_lev = 50.0 
+        cd = (k_von_karman / jnp.log(z_lev / z0)) ** 2
+        cd = jnp.maximum(cd, 1.0e-3)
+        # Calculate Driving Winds and Drag for Land (Scale by 0.7 for surface friction)
+        u_surf = current_state.atmos.u * 0.7
+        v_surf = current_state.atmos.v * 0.7
+        wind_speed_mag = jnp.sqrt(u_surf**2 + v_surf**2) + 1.0
+        
+        # Calculate Seasonal Solar Forcing
+        # Time [s] -> Day of Year
+        seconds_in_year = 365.0 * 86400.0
+        day_of_year = (current_state.time % seconds_in_year) / 86400.0
+        
+        lat_rad = jnp.deg2rad(jnp.linspace(-90, 90, ATMOS_GRID.nlat))
+        sw_toa_profile = atmos_physics.compute_solar_insolation(lat_rad, day_of_year, solar_constant=params.solar_constant)
+        
+        # Broadcast 1D profile to 2D map
+        sw_down = jnp.broadcast_to(sw_toa_profile[:, None], current_state.atmos.temp.shape)
 
-    k_gas = 1.0e-8
-    flux_c_sea = k_gas * (pco2_sea - pco2_air)  # Positive Upward (Sea->Air)
+        
+        # LW Down still approx constant 300 or we can link to T_air
+        # LW_down ~ epsilon_air * sigma * T_air^4
+        # Approx T_air effective ~ T_air - 10K
+        lw_down = 0.8 * 5.67e-8 * (current_state.atmos.temp - 10.0)**4
+        
+        # Peek call (precip=0)
+        _, (land_sensible, land_latent, land_nee) = land_driver.step_land(
+            current_state.land,
+            t_air=current_state.atmos.temp,
+            q_air=current_state.atmos.q,
+            sw_down=sw_down,
+            lw_down=lw_down,
+            precip=jnp.zeros_like(current_state.atmos.temp),
+            mask=land_mask,
+            wind_speed=wind_speed_mag,
+            drag_coeff=cd
+        )
+        
+        # B. Ocean Fluxes
+        # Use existing atmos_physics but masked for Ocean
+        # Calculate Ocean Beta (Simple)
+        beta_ocean = jnp.ones_like(current_state.atmos.temp)
+        
+        ocn_sens, ocn_lat = atmos_physics.compute_surface_fluxes(
+            temp_air=current_state.atmos.temp,
+            q_air=current_state.atmos.q,
+            u_air=u_surf,
+            v_air=v_surf,
+            temp_surf=current_state.fluxes.sst, # Uses composite SST (includes Ice)
+            beta=beta_ocean,
+        )
+        
+        # C. Blend Fluxes
+        # Atmos sees weighted average
+        sensible_flux_coupled = land_mask * land_sensible + ocean_mask * ocn_sens
+        latent_flux_coupled = land_mask * land_latent + ocean_mask * ocn_lat
+        
+        # Carbon Fluxes
+        dic_surf = regridder.ocean_to_atmos(current_state.ocean.dic[0])
+        pco2_sea = dic_surf * (280.0 / 2000.0)
+        pco2_air = current_state.atmos.co2
+        k_gas = 1.0e-8
+        flux_c_sea = k_gas * (pco2_sea - pco2_air)
+        flux_c_total = ocean_mask * flux_c_sea + land_mask * land_nee
+        co2_flux_atm_ppm = flux_c_total * 240.0
 
-    # Air-Land Flux (Lagged)
-    flux_c_land = state.fluxes.carbon_flux_land
+        # 2. Step Atmosphere
+        # ------------------
+        # We are already inside the 'atmos_land_step' scan loop (outer loop).
+        # So we just step ONCE here.
+        
+        new_atmos, (precip_atm, sfc_pressure) = atmos_driver.step_atmos(
+            current_state.atmos,
+            surface_temp=current_state.fluxes.sst,
+            flux_sensible=sensible_flux_coupled,
+            flux_latent=latent_flux_coupled,
+            flux_co2=co2_flux_atm_ppm,
+            sw_down=sw_down, # Pass calculated seasonal SW
+            solar_constant=params.solar_constant,
+            dt=DT_ATMOS,
+            ny=ATMOS_GRID.nlat,
+            nx=ATMOS_GRID.nlon,
+        )
+        
+        # 3. Step Land (State Update)
+        # ---------------------------
+        # Now we have real Precip
+        evap = latent_flux_coupled / 2.5e6
+        fw_flux_atm = precip_atm - evap
+        fw_flux_atm = jnp.clip(fw_flux_atm, -0.05, 0.05)
+        
+        precip_land_input = jnp.maximum(fw_flux_atm, 0.0) / 1000.0 # m/s
+        
+        new_land, _ = land_driver.step_land(
+            current_state.land,
+            t_air=current_state.atmos.temp, # Use consistent T_air (explicit)
+            q_air=current_state.atmos.q,
+            sw_down=sw_down,
+            lw_down=lw_down,
+            precip=precip_land_input,
+            mask=land_mask,
+            wind_speed=wind_speed_mag,
+            drag_coeff=cd
+        )
+        
+        # Update State Time
+        new_time = current_state.time + DT_ATMOS
+        
+        # Calculate Net Heat for Ocean (Diagnostics/Coupling)
+        # sw_down is already calculated (seasonal)
+        # We need Surface Energy Balance for Ocean Driving
+        # Net Heat = SW_net + LW_down - LW_up - Sensible - Latent
+        
+        # SW Net (Albedo ~ 0.07 for ocean)
+        sw_net_ocean = (1.0 - 0.07) * sw_down
+        
+        # LW Up (Stefan-Boltzmann)
+        sst_kelvin = current_state.fluxes.sst + 273.15
+        lw_up_ocean = 0.98 * 5.67e-8 * sst_kelvin**4
+        
+        # Net Heat
+        net_heat_atm = sw_net_ocean + lw_down - lw_up_ocean - sensible_flux_coupled - latent_flux_coupled
+        
+        net_heat_atm = jnp.clip(net_heat_atm, -1500.0, 1500.0)
+        
+        # Update SST for next atmos step (Coupler from Ocean/Land to Atmos)
+        # Ocean/Ice component is fixed during this loop, so ocean part of SST is constant
+        # Land part of SST updates
+        # Need to re-composite SST
+        # Reconstruct SST (Ocean part + New Land part)
+        # Note: current_state.fluxes.sst contains the composite. 
+        # We need to extract the ocean part or remember it.
+        # Ideally, we keep ocean_sst separate.
+        # For simplicity, we assume ocean_temp in state is correct and constant during this loop.
+        # We need to re-calculate sst_composite.
+        
+        # Get Ice surface temp (constant in this loop)
+        # Ocean State is Celsius. SST State is Celsius.
+        # DO NOT subtract 273.15 from Ocean Temp.
+        sst_ocean_ice = (1.0 - current_state.ice.concentration) * (current_state.ocean.temp[0]) + \
+                        current_state.ice.concentration * current_state.ice.surface_temp
+        
+        # New Composite SST
+        sst_composite = ocean_mask * sst_ocean_ice + land_mask * new_land.temp
+        sst_atm = regridder.ocean_to_atmos(sst_composite)
+        
+        # Accumulate Fluxes for Ocean Driving
+        # We need Net Heat, FW, Stress for Ocean
+        # Net Heat to Ocean = Atmos Heat Flux (regridded)
+        
+        # Zonal Wind Stress
+        lat = jnp.linspace(-90, 90, ATMOS_GRID.nlat)
+        lat_rad = jnp.deg2rad(lat)
+        tau_profile = 0.1 * jnp.sin(6.0 * lat_rad)
+        tau_x_atm = jnp.broadcast_to(tau_profile[:, None], net_heat_atm.shape) # Simplified
+        tau_y_atm = jnp.zeros_like(net_heat_atm)
+        
+        # Accumulate
+        # Structure: (heat, fw, tau_x, tau_y, carbon)
+        acc_heat = acc_fluxes[0] + net_heat_atm
+        acc_fw = acc_fluxes[1] + fw_flux_atm
+        acc_tau_x = acc_fluxes[2] + tau_x_atm
+        acc_tau_y = acc_fluxes[3] + tau_y_atm
+        acc_carbon = acc_fluxes[4] + flux_c_sea
+        
+        new_acc = (acc_heat, acc_fw, acc_tau_x, acc_tau_y, acc_carbon)
+        
+        # Update Flux State for returning (instantaneous)
+        new_fluxes = current_state.fluxes._replace(
+            net_heat_flux=net_heat_atm,
+            freshwater_flux=fw_flux_atm,
+            sst=sst_atm,
+            wind_stress_x=tau_x_atm,
+            wind_stress_y=tau_y_atm,
+            carbon_flux_ocean=flux_c_sea,
+            carbon_flux_land=land_nee
+        )
+        
+        next_state = current_state._replace(
+            atmos=new_atmos,
+            land=new_land,
+            fluxes=new_fluxes,
+            time=new_time
+        )
+        
+        return (next_state, new_acc), None
 
-    # Total Flux to Atmosphere [ppm/s]
-    co2_conv_atm = 240.0
-
-    if hasattr(params, "mask") and params.mask is not None:
-        ocean_mask = params.mask
-        land_mask = 1.0 - ocean_mask
-        flux_c_total = ocean_mask * flux_c_sea + land_mask * flux_c_land
-    else:
-        flux_c_total = flux_c_sea
-
-    co2_flux_atm_ppm = flux_c_total * co2_conv_atm
-
-    # Calculate Surface Fluxes for Atmos
-    sensible_flux, latent_flux = atmos_physics.compute_surface_fluxes(
-        temp_air=state.atmos.temp,
-        q_air=state.atmos.q,
-        u_air=state.atmos.u,
-        v_air=state.atmos.v,
-        temp_surf=state.fluxes.sst,  # Composite SST
-        beta=beta,
+    # Initial Accumulator
+    init_acc = (
+        jnp.zeros_like(state.atmos.temp), # Heat
+        jnp.zeros_like(state.atmos.temp), # FW
+        jnp.zeros_like(state.atmos.temp), # Tau X
+        jnp.zeros_like(state.atmos.temp), # Tau Y
+        jnp.zeros_like(state.atmos.temp), # Carbon
     )
-
-    new_atmos, (precip_atm, sfc_pressure) = atmos_driver.step_atmos(
-        state.atmos,
-        surface_temp=state.fluxes.sst,
-        flux_sensible=sensible_flux,
-        flux_latent=latent_flux,
-        flux_co2=co2_flux_atm_ppm,
-        dt=DT_ATMOS,
-        ny=ATMOS_GRID.nlat,
-        nx=ATMOS_GRID.nlon,
+    
+    # Run Sub-stepping Loop
+    (final_atmos_state, accumulated_fluxes), _ = jax.lax.scan(
+        atmos_land_step, (state, init_acc), None, length=n_substeps
     )
-
-    # Net Heat Flux to Ocean (Positive Down)
-    sw_net = 240.0  # W/m2 (Positive Down)
-    lw_net = 50.0  # W/m2 (Net Upward) -> Cooling
-    net_heat_atm = sw_net - lw_net - sensible_flux - latent_flux
-
-    # Freshwater Flux (Positive = P - E)
-    evap = latent_flux / 2.5e6
-    fw_flux_atm = precip_atm - evap
-
-    # 2. Coupler: Atmos -> Ocean/Ice
-    heat_flux_ocn = regridder.atmos_to_ocean(net_heat_atm)
-    fw_flux_ocn = regridder.atmos_to_ocean(fw_flux_atm)
-
-    # Zonal Wind Stress (Sinusoidal to drive Gyres)
-    # tau_x = 0.1 * cos(3 * lat) ?
-    # Let's use a simple profile: Westerlies in mid-lat, Easterlies in tropics
-    lat = jnp.linspace(-90, 90, ATMOS_GRID.nlat)
-    lat_rad = jnp.deg2rad(lat)
-    tau_profile = 0.1 * jnp.sin(6.0 * lat_rad)  # Multiple bands
-    tau_x_atm = jnp.broadcast_to(tau_profile[:, None], net_heat_atm.shape)
-    tau_y_atm = jnp.zeros_like(net_heat_atm)
-
-    tau_x_ocn = regridder.atmos_to_ocean(tau_x_atm)
-    tau_y_ocn = regridder.atmos_to_ocean(tau_y_atm)
-
+    
+    # 2. Average Fluxes for Ocean
+    avg_heat_atm = accumulated_fluxes[0] / n_substeps
+    avg_fw_atm = accumulated_fluxes[1] / n_substeps
+    avg_tau_x_atm = accumulated_fluxes[2] / n_substeps
+    avg_tau_y_atm = accumulated_fluxes[3] / n_substeps
+    avg_carbon_atm = accumulated_fluxes[4] / n_substeps
+    
+    # Regrid to Ocean
+    heat_flux_ocn = regridder.atmos_to_ocean(avg_heat_atm)
+    fw_flux_ocn = regridder.atmos_to_ocean(avg_fw_atm)
+    tau_x_ocn = regridder.atmos_to_ocean(avg_tau_x_atm)
+    tau_y_ocn = regridder.atmos_to_ocean(avg_tau_y_atm)
+    
     # 3. Sea Ice Step
-    t_air_ocn = regridder.atmos_to_ocean(new_atmos.temp - 273.15)  # K -> C
+    # Use final atmospheric state for T_air (snapshot coupling for thermodynamics is ok)
+    t_air_ocn = regridder.atmos_to_ocean(final_atmos_state.atmos.temp - 273.15)
     sw_down = jnp.zeros_like(t_air_ocn)
     lw_down = jnp.ones_like(t_air_ocn) * 300.0
-    sst_ocean_grid = state.ocean.temp[0] - 273.15  # Top layer, K -> C
-
+    sst_ocean_grid = final_atmos_state.ocean.temp[0] - 273.15
+    
+    ocean_mask = params.mask if (hasattr(params, "mask") and params.mask is not None) else None
+    
     new_ice, (ice_heat_flux, ice_fw_flux) = ice_driver.step_ice(
-        state.ice,
+        final_atmos_state.ice,
         t_air=t_air_ocn,
         sw_down=sw_down,
         lw_down=lw_down,
         ocean_temp=sst_ocean_grid,
         ny=OCEAN_GRID.nlat,
         nx=OCEAN_GRID.nlon,
-        mask=params.mask,
+        mask=ocean_mask,
     )
 
     # 4. Ocean Step
@@ -166,15 +356,46 @@ def step_coupled(
     combined_heat_flux = (1.0 - A) * heat_flux_ocn + A * ice_heat_flux
     combined_fw_flux = (1.0 - A) * fw_flux_ocn + A * ice_fw_flux
 
-    fluxes_ocean = (combined_heat_flux, combined_fw_flux, -flux_c_sea)
+    fluxes_ocean = (combined_heat_flux, combined_fw_flux, -avg_carbon_atm)
     wind_ocean = (tau_x_ocn, tau_y_ocn)
 
-    dx_ocn = 100e3
-    dy_ocn = 100e3
-    dz_ocn = jnp.ones(state.ocean.u.shape[0]) * 100.0
-
+    # Calculate grid spacing [m]
+    # T31: nlat=48, nlon=96
+    # dx = 2*pi*R * cos(lat) / nlon
+    # dy = pi*R / nlat (approx)
+    
+    # Veros driver currently expects scalar dx, dy.
+    # We will use the spacing at 45 degrees as a representative constant for this version,
+    # or ideally update veros_driver to accept arrays. 
+    # For now, we fix the "100km" bug by using a realistic average.
+    # At 45 deg: cos(45) ~ 0.707.
+    # dx ~ 2*pi*6.371e6 * 0.707 / 96 ~ 295 km.
+    # dy ~ pi*6.371e6 / 48 ~ 417 km.
+    
+    # Better: Use Equatorial dx (~417km) and dy (~417km) or a mean.
+    # Let's use the explicit formulas.
+    
+    from chronos_esm.config import EARTH_RADIUS
+    
+    # dy is constant in latitude
+    dy_ocn = (jnp.pi * EARTH_RADIUS) / OCEAN_GRID.nlat
+    
+    # dx varies. Using mean dx (at 45N) or equatorial?
+    # Using 45N as a reasonable effective basin width scaler.
+    dx_ocn = (2 * jnp.pi * EARTH_RADIUS * jnp.cos(jnp.deg2rad(45.0))) / OCEAN_GRID.nlon
+    
+    # Vertical Grid (dz)
+    # Must match data.load_initial_conditions: linspace(0, 5000, 15) -> 14 intervals of ~357m ?
+    # Wait, load_initial_conditions does linspace(0, 5000, 15) for interpolation target.
+    # Usually this defines the cell centers or interfaces.
+    # If 15 levels, total depth 5000m.
+    # dz = 5000 / 15 = 333.33 m.
+    # Let's use this to match total depth ~5000m.
+    dz_ocn = jnp.ones(state.ocean.u.shape[0]) * (5000.0 / state.ocean.u.shape[0])
+    
+    # Step Ocean (DT_OCEAN)
     new_ocean = ocean_driver.step_ocean(
-        state.ocean,
+        final_atmos_state.ocean,
         surface_fluxes=fluxes_ocean,
         wind_stress=wind_ocean,
         dx=dx_ocn,
@@ -183,74 +404,62 @@ def step_coupled(
         nz=state.ocean.u.shape[0],
         ny=OCEAN_GRID.nlat,
         nx=OCEAN_GRID.nlon,
-        mask=params.mask,
-        dt=DT_ATMOS,
+        mask=ocean_mask,
+        dt=DT_OCEAN,
     )
-
+    
     # Apply Bathymetry Mask
-    if hasattr(params, "mask") and params.mask is not None:
-        mask = params.mask
-        mask_3d = jnp.broadcast_to(mask, new_ocean.u.shape)
+    # Apply Bathymetry Mask
+    if ocean_mask is not None:
+        mask_3d = jnp.broadcast_to(ocean_mask, new_ocean.u.shape)
         u_masked = jnp.where(mask_3d, new_ocean.u, 0.0)
         v_masked = jnp.where(mask_3d, new_ocean.v, 0.0)
         new_ocean = new_ocean._replace(u=u_masked, v=v_masked)
 
-    # 5. Land Step
-    if hasattr(params, "mask") and params.mask is not None:
-        ocean_mask = params.mask
-        land_mask = 1.0 - ocean_mask
+    # Stability Check (Crash if Vel > 5.0 m/s)
+    max_u = jnp.max(jnp.abs(new_ocean.u))
+    max_v = jnp.max(jnp.abs(new_ocean.v))
+    max_vel = jnp.maximum(max_u, max_v)
+    
+    # Debug print only if crashing (using host_callback or debug.print)
+    # We want to force NaNs if unstable
+    is_unstable = max_vel > 5.0
+    
+    def crash_state(state):
+        jax.debug.print("CRASH DETECTED: Max Vel {x} > 5.0 m/s. Aborting with NaNs.", x=max_vel)
+        nan_field = jnp.full_like(state.temp, jnp.nan)
+        return state._replace(temp=nan_field, u=nan_field, v=nan_field)
+        
+    def safe_state(state):
+        return state
+        
+    # We need to switch the WHOLE coupled state or just ocean?
+    # Replacing Ocean is enough to kill the run eventually.
+    new_ocean = jax.lax.cond(is_unstable, crash_state, safe_state, new_ocean)
 
-        sw_down = jnp.ones_like(new_atmos.temp) * 240.0
-        lw_down = jnp.ones_like(new_atmos.temp) * 300.0
-        precip_proxy = jnp.maximum(fw_flux_atm, 0.0) / 1000.0  # kg/m2/s -> m/s
-
-        new_land, (land_sensible, land_latent, land_nee) = land_driver.step_land(
-            state.land,
-            t_air=new_atmos.temp,
-            q_air=new_atmos.q,
-            sw_down=sw_down,
-            lw_down=lw_down,
-            precip=precip_proxy,
-            mask=land_mask,
-        )
+    # Update Coupling State (New Ocean, New Ice, Final Atmos/Land)
+    
+    # Re-calculate composite SST for FluxState/Next Step consistency
+    sst_ocean_ice = (1.0 - A) * (new_ocean.temp[0]) + A * (new_ice.surface_temp + 273.15)
+    
+    land_mask = 1.0 - ocean_mask if ocean_mask is not None else 0.0
+    if ocean_mask is not None:
+         sst_composite = ocean_mask * sst_ocean_ice + land_mask * final_atmos_state.land.temp
     else:
-        new_land = state.land
-        land_mask = jnp.zeros_like(new_atmos.temp)
-        land_sensible = jnp.zeros_like(new_atmos.temp)
-        land_latent = jnp.zeros_like(new_atmos.temp)
-        land_nee = jnp.zeros_like(new_atmos.temp)
-
-    # 6. Coupler: Surface -> Atmos
-    sst_ocean_ice = (1.0 - A) * (new_ocean.temp[0]) + A * (
-        new_ice.surface_temp + 273.15
-    )
-
-    if hasattr(params, "mask") and params.mask is not None:
-        ocean_mask = params.mask
-        sst_composite = ocean_mask * sst_ocean_ice + (1.0 - ocean_mask) * new_land.temp
-    else:
-        sst_composite = sst_ocean_ice
-
+         sst_composite = sst_ocean_ice
+         
     sst_atm = regridder.ocean_to_atmos(sst_composite)
-
-    new_fluxes = coupled_state.FluxState(
-        net_heat_flux=net_heat_atm,
-        freshwater_flux=fw_flux_atm,
-        wind_stress_x=tau_x_atm,
-        wind_stress_y=tau_y_atm,
-        precip=precip_atm,
-        sst=sst_atm,
-        carbon_flux_ocean=flux_c_sea,
-        carbon_flux_land=land_nee,
-    )
+    
+    # Update fluxes structure with newest state
+    final_fluxes = final_atmos_state.fluxes._replace(sst=sst_atm)
 
     return coupled_state.CoupledState(
         ocean=new_ocean,
-        atmos=new_atmos,
+        atmos=final_atmos_state.atmos,
         ice=new_ice,
-        land=new_land,
-        fluxes=new_fluxes,
-        time=state.time + DT_ATMOS,
+        land=final_atmos_state.land,
+        fluxes=final_fluxes,
+        time=final_atmos_state.time,
     )
 
 

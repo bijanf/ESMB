@@ -118,13 +118,107 @@ def step_ocean(
     u_bt_3d = jnp.broadcast_to(u_bt, (nz, ny, nx))
     v_bt_3d = jnp.broadcast_to(v_bt, (nz, ny, nx))
 
-    # 4. Update Velocity (Simplified Momentum)
-    # Relax towards barotropic + some baroclinic shear (omitted for brevity in this skeleton)
-    # In a full primitive equation model, we'd step u, v explicitly.
-    # Here we just update with the new barotropic flow for continuity.
-    u_new = u_bt_3d  # + baroclinic part
-    v_new = v_bt_3d  # + baroclinic part
-    w_new = state.w  # Vertical velocity not updated in this simplified step
+    # 4. Update Velocity (Barotropic + Baroclinic)
+    # --------------------------------------------
+    # We now have the Barotropic Flow (u_bt, v_bt) which is depth-independent.
+    # We need to add the Baroclinic (Shear) component derived from Thermal Wind Balance.
+    
+    # A. Calculate Hydrostatic Pressure
+    # P(z) = g * integral_z^0 rho dz'
+    # We integrate from surface down.
+    # P_hydro[0] = 0 (assuming rigid lid for pressure anomaly)
+    # P_hydro[k] = P_hydro[k-1] + g * 0.5 * (rho[k-1] + rho[k]) * dz[k-1] ??
+    # Let's use a simple accumulation.
+    
+    # Density anomaly from reference
+    rho_anom = rho - RHO_WATER
+    
+    # Pressure integration (cumulative sum)
+    # P at level k center can be approx: Sum_{i=0}^{k-1} (g * rho_i * dz_i) + g * rho_k * 0.5 * dz_k
+    # Simplified: Cumsum density * dz * g
+    
+    # Broadcast dz to 3D
+    dz_3d = dz.reshape(-1, 1, 1) # (nz, 1, 1)
+    
+    # Hydrostatic pressure (nz, ny, nx)
+    # Note: We integrate DOWNWARDS.
+    # For TWB, we need horizontal gradients of P.
+    
+    # P_hydro = Integral(-g * rho) dz.
+    # Since z is negative downwards? 
+    # Usually: dp/dz = -rho * g  => p(z) = Integral_z^0 (rho * g) dz'
+    
+    g_rho = GRAVITY * rho_anom
+    pressure_hydro = jnp.cumsum(g_rho * dz_3d, axis=0)
+    
+    # B. Calculate Geostrophic Shear (Thermal Wind)
+    # f * u = -1/rho0 * dp/dy
+    # f * v =  1/rho0 * dp/dx
+    
+    # Coriolis Parameter (f)
+    # lat from -90 to 90
+    lat_deg = jnp.linspace(-90, 90, ny)
+    lat_rad = jnp.deg2rad(lat_deg)
+    omega = OMEGA
+    f_coriolis = 2 * omega * jnp.sin(lat_rad)
+    
+    # Broadcast f to (nz, ny, nx)
+    f_3d = jnp.broadcast_to(f_coriolis[None, :, None], (nz, ny, nx))
+    
+    # Avoid division by zero at equator (clamp f)
+    f_min = 1e-5
+    f_clamped = jnp.where(jnp.abs(f_3d) < f_min, jnp.sign(f_3d + 1e-16) * f_min, f_3d)
+    
+    # Gradients of Pressure
+    # dp/dx
+    dp_dx = (jnp.roll(pressure_hydro, -1, axis=2) - jnp.roll(pressure_hydro, 1, axis=2)) / (2 * dx)
+    # dp/dy
+    dp_dy = (jnp.roll(pressure_hydro, -1, axis=1) - jnp.roll(pressure_hydro, 1, axis=1)) / (2 * dy)
+    
+    # Geostrophic Velocity
+    # Geostrophic Velocity with Rayleigh Friction
+    # r*u - f*v = -1/rho * px
+    # f*u + r*v = -1/rho * py
+    # Solution:
+    # u = -(r*px + f*py) / (rho * (f^2 + r^2))
+    # v =  (f*px - r*py) / (rho * (f^2 + r^2))
+    
+    r_drag = 2.0e-5 # Rayleigh friction coefficient [1/s] ~ 1/(14 hours)
+    
+    denom = RHO_WATER * (f_clamped**2 + r_drag**2)
+    
+    u_geo = -(r_drag * dp_dx + f_clamped * dp_dy) / denom
+    v_geo =  (f_clamped * dp_dx - r_drag * dp_dy) / denom
+    
+    # Damping at equator to prevent explosion
+    # Simple mask: if |lat| < 5 deg, damp velocities
+    equator_mask = jnp.abs(lat_deg) < 5.0
+    damp_factor = jnp.where(equator_mask[None, :, None], 0.0, 1.0)
+    
+    u_geo = u_geo * damp_factor
+    v_geo = v_geo * damp_factor
+    
+    # C. Baroclinic Anomaly
+    # The barotropic solver gives the vertically averaged flow.
+    # We must ensure the baroclinic component has ZERO vertical average.
+    # u_bc = u_geo - mean(u_geo)
+    
+    u_geo_mean = jnp.sum(u_geo * dz_3d, axis=0) / jnp.sum(dz_3d, axis=0) # (ny, nx)
+    v_geo_mean = jnp.sum(v_geo * dz_3d, axis=0) / jnp.sum(dz_3d, axis=0) # (ny, nx)
+    
+    u_bc = u_geo - u_geo_mean[None, :, :]
+    v_bc = v_geo - v_geo_mean[None, :, :]
+    
+    # D. Total Velocity
+    u_new = u_bt_3d + u_bc
+    v_new = v_bt_3d + v_bc
+    
+    # Vertical velocity w (from continuity)
+    # div(u) + dw/dz = 0 => dw/dz = -div(u)
+    # w(z) = - Integral_bottom^z div(u) dz'
+    # We won't compute full w here, stick to old w for now or zero?
+    # Keeping old w is safer for stability for now, or assume w=0
+    w_new = state.w 
 
     # 5. Update Tracers (Advection-Diffusion)
     # Simple upwind advection + vertical diffusion
@@ -194,6 +288,10 @@ def step_ocean(
     rho_new = equation_of_state(temp_new, salt_new)
 
     # Update State
+    # Safety Clamping
+    temp_new = jnp.clip(temp_new, -3.0 + 273.15, 50.0 + 273.15)
+    salt_new = jnp.clip(salt_new, 0.0, 50.0)
+
     new_state = OceanState(
         u=u_new,
         v=v_new,
