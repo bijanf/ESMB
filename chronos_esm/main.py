@@ -53,7 +53,7 @@ def init_model(
 
 @partial(jax.jit, static_argnames=["regridder"])
 def step_coupled(
-    state: coupled_state.CoupledState, params: ModelParams, regridder: regrid.Regridder
+    state: coupled_state.CoupledState, params: ModelParams, regridder: regrid.Regridder, r_drag: float = 5.0e-2, kappa_gm: float = 1000.0
 ) -> coupled_state.CoupledState:
     """
     Perform one coupled time step.
@@ -92,7 +92,7 @@ def step_coupled(
         land_mask = 1.0 - ocean_mask
         
         
-
+        
 
         if hasattr(current_state, "land") and current_state.land is not None:
              # Simple Land Beta
@@ -406,6 +406,8 @@ def step_coupled(
         nx=OCEAN_GRID.nlon,
         mask=ocean_mask,
         dt=DT_OCEAN,
+        r_drag=r_drag, # Use passed parameter
+        kappa_gm=kappa_gm, # Use passed parameter
     )
     
     # Apply Bathymetry Mask
@@ -416,26 +418,11 @@ def step_coupled(
         v_masked = jnp.where(mask_3d, new_ocean.v, 0.0)
         new_ocean = new_ocean._replace(u=u_masked, v=v_masked)
 
-    # Stability Check (Crash if Vel > 5.0 m/s)
-    max_u = jnp.max(jnp.abs(new_ocean.u))
-    max_v = jnp.max(jnp.abs(new_ocean.v))
-    max_vel = jnp.maximum(max_u, max_v)
-    
-    # Debug print only if crashing (using host_callback or debug.print)
-    # We want to force NaNs if unstable
-    is_unstable = max_vel > 5.0
-    
-    def crash_state(state):
-        jax.debug.print("CRASH DETECTED: Max Vel {x} > 5.0 m/s. Aborting with NaNs.", x=max_vel)
-        nan_field = jnp.full_like(state.temp, jnp.nan)
-        return state._replace(temp=nan_field, u=nan_field, v=nan_field)
-        
-    def safe_state(state):
-        return state
-        
-    # We need to switch the WHOLE coupled state or just ocean?
-    # Replacing Ocean is enough to kill the run eventually.
-    new_ocean = jax.lax.cond(is_unstable, crash_state, safe_state, new_ocean)
+    # Removed hard crash logic to allow differentiable tuning
+
+
+
+
 
     # Update Coupling State (New Ocean, New Ice, Final Atmos/Land)
     

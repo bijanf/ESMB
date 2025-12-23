@@ -45,7 +45,7 @@ def equation_of_state(temp: jnp.ndarray, salt: jnp.ndarray) -> jnp.ndarray:
     return rho_0 - alpha * (temp - t0) + beta * (salt - s0)
 
 
-@partial(jax.jit, static_argnames=["nz", "ny", "nx"])
+@partial(jax.jit, static_argnames=["nz", "ny", "nx", "dt"])
 def step_ocean(
     state: OceanState,
     surface_fluxes: Tuple[
@@ -60,6 +60,8 @@ def step_ocean(
     nx: int = OCEAN_GRID.nlon,
     mask: Optional[jnp.ndarray] = None,  # 1=Ocean, 0=Land
     dt: float = DT_OCEAN,
+    r_drag: float = 5.0e-2,
+    kappa_gm: float = 1000.0,
 ) -> OceanState:
     """
     Time step the ocean model.
@@ -79,7 +81,7 @@ def step_ocean(
     sx, sy = mixing.compute_isopycnal_slopes(rho, dx, dy, dz)
 
     # GM Diffusivity (constant for now, could be flow dependent)
-    kappa_gm = 1000.0
+    # kappa_gm = 1000.0 # NOW PASSED AS ARGUMENT
     u_bolus, v_bolus, _ = mixing.compute_gm_bolus_velocity(kappa_gm, sx, sy, dz)
 
     # Effective transport velocity = Eulerian + Bolus
@@ -183,7 +185,7 @@ def step_ocean(
     # u = -(r*px + f*py) / (rho * (f^2 + r^2))
     # v =  (f*px - r*py) / (rho * (f^2 + r^2))
     
-    r_drag = 1.0e-4 # Rayleigh friction coefficient [1/s] ~ 1/(2.7 hours)
+    # r_drag used from function argument
     
     denom = RHO_WATER * (f_clamped**2 + r_drag**2)
     

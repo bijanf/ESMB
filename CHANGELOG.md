@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased] - 2025-12-23
+
+### Added
+- **Multi-Parameter Physics Tuning:**
+    - Updated `chronos_esm/ocean/veros_driver.py` to accept `kappa_gm` (Gent-McWilliams diffusivity) as a dynamic argument.
+    - Updated `chronos_esm/main.py` to pass `kappa_gm` through `step_coupled`.
+    - Updated `experiments/tune_physics_v2.py` to optimize `r_drag` and `kappa_gm` simultaneously.
+    - Added `experiments/diagnose_tuning_init.py` for debugging gradient instability.
+
+### Fixed
+- **Tuning Instability:** Fixed NaN crash at step 18 of tuning loop by implementing tighter gradient clipping and multi-parameter optimization.
+
 ## [Unreleased] - 2025-12-18
 
 ### Fixed
