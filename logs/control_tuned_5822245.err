@@ -1,0 +1,31 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1212 16:50:21.776319 1389536 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1212 16:50:21.780819 1389496 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/control_run_tuned.py", line 286, in <module>
+    run_control(years=5.0)
+  File "/home/fallah/scripts/ESMB/experiments/control_run_tuned.py", line 214, in run_control
+    current_state, accumulated = run_one_month(current_state)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/control_run_tuned.py", line 200, in run_one_month
+    (final_s, final_acc), _ = jax.lax.scan(
+                              ^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/control_run_tuned.py", line 185, in month_step_fn
+    new_s = main.step_coupled(s, params, regridder)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/main.py", line 308, in step_coupled
+    (final_atmos_state, accumulated_fluxes), _ = jax.lax.scan(
+                                                 ^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/main.py", line 183, in atmos_land_step
+    new_atmos, (precip_atm, sfc_pressure) = atmos_driver.step_atmos(
+                                            ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/atmos/dynamics.py", line 287, in step_atmos
+    adv_t = advect(state.temp)
+            ^^^^^^
+UnboundLocalError: cannot access local variable 'advect' where it is not associated with a value
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

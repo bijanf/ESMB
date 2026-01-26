@@ -238,9 +238,9 @@ def solve_poisson_2d(
         d2x = (
             jnp.roll(x_2d, 1, axis=1) - 2 * x_2d + jnp.roll(x_2d, -1, axis=1)
         ) / dx**2
-        d2y = (
-            jnp.roll(x_2d, 1, axis=0) - 2 * x_2d + jnp.roll(x_2d, -1, axis=0)
-        ) / dy**2
+        # Y-axis: Dirichlet BC (0 at boundaries). Pad with 0.
+        x_padded_y = jnp.pad(x_2d, ((1, 1), (0, 0)), mode="constant", constant_values=0)
+        d2y = (x_padded_y[:-2, :] - 2 * x_2d + x_padded_y[2:, :]) / dy**2
 
         laplacian = d2x + d2y
 

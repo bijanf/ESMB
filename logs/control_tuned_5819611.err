@@ -1,0 +1,9 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+  File "/home/fallah/scripts/ESMB/experiments/control_run_tuned.py", line 121
+    )Tuned Solar Constant
+     ^^^^^
+SyntaxError: invalid syntax

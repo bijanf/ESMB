@@ -1,0 +1,10 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1223 17:15:07.452521  293756 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1223 17:15:07.470527  293717 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py:104: RuntimeWarning: overflow encountered in exp
+  raw_kappa = np.log(np.exp(1000.0) - 1.0)
+slurmstepd-csl14c248: error: *** JOB 5997166 ON csl14c248 CANCELLED AT 2025-12-23T19:15:18 DUE TO TIME LIMIT ***

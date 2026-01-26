@@ -99,8 +99,11 @@ def step_ice(
     # Simplified: relax SST to T_freeze and convert deficit to ice
     # Max supercooling?
     supercooling = jnp.maximum(t_freeze - ocean_temp, 0.0)
+    # Clamp supercooling to prevent massive ice dumps in one step
+    supercooling = jnp.minimum(supercooling, 5.0)
+
     # Convert supercooling to ice thickness
-    # Energy = rho_w * cw * supercooling * mixed_layer_depth
+    # Energy = rho_w * cw * supercooling * mld
     # Ice = Energy / (rho_i * L)
     mld = 50.0  # meters
     rho_w = 1025.0
@@ -110,6 +113,9 @@ def step_ice(
 
     # Add new ice
     h_new = h_new + new_ice
+    
+    # Clamp max thickness (e.g. 50m) to prevent ridges from space
+    h_new = jnp.minimum(h_new, 50.0)
 
     # Apply Mask (No ice on land)
     if mask is not None:

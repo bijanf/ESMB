@@ -1,0 +1,8 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1212 18:11:01.734745 1207128 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1212 18:11:01.739928 1207085 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+slurmstepd-csl14c242: error: *** JOB 5824355 ON csl14c242 CANCELLED AT 2025-12-12T18:13:32 ***

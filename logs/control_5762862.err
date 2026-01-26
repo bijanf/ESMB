@@ -1,0 +1,36 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1209 22:59:50.163222  475370 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1209 22:59:50.167781  475235 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 285, in <module>
+    run_control(years=100.0)
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 202, in run_control
+    current_state, accumulated = run_one_month(current_state)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 188, in run_one_month
+    (final_s, final_acc), _ = jax.lax.scan(
+                              ^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 173, in month_step_fn
+    new_s = main.step_coupled(s, params, regridder)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/main.py", line 111, in step_coupled
+    new_atmos, (precip_atm, sfc_pressure) = atmos_driver.step_atmos(
+                                            ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/atmos/dynamics.py", line 178, in step_atmos
+    psi = spectral.inverse_laplacian(state.vorticity, dx, dy)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/atmos/spectral.py", line 300, in inverse_laplacian
+    x_flat = solve_tridiagonal_batch(lower_flat, main_flat, upper_flat, d_flat)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/atmos/spectral.py", line 169, in solve_tridiagonal_batch
+    x = jnp.linalg.solve(A_batch, d)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/numpy/linalg.py", line 1364, in solve
+    raise ValueError(
+ValueError: Invalid shapes for solve: (97, 96, 96), (97, 96). Prior to JAX v0.5.0, this would have been treated as a batched 1-dimensional solve. To recover this behavior, use solve(a, b[..., None]).squeeze(-1).
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

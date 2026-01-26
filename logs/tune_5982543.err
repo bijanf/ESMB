@@ -1,0 +1,9 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 75
+    \n    
+     ^
+SyntaxError: unexpected character after line continuation character

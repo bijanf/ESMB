@@ -53,7 +53,10 @@ def init_model(
 
 @partial(jax.jit, static_argnames=["regridder"])
 def step_coupled(
-    state: coupled_state.CoupledState, params: ModelParams, regridder: regrid.Regridder, r_drag: float = 5.0e-2, kappa_gm: float = 1000.0
+    state: coupled_state.CoupledState, params: ModelParams, regridder: regrid.Regridder, 
+    r_drag: float = 5.0e-2, kappa_gm: float = 1000.0, kappa_h: float = 310.0, kappa_bi: float = 3.9e14,
+    Ah: float = 8.1e4, Ab: float = 0.0, shapiro_strength: float = 0.0, smag_constant: float = 0.1,
+    physics_params: Optional[dict] = None
 ) -> coupled_state.CoupledState:
     """
     Perform one coupled time step.
@@ -196,10 +199,13 @@ def step_coupled(
             flux_co2=co2_flux_atm_ppm,
             sw_down=sw_down, # Pass calculated seasonal SW
             solar_constant=params.solar_constant,
+            physics_params=physics_params,
             dt=DT_ATMOS,
             ny=ATMOS_GRID.nlat,
             nx=ATMOS_GRID.nlon,
         )
+        # DEBUG
+        # jax.debug.print("Step Precip Max: {}", jnp.max(precip_atm))
         
         # 3. Step Land (State Update)
         # ---------------------------
@@ -230,11 +236,12 @@ def step_coupled(
         # We need Surface Energy Balance for Ocean Driving
         # Net Heat = SW_net + LW_down - LW_up - Sensible - Latent
         
-        # SW Net (Albedo ~ 0.07 for ocean)
-        sw_net_ocean = (1.0 - 0.07) * sw_down
+        # SW Net (Consistent with Atmosphere Albedo)
+        # sw_down already includes (1-Albedo) * 0.52 from physics.py
+        sw_net_ocean = sw_down
         
         # LW Up (Stefan-Boltzmann)
-        sst_kelvin = current_state.fluxes.sst + 273.15
+        sst_kelvin = current_state.fluxes.sst
         lw_up_ocean = 0.98 * 5.67e-8 * sst_kelvin**4
         
         # Net Heat
@@ -257,7 +264,7 @@ def step_coupled(
         # Ocean State is Celsius. SST State is Celsius.
         # DO NOT subtract 273.15 from Ocean Temp.
         sst_ocean_ice = (1.0 - current_state.ice.concentration) * (current_state.ocean.temp[0]) + \
-                        current_state.ice.concentration * current_state.ice.surface_temp
+                        current_state.ice.concentration * (current_state.ice.surface_temp + 273.15)
         
         # New Composite SST
         sst_composite = ocean_mask * sst_ocean_ice + land_mask * new_land.temp
@@ -270,27 +277,56 @@ def step_coupled(
         # Zonal Wind Stress
         lat = jnp.linspace(-90, 90, ATMOS_GRID.nlat)
         lat_rad = jnp.deg2rad(lat)
-        tau_profile = 0.1 * jnp.sin(6.0 * lat_rad)
+        
+        # 1. Seasonality (ITCZ Shift +/- 10 degrees)
+        # Shift profile center: lat_effective = lat - shift
+        # Shift = 10 * sin(2*pi*day/365)
+        # Summer (Day 180) -> Shift North (+10). Winter -> South.
+        season_shift_deg = 10.0 * jnp.sin(2.0 * jnp.pi * (day_of_year - 80.0) / 365.0)
+        season_shift_rad = jnp.deg2rad(season_shift_deg)
+        
+        lat_effective = lat_rad - season_shift_rad
+        
+        # Base Profile (Easterlies in Tropics)
+        # Final Tuning: 0.08 Pa for realistic 15-25 Sv AMOC
+        tau_base = -0.08 * jnp.sin(6.0 * lat_effective)
+        
+        # 2. Stochastic Noise (Pseudo-random based on time)
+        # Use simple sine/cos chaotic mix to avoid passing PRNG key through 10 layers
+        # A chaotic oscillation of amplitude 10%
+        noise_factor = 0.1 * (jnp.sin(current_state.time / (86400.0 * 3.0)) + 
+                              jnp.cos(current_state.time / (86400.0 * 7.0)))
+        
+        tau_profile = tau_base * (1.0 + noise_factor)
+        
         tau_x_atm = jnp.broadcast_to(tau_profile[:, None], net_heat_atm.shape) # Simplified
         tau_y_atm = jnp.zeros_like(net_heat_atm)
         
         # Accumulate
-        # Structure: (heat, fw, tau_x, tau_y, carbon)
+        # Structure: (heat, fw, tau_x, tau_y, carbon, precip)
         acc_heat = acc_fluxes[0] + net_heat_atm
         acc_fw = acc_fluxes[1] + fw_flux_atm
         acc_tau_x = acc_fluxes[2] + tau_x_atm
         acc_tau_y = acc_fluxes[3] + tau_y_atm
         acc_carbon = acc_fluxes[4] + flux_c_sea
+        acc_precip = acc_fluxes[5] + precip_atm
         
-        new_acc = (acc_heat, acc_fw, acc_tau_x, acc_tau_y, acc_carbon)
+        new_acc = (acc_heat, acc_fw, acc_tau_x, acc_tau_y, acc_carbon, acc_precip)
         
-        # Update Flux State for returning (instantaneous)
+        # Update Flux State for returning (instantaneous - maybe useful for debugging but we really want avg)
+        # But wait, if we update precip here with instantaneous, we lose the avg.
+        # We should update FluxState AFTER the loop with the average.
+        # Inside the loop, we can keep instantaneous or just not update it yet?
+        # The loop updates `current_state` which carries fluxes.
+        # Let's keep instantaneous inside for now, but overwrite with Average after loop.
+        
         new_fluxes = current_state.fluxes._replace(
             net_heat_flux=net_heat_atm,
             freshwater_flux=fw_flux_atm,
             sst=sst_atm,
             wind_stress_x=tau_x_atm,
             wind_stress_y=tau_y_atm,
+            precip=precip_atm,
             carbon_flux_ocean=flux_c_sea,
             carbon_flux_land=land_nee
         )
@@ -311,10 +347,11 @@ def step_coupled(
         jnp.zeros_like(state.atmos.temp), # Tau X
         jnp.zeros_like(state.atmos.temp), # Tau Y
         jnp.zeros_like(state.atmos.temp), # Carbon
+        jnp.zeros_like(state.atmos.temp), # Precip
     )
     
     # Run Sub-stepping Loop
-    (final_atmos_state, accumulated_fluxes), _ = jax.lax.scan(
+    (final_state_loop, accumulated_fluxes), _ = jax.lax.scan(
         atmos_land_step, (state, init_acc), None, length=n_substeps
     )
     
@@ -324,6 +361,22 @@ def step_coupled(
     avg_tau_x_atm = accumulated_fluxes[2] / n_substeps
     avg_tau_y_atm = accumulated_fluxes[3] / n_substeps
     avg_carbon_atm = accumulated_fluxes[4] / n_substeps
+    avg_precip_atm = accumulated_fluxes[5] / n_substeps
+    
+    # Update FluxState with AVERAGES for output/consistency
+    final_fluxes = final_state_loop.fluxes._replace(
+        net_heat_flux=avg_heat_atm,
+        freshwater_flux=avg_fw_atm,
+        wind_stress_x=avg_tau_x_atm,
+        wind_stress_y=avg_tau_y_atm,
+        precip=avg_precip_atm,
+        carbon_flux_ocean=avg_carbon_atm, # Should be avg/last? Avg makes sense.
+        # carbon_flux_land was instantaneous in loop, but we should probably average it too if we tracked it.
+        # For now, only precip is critical for this fix.
+    )
+    
+    # Use final_state_loop but with averaged fluxes
+    final_atmos_state = final_state_loop._replace(fluxes=final_fluxes)
     
     # Regrid to Ocean
     heat_flux_ocn = regridder.atmos_to_ocean(avg_heat_atm)
@@ -380,9 +433,12 @@ def step_coupled(
     # dy is constant in latitude
     dy_ocn = (jnp.pi * EARTH_RADIUS) / OCEAN_GRID.nlat
     
-    # dx varies. Using mean dx (at 45N) or equatorial?
-    # Using 45N as a reasonable effective basin width scaler.
-    dx_ocn = (2 * jnp.pi * EARTH_RADIUS * jnp.cos(jnp.deg2rad(45.0))) / OCEAN_GRID.nlon
+    # Calculate latitude-dependent dx array
+    lat_ocn = jnp.linspace(-90, 90, OCEAN_GRID.nlat)
+    cos_lat_ocn = jnp.cos(jnp.deg2rad(lat_ocn))
+    # Avoid zero dx at poles for numerical stability in diffusion
+    cos_lat_ocn = jnp.maximum(cos_lat_ocn, 0.05) 
+    dx_ocn_array = (2 * jnp.pi * EARTH_RADIUS * cos_lat_ocn[:, None]) / OCEAN_GRID.nlon
     
     # Vertical Grid (dz)
     # Must match data.load_initial_conditions: linspace(0, 5000, 15) -> 14 intervals of ~357m ?
@@ -398,7 +454,7 @@ def step_coupled(
         final_atmos_state.ocean,
         surface_fluxes=fluxes_ocean,
         wind_stress=wind_ocean,
-        dx=dx_ocn,
+        dx=dx_ocn_array,
         dy=dy_ocn,
         dz=dz_ocn,
         nz=state.ocean.u.shape[0],
@@ -408,6 +464,13 @@ def step_coupled(
         dt=DT_OCEAN,
         r_drag=r_drag, # Use passed parameter
         kappa_gm=kappa_gm, # Use passed parameter
+        kappa_h=kappa_h,
+        kappa_bi=kappa_bi,
+        Ah=Ah,
+
+        Ab=Ab,
+        shapiro_strength=shapiro_strength,
+        smag_constant=smag_constant
     )
     
     # Apply Bathymetry Mask

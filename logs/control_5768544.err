@@ -1,0 +1,15 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 18, in <module>
+    from chronos_esm import data  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/data.py", line 15, in <module>
+    from chronos_esm.config import ATMOS_GRID, OCEAN_GRID
+  File "/home/fallah/scripts/ESMB/chronos_esm/config.py", line 57, in <module>
+    DT_ATMOS = float(os.environ.get("CHRONOS_DT_ATMOS", default_dt_atmos))
+                     ^^
+NameError: name 'os' is not defined

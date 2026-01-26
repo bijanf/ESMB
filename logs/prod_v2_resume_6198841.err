@@ -1,0 +1,17 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W0102 21:27:27.457090  455842 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0102 21:27:27.462705  455817 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 334, in <module>
+    run_control(
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 98, in run_control
+    state = model_io.load_state_from_netcdf(restart_file)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/io.py", line 184, in load_state_from_netcdf
+    ice = coupled_state.IceState(
+          ^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: IceState.__new__() missing 1 required positional argument: 'surface_temp'

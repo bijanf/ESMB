@@ -1,0 +1,31 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W0120 11:05:06.206141 3822873 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0120 11:05:06.210825 3822810 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 324, in <module>
+    run_control(years=100.0)
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 252, in run_control
+    current_state, accumulated = run_one_month(current_state)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 213, in run_one_month
+    (final_s, final_acc), _ = jax.lax.scan(
+                              ^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 189, in month_step_fn
+    new_s = main.step_coupled(
+            ^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/main.py", line 403, in step_coupled
+    new_ocean = ocean_driver.step_ocean(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/ocean/veros_driver.py", line 485, in step_ocean
+    k1_T, k1_S, k1_DIC = compute_tracer_tendencies(state.temp, state.salt, state.dic)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/ocean/veros_driver.py", line 465, in compute_tracer_tendencies
+    diff_z_T = vertical_diffusion(temp_in, kappa_z, dz_3d)
+               ^^^^^^^^^^^^^^^^^^
+NameError: name 'vertical_diffusion' is not defined
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

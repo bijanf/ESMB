@@ -1,0 +1,17 @@
+W0105 18:23:13.286998 3947458 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0105 18:23:13.292580 3947449 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 203, in <module>
+    run_tuning()
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 174, in run_tuning
+    new_params, loss, amoc, tm, r_val, kgm_val, kh_val, kbi_val, next_state = update_step(curr_r_k, curr_state)
+                                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 136, in update_step
+    (loss, (amoc, tm, ke, current_r, current_k, final_state)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 75, in loss_fn
+    loss_ke = ke * 1000.0
+              ^^
+NameError: name 'ke' is not defined
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

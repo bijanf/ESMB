@@ -16,7 +16,7 @@ import jax.numpy as jnp  # noqa: F401
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from chronos_esm import data  # noqa: E402
-from chronos_esm import functools  # noqa: F401, E4022
+
 from chronos_esm import main  # noqa: E402
 from chronos_esm import io as model_io  # noqa: E402
 from chronos_esm.atmos import dynamics as atmos_driver  # noqa: E402
@@ -71,36 +71,79 @@ def setup_control_run():
     return state
 
 
-def run_control(years: float = 1.0):
-    """Run control simulation."""
-    state = setup_control_run()
+def run_control(years: float = 1.0, r_drag: float = 5.0e-2, kappa_gm: float = 1000.0, kappa_h: float = 100.0, kappa_bi: float = 0.0, Ah: float = 0.0, Ab: float = 0.0, shapiro_strength: float = 0.0, smag_constant: float = 0.1, output_suffix: str = "", restart_file: str = None):
+    """
+    Run control simulation.
+    
+    Args:
+        years: Simulation duration in years.
+        r_drag: Rayleigh friction coefficient (default 5e-2).
+        kappa_gm: GM diffusivity (default 1000.0).
+        output_suffix: Optional suffix for output directory.
+        restart_file: Optional path to restart file.
+    """
+    # Setup Logger
+    from chronos_esm import log_utils as c_log
+
+    dir_name = "control_run" + (f"_{output_suffix}" if output_suffix else "")
+    output_dir = Path(f"outputs/{dir_name}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger = c_log.setup_logger(dir_name, output_dir / "model.log")
+
+    start_month = 1
+    
+    if restart_file:
+        logger.info(f"Resuming run from {restart_file}...")
+        state = model_io.load_state_from_netcdf(restart_file)
+        
+        # Determine start month from filename (e.g. restart_0143.nc)
+        try:
+            basename = Path(restart_file).name
+            # assume restart_XXXX.nc
+            month_str = basename.split('_')[1].split('.')[0]
+            last_month = int(month_str)
+            start_month = last_month + 1
+            logger.info(f"Restarting from Month {start_month} (continuing from {last_month})")
+        except Exception as e:
+            logger.warning(f"Could not parse month from filename {restart_file}: {e}. Starting month counter at 1.")
+            
+    else:
+        logger.info("Initializing new run (WOA18)...")
+        state = setup_control_run()
+        
+        # Save initial state
+        logger.info("Saving initial state (state_0000.nc)...")
+        model_io.save_state_to_netcdf(state, output_dir / "state_0000.nc")
 
     # Calculate steps
     # DT_ATMOS is usually smaller (e.g. 1800s).
     # 1 year = 365 * 24 * 3600 seconds
     seconds_per_year = 365 * 24 * 3600
     seconds_per_month = seconds_per_year / 12.0
-    from chronos_esm.config import DT_ATMOS, GRAVITY, OMEGA, P0  # noqa: F401
+    from chronos_esm.config import DT_ATMOS, DT_OCEAN, GRAVITY, OMEGA, P0  # noqa: F401
 
-    dt = DT_ATMOS
+    if "dt" in locals():
+         del dt # clear previous definition if any
+         
+    # Control run calculates steps based on the coupled step size.
+    # step_coupled now advances by DT_OCEAN (synchronizing multiple atmos steps inside).
+    dt = DT_OCEAN
 
     steps_per_month = int(seconds_per_month / dt)
-    n_months = int(years * 12)
-
-    # Setup Logger
-    from chronos_esm import log_utils as c_log
-
-    output_dir = Path("outputs/control_run")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    logger = c_log.setup_logger("control_run", output_dir / "model.log")
-
-    logger.info(f"Starting Control Run for {years} years ({n_months} months)...")
+    n_months = int(years * 12) # Total months requested (absolute target? or additional?)
+    # Interpretation: "Run FOR X years".
+    # So if we restart, do we run for X more years? Or until Year X?
+    # Standard: Run UNTIL output_dir has X years?
+    # CLI says "--years 100". Usually implies Total Duration.
+    # If we restart at year 12, we should run 88 more years.
+    # Let's interpret 'n_months' as the Target End Month Index.
+    
+    target_months = int(years * 12)
+    
+    logger.info(f"Target simulation length: {years} years ({target_months} months).")
     logger.info(f"Output directory: {output_dir}")
-
-    # Save initial state
-    logger.info("Saving initial state (state_0000.nc)...")
-    model_io.save_state_to_netcdf(state, output_dir / "state_0000.nc")
+    logger.info(f"Parameters: r_drag={r_drag}, kappa_gm={kappa_gm}")
 
     t0 = time.time()
 
@@ -111,7 +154,7 @@ def run_control(years: float = 1.0):
     mask = data.load_bathymetry_mask()
     logger.info(f"Ocean Fraction: {jnp.mean(mask):.2f}")
 
-    params = main.ModelParams(mask=mask)
+    params = main.ModelParams(mask=mask, co2_increase_rate=0.0)  # Constant CO2 for Spin-up
 
     # Compile the step function (scan over 1 month)
     # We accumulate fields for monthly means
@@ -141,6 +184,9 @@ def run_control(years: float = 1.0):
         sst: jnp.ndarray
         precip: jnp.ndarray
         net_heat_flux: jnp.ndarray
+        # Land
+        land_temp: jnp.ndarray
+        land_snow: jnp.ndarray
 
     def extract_fields(s):
         return Accumulator(
@@ -162,6 +208,8 @@ def run_control(years: float = 1.0):
             sst=s.fluxes.sst,
             precip=s.fluxes.precip,
             net_heat_flux=s.fluxes.net_heat_flux,
+            land_temp=s.land.temp,
+            land_snow=s.land.snow_depth,
         )
 
     def zero_accumulator(s):
@@ -170,7 +218,7 @@ def run_control(years: float = 1.0):
 
     def month_step_fn(carry, _):
         s, acc = carry
-        new_s = main.step_coupled(s, params, regridder)
+        new_s = main.step_coupled(s, params, regridder, r_drag=r_drag, kappa_gm=kappa_gm, kappa_h=kappa_h, kappa_bi=kappa_bi, Ah=Ah, Ab=Ab, shapiro_strength=shapiro_strength, smag_constant=smag_constant) # Use passed parameters
 
         # Accumulate
         current_fields = extract_fields(new_s)
@@ -193,10 +241,10 @@ def run_control(years: float = 1.0):
 
     current_state = state
 
-    logger.info("Starting simulation loop...")
+    logger.info(f"Starting simulation loop from Month {start_month} to {target_months}...")
 
-    for month in range(1, n_months + 1):
-        logger.info(f"Running Month {month}/{n_months}...")
+    for month in range(start_month, target_months + 1):
+        logger.info(f"Running Month {month}/{target_months}...")
         t_start = time.time()
 
         current_state, accumulated = run_one_month(current_state)
@@ -217,34 +265,23 @@ def run_control(years: float = 1.0):
         )
 
         # Compute Means (divide by steps)
-        # We do this on host or device? Device is better.
-        # But we need to save them.
         means = jax.tree_util.tree_map(lambda x: x / steps_per_month, accumulated)
 
         # Save Monthly Mean
-        # We need to package this into a structure that save_state_to_netcdf
-        # can handle, OR we create a custom saver for means.
-        # For simplicity, let's create a "MeanState" object that looks like
-        # CoupledState but with mean values.
-        # However, CoupledState requires specific types.
-        # Easier to just save the dictionary of means.
-
-        # Convert to numpy for saving
-        # means_np = jax.tree_util.tree_map(lambda x: np.array(x), means)
-
-        # Save means
         mean_filename = output_dir / f"mean_{month:04d}.nc"
-        # We can use a custom save function or reuse existing if we reconstruct state
-        # Reconstructing state is cleaner for standard tools
-
+        
+        # Apply Land Mask to Ocean Outputs (Output Cleaning)
+        # We assume 3D mask for ocean vars
+        mask_3d = mask[None, :, :]
+        
         mean_ocean = current_state.ocean._replace(
-            temp=means.ocean_temp,
-            salt=means.ocean_salt,
-            u=means.ocean_u,
-            v=means.ocean_v,
-            w=means.ocean_w,
-            psi=means.ocean_psi,
-            dic=means.ocean_dic,
+            temp=means.ocean_temp * mask_3d,
+            salt=means.ocean_salt * mask_3d,
+            u=means.ocean_u * mask_3d,
+            v=means.ocean_v * mask_3d,
+            w=means.ocean_w * mask_3d,
+            psi=means.ocean_psi, # 2D
+            dic=means.ocean_dic * mask_3d,
         )
         mean_atmos = current_state.atmos._replace(
             temp=means.atmos_temp,
@@ -259,15 +296,20 @@ def run_control(years: float = 1.0):
         mean_fluxes = current_state.fluxes._replace(
             sst=means.sst, precip=means.precip, net_heat_flux=means.net_heat_flux
         )
+        mean_land = current_state.land._replace(
+            temp=means.land_temp,
+            snow_depth=means.land_snow
+        )
 
         mean_state_obj = current_state._replace(
-            ocean=mean_ocean, atmos=mean_atmos, fluxes=mean_fluxes
+            ocean=mean_ocean, atmos=mean_atmos, fluxes=mean_fluxes, land=mean_land
         )
 
         model_io.save_state_to_netcdf(mean_state_obj, mean_filename)
 
-        # Checkpoint (Restart) every 10 years (120 months)
-        if month % 120 == 0:
+        # Checkpoint (Restart) every 1 year (12 months) for safety on short QOS
+        if month % 12 == 0:
+
             logger.info(f"Saving Restart Checkpoint at Month {month}...")
             restart_filename = output_dir / f"restart_{month:04d}.nc"
             model_io.save_state_to_netcdf(current_state, restart_filename)
@@ -281,7 +323,33 @@ def run_control(years: float = 1.0):
 
 
 if __name__ == "__main__":
-    # Run for 100 years
-    run_control(years=100.0)
-    # Short verification run
-    # run_control(years=0.01) # Very short run
+    import argparse
+    parser = argparse.ArgumentParser(description="Run Control Simulation with configurable parameters.")
+    parser.add_argument("--years", type=float, default=1.0, help="Simulation time in years")
+    parser.add_argument("--r_drag", type=float, default=5.0e-2, help="Rayleigh friction coefficient")
+    parser.add_argument("--kappa_gm", type=float, default=1000.0, help="GM diffusivity")
+    parser.add_argument("--kappa_h", type=float, default=100.0, help="Horizontal Laplacian Diffusivity")
+    parser.add_argument("--kappa_bi", type=float, default=0.0, help="Horizontal Biharmonic Diffusivity")
+    parser.add_argument("--Ah", type=float, default=0.0, help="Horizontal Momentum Viscosity (Laplacian)")
+    parser.add_argument("--Ab", type=float, default=0.0, help="Horizontal Momentum Viscosity (Biharmonic)")
+    parser.add_argument("--shapiro_strength", type=float, default=0.0, help="Shapiro Filter Strength")
+    parser.add_argument("--smag_constant", type=float, default=0.1, help="Smagorinsky Constant")
+    parser.add_argument("--suffix", type=str, default="test", help="Output suffix")
+    parser.add_argument("--restart_file", type=str, default=None, help="Path to restart file")
+    
+    args = parser.parse_args()
+    
+    # Run
+    run_control(
+        years=args.years, 
+        r_drag=args.r_drag, 
+        kappa_gm=args.kappa_gm, 
+        kappa_h=args.kappa_h, 
+        kappa_bi=args.kappa_bi, 
+        Ah=args.Ah,
+        Ab=args.Ab,  
+        shapiro_strength=args.shapiro_strength,
+        smag_constant=args.smag_constant,
+        output_suffix=args.suffix,
+        restart_file=args.restart_file
+    )

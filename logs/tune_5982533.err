@@ -1,0 +1,59 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1221 20:05:50.867881 3180532 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1221 20:05:50.872816 3180483 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 189, in <module>
+    run_tuning()
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 173, in run_tuning
+    curr_state = advance(curr_state, real_r)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/traceback_util.py", line 195, in reraise_with_filtered_traceback
+    return fun(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/pjit.py", line 264, in cache_miss
+    executable, pgle_profiler, const_args) = _python_pjit_helper(
+                                             ^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/pjit.py", line 178, in _python_pjit_helper
+    api_util.maybe_recursive_nan_check(e, fun, args, kwargs)
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/api_util.py", line 768, in maybe_recursive_nan_check
+    raise e2 from None
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/api_util.py", line 766, in maybe_recursive_nan_check
+    _ = fun(*args, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 170, in advance
+    fs, _ = jax.lax.scan(lambda c, _: (main.step_coupled(c, params, regridder, r_drag=r), None), s, None, length=steps_per_epoch)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/traceback_util.py", line 195, in reraise_with_filtered_traceback
+    return fun(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/lax/control_flow/loops.py", line 355, in scan
+    out = scan_p.bind(*consts, *in_flat,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/core.py", line 632, in bind
+    return self._true_bind(*args, **params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/core.py", line 648, in _true_bind
+    return self.bind_with_trace(prev_trace, args, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/core.py", line 660, in bind_with_trace
+    return trace.process_primitive(self, args, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/core.py", line 1189, in process_primitive
+    return primitive.impl(*args, **params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/dispatch.py", line 92, in apply_primitive
+    outs = fun(*args)
+           ^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/traceback_util.py", line 195, in reraise_with_filtered_traceback
+    return fun(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/pjit.py", line 264, in cache_miss
+    executable, pgle_profiler, const_args) = _python_pjit_helper(
+                                             ^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/jax/_src/pjit.py", line 177, in _python_pjit_helper
+    raise FloatingPointError(f"invalid value ({e.ty}) encountered in {fun.__qualname__}") from None
+FloatingPointError: invalid value (nan) encountered in scan

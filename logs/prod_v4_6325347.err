@@ -1,0 +1,25 @@
+W0108 11:10:27.692821 1003870 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0108 11:10:27.697639 1003659 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 343, in <module>
+    run_control(
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 250, in run_control
+    current_state, accumulated = run_one_month(current_state)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 236, in run_one_month
+    (final_s, final_acc), _ = jax.lax.scan(
+                              ^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 221, in month_step_fn
+    new_s = main.step_coupled(s, params, regridder, r_drag=r_drag, kappa_gm=kappa_gm, kappa_h=kappa_h, kappa_bi=kappa_bi, Ah=Ah, Ab=Ab, shapiro_strength=shapiro_strength, smag_constant=smag_constant) # Use passed parameters
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/main.py", line 400, in step_coupled
+    new_ocean = ocean_driver.step_ocean(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/ocean/veros_driver.py", line 368, in step_ocean
+    if Ah > 0:
+       ^^^^^^
+jax.errors.TracerBoolConversionError: Attempted boolean conversion of traced array with shape bool[].
+The error occurred while tracing the function step_ocean at /home/fallah/scripts/ESMB/chronos_esm/ocean/veros_driver.py:48 for jit. This concrete value was not available in Python because it depends on the value of the argument Ah.
+See https://docs.jax.dev/en/latest/errors.html#jax.errors.TracerBoolConversionError
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

@@ -1,0 +1,3 @@
+W0106 17:07:30.005834 4194131 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0106 17:07:30.010491 4194105 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+slurmstepd-csl14c241: error: *** JOB 6282893 ON csl14c241 CANCELLED AT 2026-01-06T17:17:50 ***

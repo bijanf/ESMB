@@ -1,0 +1,31 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1218 14:29:09.382574 3884959 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1218 14:29:09.387616 3884903 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics.py", line 115, in <module>
+    run_tuning()
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics.py", line 88, in run_tuning
+    raw_r_param, loss, amoc, current_r = update_step(raw_r_param, curr_state)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics.py", line 68, in update_step
+    (loss, (amoc, current_r)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics.py", line 31, in loss_fn
+    final_state, _ = jax.lax.scan(scan_fn, state_init, None, length=steps)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics.py", line 28, in scan_fn
+    state = main.step_coupled(state, params, regridder, r_drag=r_drag)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/main.py", line 397, in step_coupled
+    new_ocean = ocean_driver.step_ocean(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/ocean/veros_driver.py", line 188, in step_ocean
+    denom = RHO_WATER * (f_clamped**2 + r_drag**2)
+                                        ^^^^^^
+NameError: name 'r_drag' is not defined
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

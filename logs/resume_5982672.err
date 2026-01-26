@@ -1,0 +1,9 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/resume_run.py", line 260, in <module>
+    resume_run(years=100.0)
+TypeError: resume_run() got an unexpected keyword argument 'years'

@@ -1,0 +1,20 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W0126 14:26:56.153013 1363224 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0126 14:26:56.158044 1363185 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/outputs/long_run_fast/phase1.py", line 34, in <module>
+    state, _ = main.step_coupled(state, params, reg, physics_params=PHYS_PARAMS)
+    ^^^^^^^^
+ValueError: too many values to unpack (expected 2)
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/run_fast_long.py", line 126, in <module>
+    run_phase_1()
+  File "/home/fallah/scripts/ESMB/experiments/run_fast_long.py", line 62, in run_phase_1
+    subprocess.run([sys.executable, str(p1_script)], check=True)
+  File "/usr/lib64/python3.11/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/home/fallah/scripts/ESMB/venv/bin/python', 'outputs/long_run_fast/phase1.py']' returned non-zero exit status 1.

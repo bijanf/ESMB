@@ -1,0 +1,13 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 21, in <module>
+    from chronos_esm import main  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/main.py", line 407
+    nx=OCEAN_GRID.nlon,
+    ^^^^^^^^^^^^^^^^^^
+SyntaxError: keyword argument repeated: nx

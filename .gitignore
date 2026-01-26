@@ -6,3 +6,8 @@ __pycache__/
 *.log
 .DS_Store
 *.swp
+*.nc
+analysis_results/
+experiments/generated/
+*.png
+!timeseries_verification.png

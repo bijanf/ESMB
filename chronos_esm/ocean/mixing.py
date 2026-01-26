@@ -201,4 +201,60 @@ def rotate_tensor(kappa_iso: float, sx: jnp.ndarray, sy: jnp.ndarray) -> jnp.nda
 
     K = jnp.stack([row0, row1, row2], axis=0)
 
-    return K
+
+def compute_vertical_diffusivity(
+    rho: jnp.ndarray,
+    dz: jnp.ndarray,
+    kappa_bg: float = 1e-5,
+    kappa_convect: float = 10.0,
+) -> jnp.ndarray:
+    """
+    Compute vertical diffusivity based on static stability.
+    
+    If stratification is unstable (drho/dz < 0), use large convective diffusivity.
+    Otherwise use background diffusivity.
+    
+    Args:
+        rho: Density (nz, ny, nx)
+        dz: Layer thicknesses (nz,)
+        kappa_bg: Background diffusivity [m^2/s]
+        kappa_convect: Convective diffusivity [m^2/s]
+        
+    Returns:
+        kappa_z: Vertical diffusivity at cell interfaces (nz+1, ny, nx)
+                 defined at top of cell k.
+                 kappa_z[k] is diff at interface k-1/2 (between k-1 and k).
+                 kappa_z[0] = 0 (surface), kappa_z[nz] = 0 (bottom).
+    """
+    nz, ny, nx = rho.shape
+    
+    # Calculate stability N^2 ~ drho/dz
+    # We need drho/dz at interfaces.
+    # rho[k] is cell center. Interface k is betwen k-1 and k.
+    
+    # dz between centers
+    dz_3d = dz.reshape(-1, 1, 1)
+    dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])
+    
+    # drho at interfaces 1..nz-1
+    drho = rho[1:] - rho[:-1]
+    
+    # Check stability.
+    # Standard: rho increases with depth (index increases).
+    # Stable: rho[k] < rho[k+1] => drho > 0.
+    # Unstable: drho < 0.
+    
+    # Define kappa at interfaces
+    # Interior interfaces 1..nz-1
+    is_unstable = drho < 0
+    kappa_interior = jnp.where(is_unstable, kappa_convect, kappa_bg)
+    
+    # Pad top and bottom (zero flux BC implies 0 diffusivity effectively, 
+    # but strictly diffusivity can be non-zero if flux is applied.
+    # usually kappa at boundary is used for surface flux penetration if not applied as source.
+    # Here we treat surface flux as source term in T equation, so kappa_z[0]=0 is consistent for diffusion operator.
+    
+    zeros = jnp.zeros((1, ny, nx))
+    kappa_z = jnp.concatenate([zeros, kappa_interior, zeros], axis=0)
+    
+    return kappa_z

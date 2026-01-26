@@ -1,0 +1,14 @@
+Lmod has detected the following error: The following module(s) are unknown:
+"cuda/12.0" "cudnn/8.9"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore_cache load "cuda/12.0" "cudnn/8.9"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+W0108 13:34:08.581440  210802 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0108 13:34:08.586501  210761 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.

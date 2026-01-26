@@ -1,0 +1,36 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1217 15:31:56.896451 4188153 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1217 15:31:56.901521 4188112 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+--- Logging error ---
+Traceback (most recent call last):
+  File "/usr/lib64/python3.11/logging/__init__.py", line 1114, in emit
+    self.flush()
+  File "/usr/lib64/python3.11/logging/__init__.py", line 1094, in flush
+    self.stream.flush()
+OSError: [Errno 116] Stale file handle
+Call stack:
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 314, in <module>
+    run_control(years=100.0)
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 255, in run_control
+    logger.info(
+Message: 'Month 617 complete in 101.78s. T_mean=297.99K.'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/usr/lib64/python3.11/logging/__init__.py", line 1114, in emit
+    self.flush()
+  File "/usr/lib64/python3.11/logging/__init__.py", line 1094, in flush
+    self.stream.flush()
+OSError: [Errno 116] Stale file handle
+Call stack:
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 314, in <module>
+    run_control(years=100.0)
+  File "/home/fallah/scripts/ESMB/experiments/production_control.py", line 239, in run_control
+    logger.info(f"Running Month {month}/{n_months}...")
+Message: 'Running Month 618/1200...'
+Arguments: ()
+slurmstepd-csl14c247: error: *** JOB 5908342 ON csl14c247 CANCELLED AT 2025-12-18T09:01:47 ***

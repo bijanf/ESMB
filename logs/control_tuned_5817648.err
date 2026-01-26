@@ -1,0 +1,20 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1212 13:42:21.030291 1158244 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1212 13:42:21.035164 1158206 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/control_run_tuned.py", line 284, in <module>
+    run_control(years=5.0)
+  File "/home/fallah/scripts/ESMB/experiments/control_run_tuned.py", line 76, in run_control
+    state = setup_control_run()
+            ^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/control_run_tuned.py", line 54, in setup_control_run
+    atmos = atmos_driver.init_atmos_state(ny, nx)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/atmos/dynamics.py", line 90, in init_atmos_state
+    ln_ps = jnp.log(p0 * jnp.exp(-phi_s / (RD * temp)))
+                                  ^^^^^
+UnboundLocalError: cannot access local variable 'phi_s' where it is not associated with a value

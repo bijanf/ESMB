@@ -1,0 +1,25 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W0122 11:37:56.716794  625055 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0122 11:37:56.721902  625023 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)
+/home/fallah/scripts/ESMB/experiments/plot_evolution_snapshots.py:55: RuntimeWarning: Mean of empty slice
+  zonal_mean = np.nanmean(temp_masked, axis=2)

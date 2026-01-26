@@ -1,0 +1,19 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1221 19:37:56.093353 3175450 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1221 19:37:56.098131 3175409 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 172, in <module>
+    run_tuning()
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 142, in run_tuning
+    new_raw_r, loss, amoc, tm, current_r, grads = update_step(raw_r_param, curr_state)
+                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/tune_physics_v2.py", line 127, in update_step
+    (loss, (amoc, tm, current_r)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FloatingPointError: invalid value (nan) encountered in scan
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

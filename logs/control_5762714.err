@@ -1,0 +1,88 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+Downloading data from 'https://www.ncei.noaa.gov/thredds-ocean/fileServer/ncei/woa/temperature/decav/5deg/woa18_decav_t00_5d.nc' to file '/home/fallah/.cache/chronos_esm/woa18_decav_t00_5d.nc'.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/connection.py", line 204, in _new_conn
+    sock = connection.create_connection(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/util/connection.py", line 85, in create_connection
+    raise err
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/util/connection.py", line 73, in create_connection
+    sock.connect(sa)
+OSError: [Errno 101] Network is unreachable
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/connectionpool.py", line 488, in _make_request
+    raise new_e
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/connectionpool.py", line 464, in _make_request
+    self._validate_conn(conn)
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/connectionpool.py", line 1093, in _validate_conn
+    conn.connect()
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/connection.py", line 759, in connect
+    self.sock = sock = self._new_conn()
+                       ^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/connection.py", line 219, in _new_conn
+    raise NewConnectionError(
+urllib3.exceptions.NewConnectionError: HTTPSConnection(host='www.ncei.noaa.gov', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='www.ncei.noaa.gov', port=443): Max retries exceeded with url: /thredds-ocean/fileServer/ncei/woa/temperature/decav/5deg/woa18_decav_t00_5d.nc (Caused by NewConnectionError("HTTPSConnection(host='www.ncei.noaa.gov', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable"))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 285, in <module>
+    run_control(years=100.0)
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 76, in run_control
+    state = setup_control_run()
+            ^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/experiments/control_run.py", line 33, in setup_control_run
+    temp_ic, salt_ic = data.load_initial_conditions(nz=15)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/data.py", line 65, in load_initial_conditions
+    path_t, path_s = fetch_woa18_temp()
+                     ^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/chronos_esm/data.py", line 39, in fetch_woa18_temp
+    path_temp = pooch.retrieve(
+                ^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/pooch/core.py", line 239, in retrieve
+    stream_download(url, full_path, known_hash, downloader, pooch=None)
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/pooch/core.py", line 807, in stream_download
+    downloader(url, tmp, pooch)
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/pooch/downloaders.py", line 220, in __call__
+    response = requests.get(url, timeout=timeout, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/requests/api.py", line 73, in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fallah/scripts/ESMB/venv/lib64/python3.11/site-packages/requests/adapters.py", line 677, in send
+    raise ConnectionError(e, request=request)
+requests.exceptions.ConnectionError: HTTPSConnectionPool(host='www.ncei.noaa.gov', port=443): Max retries exceeded with url: /thredds-ocean/fileServer/ncei/woa/temperature/decav/5deg/woa18_decav_t00_5d.nc (Caused by NewConnectionError("HTTPSConnection(host='www.ncei.noaa.gov', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable"))

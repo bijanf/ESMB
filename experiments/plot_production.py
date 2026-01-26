@@ -94,8 +94,8 @@ def plot_production_run():
     plt.title(f'AMOC Strength (Months 0-{len(files)})')
     plt.legend()
     plt.grid(True)
-    plt.savefig('production_amoc_timeseries.png')
-    print("Saved production_amoc_timeseries.png")
+    plt.savefig('production_amoc_timeseries_v2.png')
+    print("Saved production_amoc_timeseries_v2.png")
             
     # Plot Timeseries
     plt.figure(figsize=(10, 5))
@@ -105,8 +105,8 @@ def plot_production_run():
     plt.title(f'Production Control Run Progress (Months 0-{len(files)})')
     plt.legend()
     plt.grid(True)
-    plt.savefig('production_t_mean_timeseries.png')
-    print("Saved production_t_mean_timeseries.png")
+    plt.savefig('production_t_mean_timeseries_v2.png')
+    print("Saved production_t_mean_timeseries_v2.png")
     
     # Climatology Analysis (Last 30 Years / 360 Months)
     n_months = 360
@@ -174,8 +174,8 @@ def plot_production_run():
             plt.imshow(diff, origin='lower', vmin=-20, vmax=20, cmap='RdBu_r')
             plt.colorbar(label='Surface - Air Temp (K)')
             plt.title('Surface - Air Temp Difference (K) (Snapshot)')
-            plt.savefig('production_coupling_diff_map.png')
-            print("Saved production_coupling_diff_map.png")
+            plt.savefig('production_coupling_diff_map_v2.png')
+            print("Saved production_coupling_diff_map_v2.png")
             print(f"Coupling Max Diff: {np.max(diff):.2f} K")
             print(f"Coupling Min Diff: {np.min(diff):.2f} K")
 

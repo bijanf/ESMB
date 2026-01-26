@@ -60,7 +60,7 @@ def compute_moc(state: OceanState, dx: float = None) -> jnp.ndarray:
     # Integrate vertically (cumulative sum from bottom)
     # Assuming constant dz for simplicity if not passed.
     # In main.py: dz_ocn = jnp.ones(...) * 100.0
-    dz = 100.0
+    dz = 5000.0 / 15.0 # Match model (333.33m)
 
     # Psi = Sum(v * dx * dz) from bottom
     # cumsum along axis 0 (z)
@@ -85,10 +85,10 @@ def compute_amoc_index(state: OceanState) -> float:
     """
     moc = compute_moc(state)
 
-    # Find index for 30N
-    # Lat: -90 to 90, 96 points.
-    # Index = (30 - (-90)) / 180 * 96 = 120/180 * 96 = 2/3 * 96 = 64
-    lat_idx = 64
+    # Dynamic index calculation
+    nlat = OCEAN_GRID.nlat
+    lat_idx = int((30.0 - (-90.0)) / 180.0 * nlat)
+    lat_idx = min(lat_idx, nlat - 1) # Safety clamp
 
     # Search for max in depth at this latitude
     # Usually AMOC is the max positive value in the upper cell

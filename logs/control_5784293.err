@@ -1,0 +1,9 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W1211 12:32:58.032444  865858 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1211 12:32:58.037443  865819 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Downloading data from 'https://github.com/bijanf/chronos-esm-data/raw/main/etopo5.nc' to file '/home/fallah/.cache/chronos_esm/etopo5.nc'.
+slurmstepd-csl14c242: error: *** JOB 5784293 ON csl14c242 CANCELLED AT 2025-12-11T12:36:54 ***

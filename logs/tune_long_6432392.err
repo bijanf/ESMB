@@ -1,0 +1,24 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W0116 21:09:53.420674  562925 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0116 21:09:53.426209  562878 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+E0116 21:10:01.939429  562878 gpu_hlo_schedule.cc:817] The byte size of input/output arguments (152857979880) exceeds the base limit (63784108032). This indicates an error in the calculation!
+W0116 21:10:02.093153  562878 hlo_rematerialization.cc:3204] Can't reduce memory use below 142.36GiB (152855141320 bytes) by rematerialization; only reduced to 142.50GiB (153007809816 bytes), down from 142.50GiB (153013855784 bytes) originally
+W0116 21:10:15.973930  562878 bfc_allocator.cc:501] Allocator (GPU_0_bfc) ran out of memory trying to allocate 759.38MiB (rounded to 796262400)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0116 21:10:15.974187  562878 bfc_allocator.cc:512] ****************************************************************************************************
+E0116 21:10:15.974211  562878 pjrt_stream_executor_client.cc:2085] Execution of replica 0 failed: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 759.38MiB. [tf-allocator-allocation-error='']
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/tune_stability.py", line 157, in <module>
+    tune_parameters()
+  File "/home/fallah/scripts/ESMB/experiments/tune_stability.py", line 137, in tune_parameters
+    grads, metrics = jax.grad(loss_fn, has_aux=True)(current_params, state_init)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 759.38MiB.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

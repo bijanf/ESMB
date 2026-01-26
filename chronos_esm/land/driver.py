@@ -29,6 +29,7 @@ BUCKET_DEPTH = 0.15  # meters (water holding capacity)
 L_VAPOR = 2.5e6
 
 
+
 class LandState(NamedTuple):
     """State of the land surface."""
 
@@ -36,6 +37,7 @@ class LandState(NamedTuple):
     soil_moisture: jnp.ndarray  # Soil moisture depth [m] (0 to BUCKET_DEPTH)
     lai: jnp.ndarray  # Leaf Area Index [m2/m2]
     soil_carbon: jnp.ndarray  # Soil Carbon [kg C/m2]
+    snow_depth: jnp.ndarray  # Snow depth [m water equivalent]
 
 
 def init_land_state(ny, nx) -> LandState:
@@ -45,6 +47,7 @@ def init_land_state(ny, nx) -> LandState:
         soil_moisture=jnp.ones((ny, nx)) * (BUCKET_DEPTH * 0.5),  # 50% saturation
         lai=jnp.ones((ny, nx)) * 1.0,  # Initial sparse vegetation
         soil_carbon=jnp.ones((ny, nx)) * 10.0,  # 10 kg C/m2
+        snow_depth=jnp.zeros((ny, nx)), # No initial snow
     )
 
 
@@ -56,28 +59,17 @@ def step_land(
     sw_down: jnp.ndarray,  # Shortwave down [W/m2]
     lw_down: jnp.ndarray,  # Longwave down [W/m2]
     precip: jnp.ndarray,  # Precipitation [m/s]
-    mask: jnp.ndarray,  # Land mask (0=Ocean, 1=Land) - Note: Inverted from Ocean mask?
-    # Let's assume input is 1=Land, 0=Ocean for clarity here.
-    # Caller must ensure correct mask is passed.
+    mask: jnp.ndarray,  # Land mask (0=Ocean, 1=Land)
+    
+    # New Inputs
+    wind_speed: jnp.ndarray, # [m/s]
+    drag_coeff: jnp.ndarray, # [-]
+    
     ny: int = ATMOS_GRID.nlat,
     nx: int = ATMOS_GRID.nlon,
 ) -> Tuple[LandState, Tuple[jnp.ndarray, jnp.ndarray]]:
     """
-    Time step the land model.
-
-    Args:
-        state: Current land state
-        t_air: Air temperature [K]
-        q_air: Specific humidity [kg/kg]
-        sw_down: Shortwave downward flux
-        lw_down: Longwave downward flux
-        precip: Precipitation rate [m/s]
-        mask: Land mask (1=Land, 0=Ocean)
-
-    Returns:
-        new_state: Updated land state
-        fluxes: (sensible_heat_flux, latent_heat_flux, carbon_flux)
-                carbon_flux: [kg C/m2/s] (Positive Upward = Release to Atmos)
+    Time step the land model with Snow and Variable Roughness.
     """
 
     # 0. Update Vegetation
@@ -86,162 +78,160 @@ def step_land(
     )
 
     # Get dynamic properties
-    albedo, veg_fraction = vegetation.compute_land_properties(lai_new)
+    albedo_veg, veg_fraction = vegetation.compute_land_properties(lai_new)
+    
+    # Snow Mask
+    # If snow depth > threshold (e.g. 1cm = 0.01m), albedo -> Snow Albedo
+    SNOW_ALBEDO = 0.80
+    snow_cover_fraction = jnp.clip(state.snow_depth / 0.05, 0.0, 1.0) # Fully covered at 5cm
+    
+    albedo = (1.0 - snow_cover_fraction) * albedo_veg + snow_cover_fraction * SNOW_ALBEDO
 
     # 1. Surface Energy Balance
-    # Rn = SW_net + LW_net
-    # SW_net = SW_down * (1 - alpha)
     sw_net = sw_down * (1.0 - albedo)
-
-    # LW_net = LW_down - epsilon * sigma * T^4
     lw_up = EMISSIVITY_LAND * STEFAN_BOLTZMANN * state.temp**4
     lw_net = lw_down - lw_up
-
     r_net = sw_net + lw_net
 
-    # Turbulent Fluxes (Bulk Aerodynamic)
+    # Turbulent Fluxes using PROVIDED drag coefficient and wind speed
     # H = rho * Cp * Ch * U * (Ts - Ta)
-    # LE = rho * Lv * Ce * U * beta * (qs(Ts) - qa)
-
-    # Simplified drag/transfer coeffs
-    # Assume U = 5 m/s constant for now or pass wind
-    wind_speed = 5.0
-    ch = DRAG_COEFF_LAND
-    ce = DRAG_COEFF_LAND
+    ch = drag_coeff
+    ce = drag_coeff # Assuming scalar roughness for heat/moisture matches momentum for now
+    
     rho_air = 1.225
     cp_air = 1004.0
 
     # Sensible Heat (Positive Upward)
+    # Ensure wind is not zero to avoid singular drag (physically mixing is ch*U)
+    # We assume 'drag_coeff' already encapsulates roughness logic
     sensible_flux = rho_air * cp_air * ch * wind_speed * (state.temp - t_air)
 
     # Latent Heat
-    # Saturation humidity at Ts
     t_c = state.temp - 273.15
     es = 611.0 * jnp.exp(17.67 * t_c / (t_c + 243.5))
     p_surf = 101325.0
     q_sat = 0.622 * es / p_surf
 
-    # Beta factor (Soil Moisture limitation)
-    # beta = W / W_crit
+    # Beta factor
     bucket_beta = state.soil_moisture / BUCKET_DEPTH
     bucket_beta = jnp.clip(bucket_beta, 0.0, 1.0)
-
-    # Vegetation boosts evaporation (transpiration)
     beta = bucket_beta * (1.0 + veg_fraction)
     beta = jnp.clip(beta, 0.0, 1.0)
+    
+    # If snow covered, allow evaporation/sublimation freely (beta=1)
+    beta = (1.0 - snow_cover_fraction) * beta + snow_cover_fraction * 1.0
 
-    # Potential Evaporation
     evap_pot = rho_air * ce * wind_speed * (q_sat - q_air)
-    evap_pot = jnp.maximum(evap_pot, 0.0)  # Only evaporation, no condensation for now
-
-    # Actual Evaporation [kg/m2/s]
+    evap_pot = jnp.maximum(evap_pot, 0.0)
     evap = beta * evap_pot
-
+    
+    # Latent Heat (Sublimation if T<0, Evap if T>0 - simplified L_VAPOR)
     latent_flux = L_VAPOR * evap
 
-    # Net Flux into Soil (Positive Warming)
-    # G = Rn - H - LE
+    # Net Flux into Soil
     g_flux = r_net - sensible_flux - latent_flux
 
-    # 2. Temperature Update (Semi-Implicit)
-    # Explicit Euler is unstable for thin soil / long timesteps.
-    # We use a linearized implicit update:
-    # C * (T_new - T_old) / dt = G(T_old) + dG/dT * (T_new - T_old)
-    # T_new = T_old + G(T_old) / (C/dt - dG/dT)
-
-    # Calculate derivatives (dG/dT = dRn/dT - dH/dT - dLE/dT)
-    # All derivatives are negative (stabilizing). We want positive magnitude.
-
-    # dRn/dT = -4 * epsilon * sigma * T^3
+    # 2. Snow vs Rain Logic
+    # If T_air < 0C, precip is snow.
+    is_snow = t_air < 273.15
+    snow_fall = precip * is_snow
+    rain_fall = precip * (1.0 - is_snow)
+    
+    # 3. Temperature Update (Semi-Implicit)
+    # Similar to previous...
     d_rn_dt = -4 * EMISSIVITY_LAND * STEFAN_BOLTZMANN * state.temp**3
-
-    # dH/dT = -rho * cp * Ch * U
     d_h_dt = -rho_air * cp_air * ch * wind_speed
-
-    # dLE/dT = -rho * Lv * Ce * U * beta * dqs/dT
-    # dqs/dT = qs * (17.67 * 243.5) / (Tc + 243.5)^2
     d_qs_dt = q_sat * (17.67 * 243.5) / ((t_c + 243.5) ** 2)
     d_le_dt = -rho_air * L_VAPOR * ce * wind_speed * beta * d_qs_dt
-
-    # Total feedback (negative)
     d_g_dt = d_rn_dt + d_h_dt + d_le_dt
 
-    # Heat Capacity
-    heat_capacity = RHO_SOIL * CP_SOIL * SOIL_DEPTH
+    # Heat Capacity: Soil + Snow
+    # Snow has low heat capacity effectively insulating soil?
+    # Simplified: Add snow thermal inertia
+    # C_snow approx 2000 J/kg/K * rho_snow (300) * depth
+    heat_capacity_soil = RHO_SOIL * CP_SOIL * SOIL_DEPTH
+    heat_capacity_snow = 300.0 * 2000.0 * state.snow_depth
+    total_hc = heat_capacity_soil + heat_capacity_snow
 
-    # Implicit Update
-    # (C/dt - dG/dT) * delta_T = G
-    denominator = (heat_capacity / DT_ATMOS) - d_g_dt
+    denominator = (total_hc / DT_ATMOS) - d_g_dt
     delta_temp = g_flux / denominator
-
-    # Apply update only on land
+    
+    # Apply update on land
     temp_new = state.temp + delta_temp * mask
-
-    # Safety Clamping (Prevent runaway)
+    
+    # Check for Snow Melt
+    # If Temp > 0C and Snow > 0
+    # Melt Energy available = (Temp - 0) * HC
+    # Actually, if T_new > 0 and we have snow, we peg T to 0 and use energy to melt.
+    
+    melt_energy = (temp_new - 273.15) * total_hc
+    
+    # Only if warm and snowy
+    can_melt = (temp_new > 273.15) & (state.snow_depth > 0)
+    
+    # Amount melted [kg/m2] = Energy / L_fusion (3.34e5)
+    L_FUSION = 3.34e5
+    potential_melt_mass = melt_energy / L_FUSION
+    potential_melt_mass = jnp.maximum(potential_melt_mass, 0.0) * can_melt
+    
+    # Converting to depth m (rho_water = 1000)
+    potential_melt_depth = potential_melt_mass / RHO_WATER
+    
+    # Actual melt cannot exceed snow depth
+    actual_melt_depth = jnp.minimum(potential_melt_depth, state.snow_depth)
+    
+    # Update Snow Depth
+    snow_depth_new = state.snow_depth + DT_ATMOS * snow_fall - actual_melt_depth
+    snow_depth_new = jnp.maximum(snow_depth_new, 0.0)
+    
+    # Update Temp: If melting occurred, T stays at 0C (273.15)
+    # If we melted ALL snow, T can rise above 0C? 
+    # Simplified: If potential > actual (all snow melted), T rises.
+    # If potential < actual (snow remains), T = 0C.
+    
+    # T_corrected = 273.15 if snow remains, else calculated
+    # Actually simpler: T_new -= (Melt_Energy_Used / HC)
+    melt_energy_used = actual_melt_depth * RHO_WATER * L_FUSION
+    temp_corrected = temp_new - (melt_energy_used / total_hc)
+    
+    # Only apply correction where relevant
+    temp_new = jnp.where(can_melt, temp_corrected, temp_new)
+    
+    # Safety Clamping
     temp_new = jnp.clip(temp_new, 180.0, 340.0)
-
-    # Relax ocean points to T_air or keep constant?
-    # Keep constant (masked out in main) or sync with T_air to avoid NaNs
     temp_new = jnp.where(mask > 0.5, temp_new, state.temp)
 
-    # 3. Soil Moisture Update
-    # dW/dt = P - E - Runoff
-    # P [m/s], E [kg/m2/s] -> [m/s] = E / rho_water
-
+    # 4. Soil Moisture Update
+    # Inflow = Rain + SnowMelt
     evap_rate = evap / RHO_WATER
-
-    dw_dt = precip - evap_rate
-
+    water_in = rain_fall + (actual_melt_depth / DT_ATMOS) # melt is already per step amount, convert to rate? No wait.
+    # actual_melt_depth is total meters in this step.
+    # So rate = actual_melt_depth / DT
+    
+    dw_dt = (rain_fall + actual_melt_depth/DT_ATMOS) - evap_rate
     moisture_new = state.soil_moisture + DT_ATMOS * dw_dt * mask
-
-    # Bucket overflow (Runoff)
+    
     runoff = jnp.maximum(moisture_new - BUCKET_DEPTH, 0.0)
     moisture_new = jnp.minimum(moisture_new, BUCKET_DEPTH)
-
-    # Lower bound
     moisture_new = jnp.maximum(moisture_new, 0.0)
-
-    # Mask ocean
+    
     moisture_new = jnp.where(mask > 0.5, moisture_new, state.soil_moisture)
-
-    # Mask ocean for LAI too
     lai_new = jnp.where(mask > 0.5, lai_new, state.lai)
+    snow_depth_new = jnp.where(mask > 0.5, snow_depth_new, state.snow_depth)
 
-    # 4. Carbon Cycle
-    # GPP (Gross Primary Productivity) [kg C/m2/s]
-    # Simple Light Use Efficiency model: GPP = LUE * SW_down * f_veg * f(T) * f(W)
-    # We already have growth_potential in vegetation.py, but let's simplify here.
-    # GPP proportional to LAI and SW_down.
-    lue = 1.0e-9  # Light Use Efficiency (very approx)
-    gpp = lue * sw_down * lai_new * beta  # beta is moisture stress
-
-    # Respiration
-    # R_auto (Plant) ~ 0.5 * GPP
+    # 5. Carbon Cycle (Simplified)
+    lue = 1.0e-9
+    gpp = lue * sw_down * lai_new * beta
     r_auto = 0.5 * gpp
-
-    # R_hetero (Soil) ~ k * SoilCarbon * f(T) * f(W)
-    # Q10 = 2.0
     t_ref = 288.15
     q10_factor = 2.0 ** ((state.temp - t_ref) / 10.0)
-    k_soil = 1.0e-8  # Decay rate [1/s]
+    k_soil = 1.0e-8
     r_hetero = k_soil * state.soil_carbon * q10_factor * beta
-
-    # Net Ecosystem Exchange (NEE) = Respiration - GPP
-    # Positive = Release to Atmos
     nee = r_auto + r_hetero - gpp
-
-    # Soil Carbon Update
-    # Input: Litterfall (turnover of veg). Assume steady state veg biomass for now?
-    # Or assume a fraction of GPP goes to soil eventually.
-    # dC_soil/dt = Litter - R_hetero
-    # Assume Litter ~ GPP - R_auto (NPP) eventually dies and becomes soil C
     litter = gpp - r_auto
-
     d_soil_c_dt = litter - r_hetero
     soil_carbon_new = state.soil_carbon + DT_ATMOS * d_soil_c_dt * mask
     soil_carbon_new = jnp.maximum(soil_carbon_new, 0.0)
-
-    # Mask ocean
     soil_carbon_new = jnp.where(mask > 0.5, soil_carbon_new, state.soil_carbon)
 
     new_state = LandState(
@@ -249,6 +239,7 @@ def step_land(
         soil_moisture=moisture_new,
         lai=lai_new,
         soil_carbon=soil_carbon_new,
+        snow_depth=snow_depth_new,
     )
 
     return new_state, (sensible_flux, latent_flux, nee)

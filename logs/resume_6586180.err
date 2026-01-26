@@ -1,0 +1,15 @@
+#######################################################################################
+### conda added to PATH. Use 'source activate' rather than 'conda activate'.        ###
+### Do not run 'conda init' if prompted.                                            ###
+### 'conda init' will modify your shell outside of the `module` environment         ###
+#######################################################################################
+W0126 17:55:16.833031  166297 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0126 17:55:16.838415  166254 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+Traceback (most recent call last):
+  File "/home/fallah/scripts/ESMB/experiments/run_century_resume.py", line 99, in <module>
+    run_resume()
+  File "/home/fallah/scripts/ESMB/experiments/run_century_resume.py", line 96, in run_resume
+    subprocess.run([sys.executable, str(runner_script)], env=env, check=True)
+  File "/usr/lib64/python3.11/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/home/fallah/scripts/ESMB/venv/bin/python', 'outputs/century_run/run_core_resume.py']' returned non-zero exit status 1.
