@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=control_tuned
-#SBATCH --output=logs/control_tuned_%j.log
-#SBATCH --error=logs/control_tuned_%j.err
+#SBATCH --job-name=chronos_safe
+#SBATCH --output=logs/resume_safe_%j.log
+#SBATCH --error=logs/resume_safe_%j.err
 #SBATCH --partition=gpu
 #SBATCH --qos=gpushort
 #SBATCH --account=poem
@@ -12,17 +12,25 @@
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
 
+# Load necessary modules
 module load anaconda
 module load cuda/12.3.1
 
+# Activate Virtual Environment
 source venv/bin/activate
-export PYTHONPATH=$(pwd):$PYTHONPATH
+
+# Resolution
 export CHRONOS_RESOLUTION=T31
 export JAX_PLATFORM_NAME=gpu
 export JAX_ENABLE_X64=True
+
+# NVIDIA Libs
 export LD_LIBRARY_PATH=$(python -c "import os; import nvidia; print(':'.join([os.path.join(nvidia.__path__[0], d, 'lib') for d in os.listdir(nvidia.__path__[0]) if os.path.isdir(os.path.join(nvidia.__path__[0], d, 'lib'))]))"):$LD_LIBRARY_PATH
 
-echo "Starting Tuned Control Run (SW_Trans=0.40) at $(date)"
-# Run for 10 years
-python -u experiments/control_run.py --years 10.0 --r_drag 0.05 --kappa_gm 2000.0 --suffix tuned
+echo "Starting Safe Resume (DT=30) at $(date)"
+echo "Job ID: $SLURM_JOB_ID"
+
+# Run
+stdbuf -o0 -e0 python experiments/run_century_resume_safe.py
+
 echo "Run finished at $(date)"

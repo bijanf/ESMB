@@ -3,7 +3,7 @@
 #SBATCH --output=logs/resume_stable_%j.log
 #SBATCH --error=logs/resume_stable_%j.err
 #SBATCH --partition=gpu
-#SBATCH --qos=gpu
+#SBATCH --qos=gpushort
 #SBATCH --account=poem
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

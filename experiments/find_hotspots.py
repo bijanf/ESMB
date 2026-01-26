@@ -1,48 +1,51 @@
 
 import xarray as xr
 import numpy as np
+import sys
 
-def find_hotspots(filename):
-    print(f"Analyzing {filename}...")
-    ds = xr.open_dataset(filename, decode_times=False)
+def find_hotspots(path):
+    print(f"--- Diagnosing {path} ---")
+    ds = xr.open_dataset(path, decode_times=False)
     
-    # SST
-    sst = ds.ocean_temp.isel(z=0).values - 273.15
-    mask = ds.mask.values if 'mask' in ds else np.ones_like(sst)
+    # 1. Velocity Hotspots
+    u = ds['ocean_u'].fillna(0.0).values
+    v = ds['ocean_v'].fillna(0.0).values
+    speed = np.sqrt(u**2 + v**2)
     
-    # Mask Land (assuming 0.0 is land from previous fix)
-    # But wait, 0.0 C is -273.15 K?
-    # No, model temp is Kelvin. Clean land is 0.0 K.
-    # So sst (vals - 273.15) on land would be -273.15 C.
+    max_speed = np.max(speed)
+    argmax_speed = np.unravel_index(np.argmax(speed), speed.shape)
     
-    # Let's filter for physical range
-    valid_sst = np.where(ds.ocean_temp.isel(z=0).values > 1.0, sst, np.nan)
+    print(f"Max Ocean Speed: {max_speed:.4f} m/s")
+    print(f"Location (z, y, x): {argmax_speed}")
+    print(f"U at Max: {u[argmax_speed]:.4f}, V at Max: {v[argmax_speed]:.4f}")
     
-    max_val = np.nanmax(valid_sst)
-    min_val = np.nanmin(valid_sst)
+    # Check neighborhood of max speed
+    z, y, x = argmax_speed
+    if y > 0 and y < speed.shape[1]-1 and x > 0 and x < speed.shape[2]-1:
+        print("Slice around Max Speed:")
+        print(speed[z, y-1:y+2, x-1:x+2])
     
-    print(f"Global Max SST: {max_val:.2f} C")
-    print(f"Global Min SST: {min_val:.2f} C")
+    # 2. Temperature Extremes
+    t = ds['ocean_temp'].fillna(0.0).values
+    print(f"Temp Range: {np.min(t):.2f} to {np.max(t):.2f} K")
     
-    # Find Location of Max
-    max_idx = np.unravel_index(np.nanargmax(valid_sst), valid_sst.shape)
-    # y = lat index, x = lon index
-    y_idx, x_idx = max_idx
-    
-    # Get Lat/Lon coords if available
-    if 'y_ocn' in ds.coords:
-        lat = ds.y_ocn[y_idx].values
-        lon = ds.x_ocn[x_idx].values
-    else:
-        # manual freq
-        lat = -90 + y_idx * (180/96)
-        lon = x_idx * (360/192)
+    if np.min(t) < 271.0:
+        print("WARNING: Supercooled water detected!")
         
-    print(f"Hotspot Location: Index ({y_idx}, {x_idx}), Lat: {lat:.1f}, Lon: {lon:.1f}")
+    # 3. Check for Checkerboard (2*dt oscillations)
+    # Hard to do with one file, but we can look for spatial noise (high frequency)
+    # Simple Laplacian check
+    lap = np.abs(4*t[0] - np.roll(t[0],1,0) - np.roll(t[0],-1,0) - np.roll(t[0],1,1) - np.roll(t[0],-1,1))
+    print(f"Max Spatial Noise (Laplacian T): {np.max(lap):.4f}")
+    
+    # 4. Atmos Winds
+    ua = ds['atmos_u'].values
+    va = ds['atmos_v'].values
+    w_speed = np.sqrt(ua**2 + va**2)
+    print(f"Max Wind Speed: {np.max(w_speed):.2f} m/s")
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("filename", type=str)
-    args = parser.parse_args()
-    find_hotspots(args.filename)
+    if len(sys.argv) > 1:
+        find_hotspots(sys.argv[1])
+    else:
+        find_hotspots("outputs/century_run/year_038.nc")
