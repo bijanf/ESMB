@@ -9,10 +9,10 @@ numpy>=1.24.0
 
 # Testing and reference (SciPy for verification only)
 scipy>=1.10.0
-pytest
+pytest<8.0.0
 xarray
 netCDF4
-pooch>=1.6.0
+pooch==1.8.2
 
 # Optional: for future visualization
 matplotlib>=3.7.0
