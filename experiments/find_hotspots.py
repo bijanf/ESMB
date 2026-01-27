@@ -33,10 +33,15 @@ def find_hotspots(path):
         print("WARNING: Supercooled water detected!")
         
     # 3. Check for Checkerboard (2*dt oscillations)
-    # Hard to do with one file, but we can look for spatial noise (high frequency)
-    # Simple Laplacian check
+    # Simple Laplacian check normalized by field variance
+    # lap = |4T - neighbors|
     lap = np.abs(4*t[0] - np.roll(t[0],1,0) - np.roll(t[0],-1,0) - np.roll(t[0],1,1) - np.roll(t[0],-1,1))
-    print(f"Max Spatial Noise (Laplacian T): {np.max(lap):.4f}")
+    noise_max = np.max(lap)
+    noise_mean = np.mean(lap)
+    print(f"Grid Noise (Laplacian T): Max={noise_max:.4f}, Mean={noise_mean:.4f}")
+    
+    if noise_max > 5.0:
+        print("!! HIGH NOISE DETECTED !! Probability of crash: HIGH")
     
     # 4. Atmos Winds
     ua = ds['atmos_u'].values
