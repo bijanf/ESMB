@@ -217,11 +217,15 @@ def step_atmos(
     dy = jnp.pi * R_EARTH / ny
 
     # 1. Recover U, V from Vorticity, Divergence
-    # 1. Recover U, V from Vorticity, Divergence
-    # Warm start with previous psi/chi
-    theta0 = jnp.zeros_like(state.vorticity) # dummy guess not needed for direct solve
-    psi = spectral.inverse_laplacian(state.vorticity, dx, dy)
-    chi = spectral.inverse_laplacian(state.divergence, dx, dy)
+    # STABILITY FIX: Pre-filter vorticity/divergence BEFORE Helmholtz inversion
+    # This prevents the tridiagonal solver from blowing up at poles where dx→0
+    # causes kx² → ∞ in the wavenumber-dependent coefficients.
+    vort_filtered = spectral.polar_filter(state.vorticity, lat_rad)
+    div_filtered = spectral.polar_filter(state.divergence, lat_rad)
+
+    # Solve Helmholtz equations with pre-filtered input
+    psi = spectral.inverse_laplacian(vort_filtered, dx, dy)
+    chi = spectral.inverse_laplacian(div_filtered, dx, dy)
 
     dpsi_dx, dpsi_dy = spectral.compute_gradients(psi, dx, dy)
     dchi_dx, dchi_dy = spectral.compute_gradients(chi, dx, dy)
@@ -370,14 +374,18 @@ def step_atmos(
     dco2_dt = advect(state.co2) + forcing_co2
 
     # Diffusion / Sponge Layer
-    # Use constant diffusion for conservation (del^2)
-    # Increased to 2.0e6 to dampen grid-scale noise (1.0e5 was too weak)
-    nu = 2.0e6 
+    # STABILITY FIX: Latitude-dependent diffusion to handle CFL violation at poles
+    # At poles, dx→0 creates CFL violation. We counter this by boosting diffusion
+    # where cos(lat) is small, providing stronger damping where grid spacing shrinks.
+    nu_base = 2.0e6
 
-    # Note: diff_zeta includes 1/dx^2, so we multiply by nu
-    # We must broadcast nu to (ny, nx) if it were variable, but scalar is fine for add.
-    # explicit 2nd order diffusion
-    
+    # Polar boost factor: increases as cos(lat)→0 at poles
+    # Floor at 0.1 to prevent division by zero, cap at 25x to avoid over-damping
+    cos_lat_safe = jnp.maximum(jnp.abs(cos_lat), 0.1)
+    polar_boost = jnp.clip(1.0 / cos_lat_safe**2, 1.0, 25.0)
+    nu = nu_base * polar_boost  # Shape: (ny, 1), broadcasts to (ny, nx)
+
+    # Explicit 2nd order diffusion with latitude-dependent coefficient
     diff_zeta = spectral.compute_laplacian(state.vorticity, dx, dy)
     diff_div = spectral.compute_laplacian(state.divergence, dx, dy)
     diff_temp = spectral.compute_laplacian(state.temp, dx, dy)
