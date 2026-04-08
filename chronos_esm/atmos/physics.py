@@ -108,16 +108,19 @@ def compute_radiative_forcing(
     """
     # 1. Newtonian Cooling
     # Relax towards a simple radiative equilibrium T_eq
-    
-    # Standard GCM cooling: ~10-30 days. 
-    # Tuned to 20 days for balance between gradient maintenance and ocean influence.
-    rad_cool_rate = 1.0 / (86400.0 * 20.0)
+
+    # DOMINANT: 1-day timescale to FORCE correct temperature gradient.
+    # The dynamics are mixing heat faster than radiative equilibrium can maintain
+    # the gradient. This very fast relaxation ensures radiative forcing dominates.
+    rad_cool_rate = 1.0 / (86400.0 * 1.0)
 
     if sw_down is not None:
         # Drive T_eq with provided Shortwave Flux (Seasonal)
-        # T_eq ~ 210K (Base/Night) + Sensitivity * SW_Down
-        # Approx fit: 250 W/m2 (Surf) -> ~310K (Target).
-        t_eq = 240.0 + 0.30 * sw_down
+        # STRONG GRADIENT: Create ~70K equator-pole contrast to overcome mixing.
+        # At equator: sw_down ~ 300 W/m2 -> t_eq ~ 330K
+        # At poles: sw_down ~ 50 W/m2 -> t_eq ~ 260K
+        # This gives ~70K gradient target to achieve ~50K after mixing.
+        t_eq = 245.0 + 0.28 * sw_down
         
         # Ensure non-negative/stable
         t_eq = jnp.clip(t_eq, 180.0, 350.0)

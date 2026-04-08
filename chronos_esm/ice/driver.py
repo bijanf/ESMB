@@ -84,11 +84,24 @@ def step_ice(
     melt_top = jnp.maximum(net_surf_flux, 0.0) / (rho_ice * L_fusion)
 
     # Bottom growth: F_cond / (rho * L)
-    # Note: Ocean heat flux subtracts from this. Assuming 0 for now.
+    # Ocean heat flux (OHF) melts ice from below when SST > T_freeze
+    # Typical OHF: 2-10 W/m² in polar regions, up to 50 W/m² under thin ice
+    sst_excess = jnp.maximum(ocean_temp - t_freeze, 0.0)  # K above freezing
+    # Convert excess heat to melt rate: Q_ohf ~ rho_w * cw * (T - Tf) / tau_mix
+    # Using tau_mix ~ 10 days for mixed layer-ice exchange
+    tau_mix = 10.0 * 86400.0  # seconds
+    rho_w = 1025.0
+    cw = 3985.0
+    mld = 50.0  # mixed layer depth [m]
+    ocean_heat_flux = rho_w * cw * sst_excess * mld / tau_mix  # W/m²
+    melt_bottom = ocean_heat_flux / (rho_ice * L_fusion)  # m/s
+
     growth_bottom = conduction_flux / (rho_ice * L_fusion)
+    # Net bottom change: growth (conduction) - melt (ocean heat)
+    net_bottom = growth_bottom - melt_bottom
 
     # Total thickness change
-    dh_dt = growth_bottom - melt_top
+    dh_dt = net_bottom - melt_top
 
     # Apply change
     h_new = state.thickness + DT_OCEAN * dh_dt
@@ -100,22 +113,22 @@ def step_ice(
     # Max supercooling?
     supercooling = jnp.maximum(t_freeze - ocean_temp, 0.0)
     # Clamp supercooling to prevent massive ice dumps in one step
-    supercooling = jnp.minimum(supercooling, 5.0)
+    # Reduced from 5 K to 2 K to slow ice formation
+    supercooling = jnp.minimum(supercooling, 2.0)
 
     # Convert supercooling to ice thickness
     # Energy = rho_w * cw * supercooling * mld
     # Ice = Energy / (rho_i * L)
-    mld = 50.0  # meters
-    rho_w = 1025.0
-    cw = 3985.0
-
     new_ice = (rho_w * cw * supercooling * mld) / (rho_ice * L_fusion)
+    # Rate-limit new ice formation (max 0.1 m per timestep)
+    new_ice = jnp.minimum(new_ice, 0.1)
 
     # Add new ice
     h_new = h_new + new_ice
-    
-    # Clamp max thickness (e.g. 50m) to prevent ridges from space
-    h_new = jnp.minimum(h_new, 50.0)
+
+    # Clamp max thickness: 5m is realistic for multi-year Arctic ice
+    # (50m was causing 39m ice buildup - completely unrealistic)
+    h_new = jnp.minimum(h_new, 5.0)
 
     # Apply Mask (No ice on land)
     if mask is not None:
