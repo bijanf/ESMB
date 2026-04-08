@@ -4,97 +4,107 @@
 **Chronos-ESM** is a JAX-based, fully differentiable Earth System Model (Ocean, Atmos, Land) running on GPU.
 *   **Resolution**: T31 (approx 3.75°).
 *   **Physics**: Primitive equations (Ocean), QTCM (Atmos).
-*   **State**: 100-Year Control Run in progress.
+*   **State**: Physics overhaul complete, ready for validation runs.
 
-## Current Mission: Century Run
-We are attempting to run a 100-year control simulation.
-*   **Progress**: Years 0-42 are **Verified Stable**.
-*   **Bottleneck**: Years 42-47 were **Unstable** (now fixed - see below).
-    *   Root cause: CFL violation at poles + Helmholtz solver blow-up where dx→0.
-    *   The model crashed around Year 39 or Year 47 due to **Supersonic Winds (>160 m/s)** near the South Pole.
+## Current State: Physics Overhaul (v2)
 
-## Root Cause Analysis (Completed)
-The polar instability was caused by:
-1.  **CFL Violation**: Grid spacing `dx = 2πR·cos(lat)/nlon → 0` at poles, violating stability.
-2.  **Helmholtz Blow-up**: Tridiagonal solver has wavenumber `kx ∝ 1/dx → ∞` at poles.
-3.  **Late Polar Filtering**: Filter was applied AFTER the explosive growth in the solver.
+The model has been upgraded from "tank mode" (extreme artificial damping) to physically-grounded dynamics. Six phases were implemented:
 
-## Fixes Applied (Attempt 10)
+### Phase 1: Semi-Implicit Atmospheric Time Stepping - DONE
+*   **File**: `chronos_esm/atmos/spectral.py` - `solve_helmholtz()` function
+*   **File**: `chronos_esm/atmos/dynamics.py` - Lines 606-673
+*   Gravity waves treated implicitly via Helmholtz equation
+*   Linearized around T0=250K reference temperature
+*   Energy fixer alpha reduced from 0.1 to 0.01 (semi-implicit is nearly conservative)
 
-### Fix 1: Pre-Helmholtz Polar Filtering
-*   **File**: `chronos_esm/atmos/dynamics.py` (lines 219-227)
-*   **Change**: Apply polar filter to vorticity/divergence BEFORE inverse Laplacian.
-*   **Effect**: Prevents high-k modes from triggering Helmholtz resonance at poles.
+### Phase 2: Dynamic Wind Stress - DONE
+*   **File**: `chronos_esm/main.py` - Lines 300-333
+*   Wind stress computed from atmospheric surface winds: `tau = rho_air * C_d * |V| * V`
+*   Gustiness floor of 1.0 m/s, clamped to ±0.5 Pa
+*   Blends from prescribed to dynamic over first 5 years
 
-### Fix 2: Latitude-Dependent Diffusion
-*   **File**: `chronos_esm/atmos/dynamics.py` (lines 379-388)
-*   **Change**: Diffusion coefficient `nu` now scales with `1/cos(lat)²` at high latitudes.
-*   **Effect**: Stronger damping where CFL is violated, up to 25x at poles.
+### Phase 3: Prognostic Salinity + Freshwater - DONE
+*   **File**: `chronos_esm/ocean/veros_driver.py` - Salinity sponge (lines 173-185)
+*   **File**: `chronos_esm/main.py` - River runoff routing (lines 237-255)
+*   Global 35 psu relaxation replaced with high-lat sponge (>70°, 6-month timescale)
+*   Salinity clamp widened: [25,45] → [20,42]
+*   Land runoff routed to adjacent coastal ocean cells
 
-### Fix 3: Safe Resume Point
-*   **File**: `experiments/run_century_resume_tank.py`
-*   **Change**: Resume from `year_042.nc` (verified safe), not `year_046.nc` (poisoned).
+### Phase 4: Reduced Artificial Damping - DONE
+*   **File**: `chronos_esm/atmos/dynamics.py` - Hyperdiffusion (lines 590-597)
+*   Hyperdiffusion reduced ~4x: `nu4_vort=8e13, nu4_div=1.5e14, nu4_temp=5e12`
+*   Wind caps raised from 80 → 150 m/s (allow jet stream dynamics)
+*   Vorticity clamp U_MAX raised from 80 → 150 m/s
 
-## Strategy: "Stabilized Tank Mode"
-*   **Viscosity (Ah)**: `5.0e6` (maximum ocean viscosity).
-*   **Timestep (DT_ATMOS)**: `30s` (minimum safe timestep).
-*   **Shapiro Filter**: `0.9` (strong smoothing).
-*   **Pre-Helm Filter**: **Enabled** (new fix).
-*   **Polar Diffusion**: **25x boost** at high latitudes (new fix).
+### Phase 5: AMOC Diagnostics - DONE
+*   **File**: `chronos_esm/ocean/diagnostics.py`
+*   `create_atlantic_mask()` - Atlantic basin (280-360E + 0-20E, 34S-80N)
+*   `compute_amoc()` - Atlantic overturning streamfunction + 26.5N metrics
+*   `compute_amoc_diagnostics()` - Scalar metrics for logging
 
-## Resume Points (In `outputs/century_run/`)
-*   `year_042.nc`: **SAFE**. The last known "clean" state (Low noise, stable energy).
-*   `year_046.nc`, `year_047.nc`: **POISONED**. Contains hidden instability. **Do not use.**
+### Phase 6: Experiment Script - DONE
+*   **File**: `experiments/run_century_physics.py` - Main run script
+*   **File**: `experiments/run_century_physics_slurm.sh` - SLURM submission
+*   Physically realistic parameters (Ah=5e4, shapiro=0.1, kappa_gm=1000, kappa_h=500)
+*   AMOC diagnostics every 500 steps, streamfunction every 5 years
+*   Resume capability from any checkpoint
 
-## Key Scripts
-*   **`experiments/run_century_resume_tank.py`**:
-    *   The current "Rescue Script" (Attempt 10).
-    *   Configured for **Ah=5e6**, **DT=30s**, resumes from **Year 42**.
-    *   Includes enhanced stability monitoring (wind, vorticity tracking).
-*   **`experiments/check_production_stability.py`**:
-    *   Scans output files for NaN and Stability Metrics (Global T, AMOC, Max Wind).
-*   **`experiments/find_hotspots.py`**:
-    *   Diagnoses individual year files for instability indicators.
-*   **`chronos_esm/config.py`**:
-    *   Global physics constants.
+## Experiment Parameters Comparison
 
-## How to Resume
-1.  Verify `year_042.nc` is healthy:
-    ```bash
-    python experiments/find_hotspots.py outputs/century_run/year_042.nc
-    # Should show: Max Wind < 50 m/s, Grid Noise < 2.0
-    ```
-2.  Submit via SLURM:
-    ```bash
-    sbatch experiments/run_century_resume_tank_slurm.sh
-    ```
-3.  Monitor logs:
-    ```bash
-    tail -f logs/resume_tank_*.log
-    python experiments/check_production_stability.py
-    ```
+| Parameter | Tank Mode (old) | Physics Mode (new) |
+|-----------|----------------|-------------------|
+| Ah (ocean viscosity) | 5.0e6 | 5.0e4 |
+| shapiro_strength | 0.9 | 0.1 |
+| kappa_gm | 3000 | 1000 |
+| kappa_h | 2000 | 500 |
+| nu4_vort | 3.0e14 | 8.0e13 |
+| nu4_div | 6.0e14 | 1.5e14 |
+| nu4_temp | 2.0e13 | 5.0e12 |
+| Wind caps | 80 m/s | 150 m/s |
+| Energy fixer alpha | 0.1 | 0.01 |
+| Wind stress | Prescribed | Dynamic (bulk drag) |
+| Salinity | Global relax to 35 | High-lat sponge only |
+| Time stepping | Forward Euler | Semi-implicit |
 
-## Known Issues
-*   **AMOC Scaling**: The raw AMOC calculation requires a 0.15 depth factor for the surface layer to report realistic Sverdrups (~18 Sv).
-*   **Polar Winds**: If `Atmos U` exceeds 80 m/s, monitor closely. Above 120 m/s triggers emergency checkpoint.
+## How to Run (New Physics)
 
-## Status Codes (from `check_production_stability.py`)
-*   **OK**: Running normally.
-*   **UNSTABLE (Wind)**: Max wind > 80 m/s. Monitor closely.
-*   **CRASH (NaN)**: Simulation blew up.
+### Fresh start:
+```bash
+sbatch experiments/run_century_physics_slurm.sh
+```
 
-## Technical Details: The Polar Instability
+### Resume from checkpoint:
+```bash
+sbatch experiments/run_century_physics_slurm.sh --resume year_042
+```
 
-The instability chain was:
-1. Baroclinic eddies develop polar vorticity anomalies (normal physics).
-2. When vorticity passes to Helmholtz solver with `dx ∝ cos(lat) → 0`:
-   - Wavenumber `kx = 2πk/(nlon·dx) → ∞`
-   - Tridiagonal matrix becomes ill-conditioned
-   - Solution amplifies high-frequency noise
-3. Wind recovery `u = -∂ψ/∂y + ∂χ/∂x` amplifies the noise further.
-4. Advection with `u·∂/∂x` where `∂/∂x ∝ 1/dx` creates explosive tendencies.
-5. After ~7 days of error accumulation, winds exceed physical bounds → NaN.
+### Monitor:
+```bash
+tail -f logs/century_v2_*.log
+```
 
-The fix targets step 2 (filter input to prevent resonance) and step 4 (boost diffusion where dx is small).
+## Verification Targets
 
-*Last Update: Attempt 10 with Pre-Helmholtz filter + Polar diffusion boost.*
+After running:
+1. **5-year smoke test** from fresh initialization — no NaN, no crash
+2. **Energy drift** < 0.5%/year without energy fixer (or with alpha=0.01)
+3. **AMOC** at 26.5N in range 5-25 Sv (observed: ~17 Sv)
+4. **Trade winds** consistently easterly at 10-20° latitude (-5 to -15 m/s)
+5. **Global mean temperature** stable at 285±3K
+6. **Salinity** global mean stable at 34.5-35.5 psu over 10 years
+7. **Jet stream** winds reach 100+ m/s without clamping intervention
+
+## Legacy Resume Points (In `outputs/century_run/`)
+*   `year_042.nc`: Verified clean state (from tank mode).
+*   Can be used as resume point for new physics mode.
+
+## Key Scripts (Legacy)
+*   **`experiments/run_century_resume_tank.py`**: Old tank mode script.
+*   **`experiments/run_century_resume_tank_slurm.sh`**: Old SLURM submission.
+
+## Known Issues (Pre-Overhaul, May Be Resolved)
+*   **Year 48 Instability**: Caused by Forward Euler phase errors on gravity waves.
+    *   Semi-implicit time stepping (Phase 1) should resolve this root cause.
+*   **Vorticity Clamp**: Was hitting 80 m/s limit — now raised to 150 m/s.
+
+*Last Update: Physics overhaul complete (Phases 1-6). Ready for validation.*

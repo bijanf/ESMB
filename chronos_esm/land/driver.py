@@ -41,9 +41,19 @@ class LandState(NamedTuple):
 
 
 def init_land_state(ny, nx) -> LandState:
-    """Initialize land state."""
+    """Initialize land state with latitude-dependent temperature.
+
+    Temperature follows observed climatology:
+    - Equator: ~285K (12C)
+    - Poles: ~260K (-13C)
+    This prevents inverted temperature gradients from warm-pole initialization.
+    """
+    # Latitude-dependent temperature: 285K at equator, 260K at poles
+    lat_rad = jnp.linspace(-jnp.pi/2, jnp.pi/2, ny)
+    temp_init = 285.0 - 25.0 * jnp.sin(lat_rad)**2
+
     return LandState(
-        temp=jnp.ones((ny, nx)) * 290.0,
+        temp=jnp.broadcast_to(temp_init[:, None], (ny, nx)),
         soil_moisture=jnp.ones((ny, nx)) * (BUCKET_DEPTH * 0.5),  # 50% saturation
         lai=jnp.ones((ny, nx)) * 1.0,  # Initial sparse vegetation
         soil_carbon=jnp.ones((ny, nx)) * 10.0,  # 10 kg C/m2

@@ -170,6 +170,33 @@ def step_ocean(
     salt_new = compute_shapiro_filter(state.salt + (dt/6.)*(k1_S+2*k2_S+2*k3_S+k4_S), shapiro_strength)
     dic_new = state.dic + (dt/6.)*(k1_D+2*k2_D+2*k3_D+k4_D)
 
+    # SALINITY RELAXATION - Two-tier approach:
+    # 1. Strong high-latitude sponge (6-month) to stabilize polar regions
+    # 2. Weak global relaxation (5-year) as a safety net against runaway drift
+    # The 5-year timescale is ~5x weaker than the original 1-year, allowing
+    # meaningful density contrasts to develop for AMOC while preventing the
+    # monotonic drift to clamp values seen with sponge-only.
+    S_REF = 35.0  # Reference salinity [psu]
+
+    # Tier 1: High-latitude sponge (strong, 6-month timescale)
+    tau_sponge = 180.0 * 86400.0  # 6-month [s]
+    sponge_rate = dt / tau_sponge
+    lat_ocn = jnp.linspace(-90, 90, ny)
+    sponge_weight = jnp.clip((jnp.abs(lat_ocn) - 65.0) / 5.0, 0.0, 1.0)
+    sponge_3d = sponge_weight[None, :, None]
+    salt_new = salt_new + sponge_rate * sponge_3d * (S_REF - salt_new)
+
+    # Tier 2: Moderate global relaxation (3-year timescale)
+    # 3-year is a compromise: weaker than original 1-year (preserves density
+    # contrasts) but strong enough to prevent the runaway drift seen with 5-year.
+    tau_global = 3.0 * 365.0 * 86400.0  # 3 years [s]
+    global_rate = dt / tau_global
+    salt_new = salt_new + global_rate * (S_REF - salt_new)
+
+    # SAFEGUARD: Keep tight clamp until salinity is validated
+    salt_new = jnp.clip(salt_new, 30.0, 38.0)
+    temp_new = jnp.clip(temp_new, 250.0, 320.0)  # Also clamp temperature
+
     return OceanState(u=u_new, v=v_new, w=state.w, temp=temp_new, salt=salt_new, psi=psi_new, rho=equation_of_state(temp_new, salt_new), dic=dic_new)
 
 def init_ocean_state(nz, ny, nx) -> OceanState:

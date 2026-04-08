@@ -213,9 +213,9 @@ def step_coupled(
         evap = latent_flux_coupled / 2.5e6
         fw_flux_atm = precip_atm - evap
         fw_flux_atm = jnp.clip(fw_flux_atm, -0.05, 0.05)
-        
+
         precip_land_input = jnp.maximum(fw_flux_atm, 0.0) / 1000.0 # m/s
-        
+
         new_land, _ = land_driver.step_land(
             current_state.land,
             t_air=current_state.atmos.temp, # Use consistent T_air (explicit)
@@ -227,6 +227,29 @@ def step_coupled(
             wind_speed=wind_speed_mag,
             drag_coeff=cd
         )
+
+        # ============================================================
+        # RIVER RUNOFF ROUTING
+        # ============================================================
+        # Land model computes runoff (soil_moisture overflow) but it
+        # was previously discarded. Route it to adjacent coastal ocean
+        # cells as freshwater flux using simple nearest-neighbor spread.
+        # ============================================================
+        land_runoff = jnp.maximum(new_land.soil_moisture - 0.15, 0.0)  # overflow [m]
+        # Convert to flux rate [kg/m^2/s] (depth per step -> rate)
+        runoff_flux = land_runoff * 1000.0 / DT_ATMOS  # m -> kg/m^2/s
+
+        # Spread runoff from land to adjacent ocean cells using jnp.roll
+        # Average of 4 neighbors, masked to ocean-only
+        runoff_spread = 0.25 * (jnp.roll(runoff_flux * land_mask, 1, axis=0)
+                                + jnp.roll(runoff_flux * land_mask, -1, axis=0)
+                                + jnp.roll(runoff_flux * land_mask, 1, axis=1)
+                                + jnp.roll(runoff_flux * land_mask, -1, axis=1))
+        # Only deposit in ocean cells
+        runoff_to_ocean = runoff_spread * ocean_mask
+
+        # Add runoff to freshwater flux (will be accumulated for ocean)
+        fw_flux_atm = fw_flux_atm + runoff_to_ocean
         
         # Update State Time
         new_time = current_state.time + DT_ATMOS
@@ -274,33 +297,42 @@ def step_coupled(
         # We need Net Heat, FW, Stress for Ocean
         # Net Heat to Ocean = Atmos Heat Flux (regridded)
         
-        # Zonal Wind Stress
+        # =================================================================
+        # WIND STRESS: Dynamic from atmospheric surface winds
+        # =================================================================
+        # Bulk aerodynamic formula: tau = rho_air * C_d * |V| * V
+        # with gustiness floor to prevent zero stress in calm regions.
+        # Blends from prescribed to dynamic over the first 5 years to
+        # allow the atmosphere to spin up without shocking the ocean.
+        # =================================================================
+
+        # Dynamic wind stress from atmospheric winds
+        rho_air_tau = 1.225  # kg/m^3
+        C_d_ocean = 1.2e-3   # DRAG_COEFF_OCEAN from config
+        gustiness = 1.0       # m/s floor for |V|
+        wind_mag = jnp.sqrt(u_surf**2 + v_surf**2 + gustiness**2)
+        tau_x_dynamic = rho_air_tau * C_d_ocean * wind_mag * u_surf
+        tau_y_dynamic = rho_air_tau * C_d_ocean * wind_mag * v_surf
+
+        # Clamp to physical upper bound (±0.3 Pa)
+        # Observed max wind stress ~0.2-0.3 Pa (Southern Ocean storms)
+        tau_x_dynamic = jnp.clip(tau_x_dynamic, -0.3, 0.3)
+        tau_y_dynamic = jnp.clip(tau_y_dynamic, -0.3, 0.3)
+
+        # Prescribed wind stress (fallback for blending during spinup)
         lat = jnp.linspace(-90, 90, ATMOS_GRID.nlat)
-        lat_rad = jnp.deg2rad(lat)
-        
-        # 1. Seasonality (ITCZ Shift +/- 10 degrees)
-        # Shift profile center: lat_effective = lat - shift
-        # Shift = 10 * sin(2*pi*day/365)
-        # Summer (Day 180) -> Shift North (+10). Winter -> South.
+        lat_rad_ws = jnp.deg2rad(lat)
         season_shift_deg = 10.0 * jnp.sin(2.0 * jnp.pi * (day_of_year - 80.0) / 365.0)
-        season_shift_rad = jnp.deg2rad(season_shift_deg)
-        
-        lat_effective = lat_rad - season_shift_rad
-        
-        # Base Profile (Easterlies in Tropics)
-        # Final Tuning: 0.08 Pa for realistic 15-25 Sv AMOC
-        tau_base = -0.08 * jnp.sin(6.0 * lat_effective)
-        
-        # 2. Stochastic Noise (Pseudo-random based on time)
-        # Use simple sine/cos chaotic mix to avoid passing PRNG key through 10 layers
-        # A chaotic oscillation of amplitude 10%
-        noise_factor = 0.1 * (jnp.sin(current_state.time / (86400.0 * 3.0)) + 
-                              jnp.cos(current_state.time / (86400.0 * 7.0)))
-        
-        tau_profile = tau_base * (1.0 + noise_factor)
-        
-        tau_x_atm = jnp.broadcast_to(tau_profile[:, None], net_heat_atm.shape) # Simplified
-        tau_y_atm = jnp.zeros_like(net_heat_atm)
+        lat_effective = lat_rad_ws - jnp.deg2rad(season_shift_deg)
+        tau_prescribed = -0.08 * jnp.sin(6.0 * lat_effective)
+        tau_x_prescribed = jnp.broadcast_to(tau_prescribed[:, None], net_heat_atm.shape)
+        tau_y_prescribed = jnp.zeros_like(net_heat_atm)
+
+        # Blend: alpha ramps from 0 to 1 over first 5 years
+        blend_years = 5.0
+        alpha_blend = jnp.clip(years_elapsed / blend_years, 0.0, 1.0)
+        tau_x_atm = alpha_blend * tau_x_dynamic + (1.0 - alpha_blend) * tau_x_prescribed
+        tau_y_atm = alpha_blend * tau_y_dynamic + (1.0 - alpha_blend) * tau_y_prescribed
         
         # Accumulate
         # Structure: (heat, fw, tau_x, tau_y, carbon, precip)

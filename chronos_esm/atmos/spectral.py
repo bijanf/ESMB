@@ -131,6 +131,25 @@ def compute_laplacian(
     return d2f_dx2 + d2f_dy2
 
 
+@partial(jax.jit, static_argnames=["nlon"])
+def compute_bilaplacian(
+    field: jnp.ndarray, dx: float, dy: float, nlon: int = ATMOS_GRID.nlon
+) -> jnp.ndarray:
+    """
+    Compute Bilaplacian ∇⁴f = ∇²(∇²f) for hyperdiffusion.
+
+    Hyperdiffusion (del^4) is scale-selective and damps only small scales,
+    preserving large-scale flow structures. This is essential for long-term
+    stability in atmospheric GCMs.
+
+    The hyperdiffusion term: -nu4 * ∇⁴f damps wavenumber k as k^4,
+    so short waves are damped much more than long waves.
+    """
+    # Simply apply Laplacian twice
+    lap_f = compute_laplacian(field, dx, dy, nlon)
+    return compute_laplacian(lap_f, dx, dy, nlon)
+
+
 @jax.jit
 def solve_tridiagonal_batch(lower, main, upper, d):
     """
@@ -310,14 +329,104 @@ def inverse_laplacian(
 
 
 @partial(jax.jit, static_argnames=["nlon"])
+def solve_helmholtz(
+    rhs: jnp.ndarray,
+    dx: float,
+    dy: float,
+    gamma: float,
+    nlon: int = ATMOS_GRID.nlon,
+) -> jnp.ndarray:
+    """
+    Solve the Helmholtz equation (nabla^2 - gamma) x = rhs for x.
+
+    Uses the same FFT-in-x + tridiagonal-in-y approach as inverse_laplacian,
+    but with the modified main diagonal: -(2 + kx^2*dy^2 + gamma*dy^2).
+
+    This is needed for semi-implicit time stepping where gamma = dt^2 * R * T0
+    couples the pressure-divergence system implicitly.
+
+    Args:
+        rhs: Right-hand side field (..., ny, nx)
+        dx: Grid spacing in x (scalar or (ny,1) array)
+        dy: Grid spacing in y (scalar)
+        gamma: Helmholtz parameter (>0 for semi-implicit coupling)
+        nlon: Number of longitude points
+
+    Returns:
+        x: Solution field (..., ny, nx)
+    """
+    ny = rhs.shape[-2]
+
+    # 1. FFT in x
+    b_hat = jnp.fft.rfft(rhs, axis=-1)
+    nx_half = b_hat.shape[-1]
+
+    # 2. Setup tridiagonal systems for each wavenumber k
+    k_idx = jnp.arange(nx_half)
+
+    if isinstance(dx, (float, int)) or dx.ndim == 0:
+        dx_val = dx
+    else:
+        dx_val = dx.squeeze()
+
+    # Modified wavenumber for FD-spectral consistency (same as inverse_laplacian)
+    dx_min = dy
+    dx_safe = jnp.maximum(dx_val[:, None], dx_min)
+    kx_eff = 2.0 * jnp.sin(jnp.pi * k_idx[None, :] / nlon) / dx_safe
+    kx2_dy2 = (kx_eff ** 2) * (dy ** 2)
+
+    # Helmholtz modification: add gamma * dy^2 to the diagonal
+    gamma_dy2 = gamma * (dy ** 2)
+
+    kx2_dy2_T = kx2_dy2.T  # (nk, ny)
+
+    # Main diagonal: -(2 + kx^2*dy^2 + gamma*dy^2)
+    main_diag = -(2.0 + kx2_dy2_T + gamma_dy2)
+
+    lower_diag = jnp.ones_like(main_diag)
+    upper_diag = jnp.ones_like(main_diag)
+
+    # RHS scaled by dy^2
+    d = b_hat * (dy ** 2)
+
+    batch_shape = b_hat.shape[:-2]
+    ny_dim = b_hat.shape[-2]
+    nk_dim = b_hat.shape[-1]
+
+    d_T = jnp.moveaxis(d, -2, -1)
+    d_flat = d_T.reshape((-1, ny))
+
+    n_extra = d_flat.shape[0] // nk_dim
+    main_flat = jnp.tile(main_diag, (n_extra, 1))
+    lower_flat = jnp.tile(lower_diag, (n_extra, 1))
+    upper_flat = jnp.tile(upper_diag, (n_extra, 1))
+
+    x_flat = solve_tridiagonal_batch(lower_flat, main_flat, upper_flat, d_flat)
+
+    x_T = x_flat.reshape(d_T.shape)
+    x_hat = jnp.moveaxis(x_T, -1, -2)
+
+    # 3. Inverse FFT
+    x = jnp.fft.irfft(x_hat, n=nlon, axis=-1)
+
+    return x
+
+
+@partial(jax.jit, static_argnames=["nlon"])
 def polar_filter(
     field: jnp.ndarray,  # (..., ny, nx)
     lat_rad: jnp.ndarray,  # (ny,)
     nlon: int = ATMOS_GRID.nlon,
 ) -> jnp.ndarray:
     """
-    Apply polar filter to remove high-frequency zonal modes near poles.
-    Keeps modes m where m <= (N/2) * cos(lat).
+    Apply gentle polar filter to damp (not remove) high-frequency zonal modes near poles.
+
+    Uses smooth exponential taper instead of hard cutoff to preserve circulation.
+    Only affects modes above the CFL-stable cutoff, and only partially damps them.
+    Always preserves at least the first M_MIN modes to maintain large-scale dynamics.
+
+    Previous version used hard cutoff m_cutoff = (N/2)*cos(lat), which killed all
+    circulation by removing ALL modes at poles every timestep.
     """
     # FFT in longitude
     field_fft = jnp.fft.rfft(field, axis=-1)
@@ -326,38 +435,33 @@ def polar_filter(
     # Wavenumbers m = 0, 1, ..., N/2
     m = jnp.arange(n_modes)
 
-    # Cutoff per latitude
-    # M_max(lat) = (N/2) * cos(lat)
-    # We want to be a bit more aggressive near poles to be safe.
-    # Let's use M_max(lat) = (N/2) * |cos(lat)|
-
+    # CFL-based cutoff: M_max(lat) = (N/2) * cos(lat)
+    # But we use SMOOTH TAPER instead of hard cutoff
     cos_lat = jnp.abs(jnp.cos(lat_rad))
-    m_cutoff = (nlon / 2) * cos_lat
 
-    # Broadcast to (..., ny, n_modes)
-    # field shape is (..., ny, nx)
-    # m shape is (n_modes,)
-    # m_cutoff shape is (ny,)
+    # Minimum modes to always preserve at poles:
+    # M_MIN=1 always preserves zonal mean (m=0), allowing smooth taper to
+    # naturally preserve m=1 (planetary wave) in most cases.
+    # Previous M_MIN=2 was too restrictive and killed polar dynamics.
+    M_MIN = 1.0
 
-    # Create mask
-    # We need to broadcast m and m_cutoff to compatible shapes
-    # m: (1, ..., 1, n_modes)
-    # m_cutoff: (..., ny, 1)
+    # Effective cutoff with floor
+    m_cutoff = jnp.maximum(M_MIN, (nlon / 2) * cos_lat)
 
-    # Assuming field is 2D (ny, nx) or 3D (nz, ny, nx)
-    # We operate on last two dims.
+    # Transition width (smooth over 2 modes for stronger damping)
+    transition_width = 2.0
 
-    # Reshape m to (1, n_modes)
+    # Reshape for broadcasting: m -> (1, n_modes), m_cutoff -> (ny, 1)
     m_grid = m[None, :]
-
-    # Reshape m_cutoff to (ny, 1)
     m_cutoff_grid = m_cutoff[:, None]
 
-    # Mask: 1 if m <= m_cutoff, 0 else
-    mask = jnp.where(m_grid <= m_cutoff_grid, 1.0, 0.0)
+    # Smooth taper: 1.0 below cutoff, exponential decay above
+    # taper = exp(-((m - m_cutoff) / width)^2) for m > m_cutoff
+    excess = jnp.maximum(0.0, m_grid - m_cutoff_grid)
+    taper = jnp.exp(-(excess / transition_width) ** 2)
 
-    # Apply mask
-    field_fft_filtered = field_fft * mask
+    # Apply smooth taper (not hard mask)
+    field_fft_filtered = field_fft * taper
 
     # Inverse FFT
     field_filtered = jnp.fft.irfft(field_fft_filtered, n=nlon, axis=-1)
