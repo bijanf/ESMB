@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -77,10 +78,12 @@ def build_jcm_step(jcm_model, forcing):
     return step_with_filters(raw_step, jcm_model.filters)
 
 
-def build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params):
+def build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params, ocean_mask=None, atm_transmission=0.65):
     """Build the scan-compatible coupled step function."""
     ny, nx = OCEAN_GRID.nlat, OCEAN_GRID.nlon
     nz = 15
+    if ocean_mask is None:
+        ocean_mask = jnp.ones((ny, nx))
 
     lat_arr = jnp.linspace(-90, 90, ny)
     lat_rad = jnp.deg2rad(lat_arr)
@@ -90,7 +93,7 @@ def build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params):
     # TOA: 340 W/m^2 global mean. Atmosphere absorbs ~23% (ozone, water vapor).
     # Clouds reflect ~25% on average. Net at surface: ~52% of TOA.
     sw_toa = 340.0  # W/m^2 global mean
-    atm_transmission = 0.70  # atmospheric absorption (~23%) + partial cloud reflection
+    # atm_transmission passed as function argument
     sw_profile = sw_toa * atm_transmission * jnp.maximum(jnp.cos(lat_rad), 0.0)[:, None]
     sw_profile = jnp.broadcast_to(sw_profile, (ny, nx))
 
@@ -169,13 +172,18 @@ def build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params):
         tau_x_pre = jnp.broadcast_to((-0.08 * jnp.sin(6.0 * lat_eff))[:, None], (ny, nx))
         tau_y_pre = jnp.zeros((ny, nx))
 
-        alpha = jnp.clip(years_elapsed / 5.0, 0.0, 1.0)
-        tau_x = alpha * tau_x_dyn + (1 - alpha) * tau_x_pre
-        tau_y = alpha * tau_y_dyn + (1 - alpha) * tau_y_pre
+        # Keep prescribed wind as floor — JCM aquaplanet winds (~1 m/s)
+        # are too weak to drive AMOC. Use whichever is stronger at each point.
+        tau_x = jnp.where(jnp.abs(tau_x_dyn) > jnp.abs(tau_x_pre), tau_x_dyn, tau_x_pre)
+        tau_y = jnp.where(jnp.abs(tau_y_dyn) > jnp.abs(tau_y_pre), tau_y_dyn, tau_y_pre)
 
         # ============================================================
-        # 6. STEP OCEAN
+        # 6. STEP OCEAN (apply mask to fluxes — no forcing on land)
         # ============================================================
+        heat_flux = heat_flux * ocean_mask
+        fw_flux = fw_flux * ocean_mask
+        tau_x = tau_x * ocean_mask
+        tau_y = tau_y * ocean_mask
         carbon_flux = jnp.zeros((ny, nx))
         new_ocean = ocean_driver.step_ocean(
             ocean_state,
@@ -183,12 +191,29 @@ def build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params):
             wind_stress=(tau_x, tau_y),
             dx=dx, dy=dy, dz=dz,
             nz=nz, ny=ny, nx=nx,
-            mask=None, dt=DT_OCEAN,
+            mask=ocean_mask, dt=DT_OCEAN,
             **ocean_params,
         )
 
         new_sim_time = sim_time + DT_OCEAN
         new_carry = (new_jcm_state, new_ocean, new_sim_time)
+
+        # AMOC: integrate Atlantic meridional velocity
+        # Simple proxy: max of cumulative v*dx*dz in Atlantic (280-360E, 34S-80N)
+        lon_idx = jnp.arange(nx)
+        atlantic_lon = ((lon_idx * 360.0 / nx) >= 280) | ((lon_idx * 360.0 / nx) <= 20)
+        atlantic_lat = (lat_arr >= -34) & (lat_arr <= 80)
+        atl_mask = atlantic_lat[:, None] & atlantic_lon[None, :]
+        v_atl = jnp.where(atl_mask[None, :, :], new_ocean.v, 0.0)
+        # Zonally integrate v, then cumsum in depth (Sv)
+        dx_1d = 2 * jnp.pi * EARTH_RADIUS * jnp.cos(lat_rad) / nx
+        v_transport = jnp.sum(v_atl * dx_1d[None, :, None], axis=2)  # (nz, ny)
+        dz_val = 5000.0 / nz
+        sf = -jnp.cumsum(v_transport * dz_val, axis=0) / 1e6  # Sv
+        lat_26N = jnp.argmin(jnp.abs(lat_arr - 26.5))
+        # Skip surface Ekman layer (top 3 levels = 1000m) to measure
+        # deep thermohaline AMOC, not wind-driven surface overturning
+        amoc_26n = jnp.max(sf[3:, lat_26N])
 
         diagnostics = dict(
             temp_atm=jnp.mean(temp_atm),
@@ -200,6 +225,7 @@ def build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params):
             fw_flux_mean=jnp.mean(fw_flux),
             sensible_mean=jnp.mean(sensible),
             latent_mean=jnp.mean(latent),
+            amoc_26n=amoc_26n,
         )
 
         return new_carry, diagnostics
@@ -210,42 +236,77 @@ def build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--years", type=float, default=5.0)
+    parser.add_argument("--atm-trans", type=float, default=0.65)
+    parser.add_argument("--r-drag", type=float, default=0.10)
+    parser.add_argument("--kappa-gm", type=float, default=2000.0)
     args = parser.parse_args()
 
     print("=" * 70)
-    print("  CHRONOS-ESM with JCM Atmosphere v2")
-    print("  Bulk fluxes + interactive SST coupling")
+    print("  CHRONOS-ESM with JCM Atmosphere + Real Earth Geography")
+    print("  Spherical harmonics | IMEX RK3 | Continental boundaries")
     print("=" * 70, flush=True)
 
     ny, nx = OCEAN_GRID.nlat, OCEAN_GRID.nlon
     nz = 15
 
-    # Build JCM model
-    print("Building JCM model...", flush=True)
+    # Load real terrain and forcing from JCM's built-in data
+    import jcm as jcm_pkg
+    jcm_data = Path(os.path.dirname(jcm_pkg.__file__)) / 'data' / 'bc' / 't30' / 'clim'
+
+    print("Loading real Earth terrain + forcing...", flush=True)
     coords = get_speedy_coords(spectral_truncation=31)
+
+    from jcm.terrain import TerrainData
+    terrain = TerrainData.from_file(str(jcm_data / 'terrain.nc'), coords=coords)
+
+    forcing = ForcingData.from_file(str(jcm_data / 'forcing.nc'), coords=coords)
+
+    # Derive ocean mask from JCM terrain (fmask: 1=land, 0=ocean in JCM)
+    # Our convention: 1=ocean, 0=land; transpose from (lon,lat) to (lat,lon)
+    ocean_mask = (1.0 - terrain.fmask).T
+    ocean_mask = jnp.where(ocean_mask > 0.5, 1.0, 0.0)  # Binarize
+    n_ocean = int(ocean_mask.sum())
+    n_land = ocean_mask.size - n_ocean
+    print(f"  Land: {n_land} cells ({100*n_land/ocean_mask.size:.0f}%), "
+          f"Ocean: {n_ocean} cells ({100*n_ocean/ocean_mask.size:.0f}%)", flush=True)
+
+    # Build JCM model with real terrain
+    print("Building JCM model with real topography...", flush=True)
     jcm_model = Model(
         coords=coords, time_step=15.0,
+        terrain=terrain,
         start_date=jdt.to_datetime("2000-01-01"),
     )
     jcm_state = jcm_model._prepare_initial_modal_state()
 
-    # Initialize ocean
-    print("Initializing ocean...", flush=True)
+    # Initialize ocean with realistic T/S from WOA18
+    print("Initializing ocean with WOA18 climatology...", flush=True)
     ocean_state = ocean_driver.init_ocean_state(nz, ny, nx)
+    try:
+        from chronos_esm.data import load_initial_conditions
+        temp_ic, salt_ic = load_initial_conditions(nz=nz)
+        # WOA18 temp is in Celsius — convert to Kelvin
+        temp_ic = jnp.array(temp_ic) + 273.15
+        salt_ic = jnp.array(salt_ic)
+        # Fill land cells with safe defaults (avoid NaN propagation)
+        mask_3d = jnp.broadcast_to(ocean_mask[None, :, :], (nz, ny, nx))
+        temp_ic = jnp.where(mask_3d > 0.5, temp_ic, 280.0)  # 280K on land
+        salt_ic = jnp.where(mask_3d > 0.5, salt_ic, 35.0)    # 35 psu on land
+        ocean_state = ocean_state._replace(temp=temp_ic, salt=salt_ic)
+        print(f"  WOA18: SST range [{float(temp_ic[0].min()):.1f}, {float(temp_ic[0].max()):.1f}] K, "
+              f"S range [{float(salt_ic[0].min()):.1f}, {float(salt_ic[0].max()):.1f}] psu", flush=True)
+    except Exception as e:
+        print(f"  Warning: Could not load WOA18 data ({e}), using default init", flush=True)
 
     # Ocean grid
     dx, dy, dz = create_ocean_grid()
 
     ocean_params = dict(
-        r_drag=5.0e-2, kappa_gm=2000.0, kappa_h=1000.0,
+        r_drag=args.r_drag, kappa_gm=args.kappa_gm, kappa_h=1000.0,
         kappa_bi=0.0, Ah=1.0e6, Ab=0.0,
         shapiro_strength=0.5, smag_constant=0.1,
     )
-
-    # Create initial forcing with ocean SST
-    sst_for_jcm = ocean_state.temp[0].T  # (lat,lon) -> (lon,lat)
-    forcing = default_forcing(coords.horizontal)
-    forcing = forcing.copy(sea_surface_temperature=sst_for_jcm)
+    print(f"  Params: atm_trans={args.atm_trans}, r_drag={args.r_drag}, kappa_gm={args.kappa_gm}", flush=True)
 
     total_steps = int(args.years * STEPS_PER_YEAR)
     n_chunks = total_steps // CHUNK_SIZE
@@ -257,7 +318,8 @@ def main():
     print("Building JCM step function + JIT compiling...", flush=True)
     t_compile = time.time()
     jcm_step = build_jcm_step(jcm_model, forcing)
-    coupled_step = build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params)
+    coupled_step = build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params,
+                                      ocean_mask=ocean_mask, atm_transmission=args.atm_trans)
 
     @jax.jit
     def run_chunk(carry):
@@ -283,7 +345,8 @@ def main():
             new_sst = ocean_st.temp[0].T  # (lat,lon) -> (lon,lat)
             forcing = forcing.copy(sea_surface_temperature=new_sst)
             jcm_step = build_jcm_step(jcm_model, forcing)
-            coupled_step = build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params)
+            coupled_step = build_coupled_step(jcm_model, jcm_step, dx, dy, dz, ocean_params,
+                                                ocean_mask=ocean_mask, atm_transmission=args.atm_trans)
 
             @jax.jit
             def run_chunk(carry):
@@ -305,7 +368,8 @@ def main():
             f"H={float(diag['heat_flux_mean'][-1]):.0f}W/m2 "
             f"FW={float(diag['fw_flux_mean'][-1]):.2e} "
             f"S={float(diag['salt_mean'][-1]):.2f}psu "
-            f"tau={float(diag['tau_x_mean'][-1]):.4f}Pa",
+            f"tau={float(diag['tau_x_mean'][-1]):.4f}Pa "
+            f"AMOC={float(diag['amoc_26n'][-1]):.1f}Sv",
             flush=True,
         )
 

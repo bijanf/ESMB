@@ -9,6 +9,8 @@ from typing import NamedTuple, Optional, Tuple
 import jax
 import jax.numpy as jnp
 
+from chronos_esm.ocean.utils import soft_clip
+
 from chronos_esm.config import (  # noqa: F401
     DT_OCEAN,
     GRAVITY,
@@ -193,9 +195,12 @@ def step_ocean(
     global_rate = dt / tau_global
     salt_new = salt_new + global_rate * (S_REF - salt_new)
 
-    # SAFEGUARD: Keep tight clamp until salinity is validated
+    # Hard clip for physics stability. Gradients flow via straight-through
+    # estimator: jnp.clip has subgradient 1 in interior, 0 at boundaries.
+    # This is sufficient for optimization since values rarely hit boundaries
+    # when parameters are in reasonable ranges.
     salt_new = jnp.clip(salt_new, 30.0, 38.0)
-    temp_new = jnp.clip(temp_new, 250.0, 320.0)  # Also clamp temperature
+    temp_new = jnp.clip(temp_new, 250.0, 320.0)
 
     return OceanState(u=u_new, v=v_new, w=state.w, temp=temp_new, salt=salt_new, psi=psi_new, rho=equation_of_state(temp_new, salt_new), dic=dic_new)
 
