@@ -134,11 +134,22 @@ def solve_cg(
 
         return (x_new, r_new, p_new, rz_new, r_norm_new, iter_count + 1)
 
-    # Initial state needs iter_count
-    # (x, r, p, rz, r_norm, iter)
-    initial_state_loop = (x0, r0, p0, rz0, jnp.linalg.norm(r0), 0)
+    # Use jax.lax.scan with fixed iterations (differentiable in reverse mode).
+    # while_loop is NOT differentiable. scan runs exactly max_iter steps
+    # but uses jnp.where to stop updating once converged (no-op iterations).
+    def scan_body(state, _):
+        x, r, p, rz_old, r_norm, iter_count = state
+        # Only update if not yet converged
+        converged = r_norm <= tol_abs
+        new_state = body_fun(state)
+        # If converged, keep old state (no-op)
+        out_state = jax.tree.map(
+            lambda old, new: jnp.where(converged, old, new), state, new_state)
+        return out_state, None
 
-    final_state = jax.lax.while_loop(cond_fun, body_fun, initial_state_loop)
+    initial_state_loop = (x0, r0, p0, rz0, jnp.linalg.norm(r0), 0)
+    final_state, _ = jax.lax.scan(scan_body, initial_state_loop,
+                                   None, length=max_iter)
 
     x_final, r_final, _, _, r_norm_final, num_iters = final_state
 
