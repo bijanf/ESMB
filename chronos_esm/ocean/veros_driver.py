@@ -211,6 +211,19 @@ def step_ocean(
     salt_new = jnp.clip(salt_new, 30.0, 38.0)
     temp_new = jnp.clip(temp_new, 250.0, 320.0)
 
+    # Enforce global-mean salinity conservation. Salt is exactly conserved in the
+    # real ocean, but sea-ice brine rejection (as ice grows), the [30,38] clip,
+    # and advection numerics cause a slow global-mean drift that otherwise runs
+    # salinity into the clip over a long run. Renormalize the volume-weighted,
+    # ocean-only global mean back to the observed reference each step -- a gentle
+    # additive shift that removes the net drift without altering the spatial
+    # (gradient) structure that drives the circulation.
+    if mask is not None:
+        S_REF_GLOBAL = 34.7  # observed global-mean ocean salinity [psu]
+        vol = dz_3d * mask.astype(salt_new.dtype)[None, :, :]
+        s_mean = jnp.sum(salt_new * vol) / (jnp.sum(vol) + 1e-12)
+        salt_new = salt_new - (s_mean - S_REF_GLOBAL)
+
     # Diagnose vertical velocity from continuity (previously left at zeros).
     # Hydrostatic continuity: dw/dz = -(du/dx + dv/dy). With a rigid bottom
     # (w=0 at the ocean floor) integrate the horizontal divergence upward, so

@@ -22,6 +22,17 @@ from chronos_esm.ocean import diagnostics as ocean_diagnostics
 from chronos_esm.ocean import veros_driver as ocean_driver
 
 
+# Close the global water budget. Water is conserved -- global evaporation must
+# equal global precipitation -- so the area-weighted global mean of P-E must be
+# zero. precip and evap are computed independently and don't balance, which drove
+# a spurious global salinity drift toward the clip. We remove the global mean of
+# (precip - evap) over the full surface grid at the source (so runoff still
+# returns land P-E to the ocean and the net into the ocean is zero), preserving
+# the spatial pattern that drives the circulation. Module-level constant so the
+# Python branch is resolved at JIT trace time.
+CONSERVE_WATER = True
+
+
 class ModelParams(NamedTuple):
     """Parameters for the model run."""
 
@@ -234,6 +245,16 @@ def step_coupled(
         # Now we have real Precip
         evap = latent_flux_coupled / 2.5e6
         fw_flux_atm = precip_atm - evap
+        if CONSERVE_WATER:
+            # Enforce global water conservation: remove the area-weighted global
+            # mean of P-E so global precip balances global evaporation (no net
+            # freshwater source/sink). Done over the full grid at the source, so
+            # runoff routing still returns land P-E to the ocean and the net
+            # freshwater into the ocean is zero. Kills the spurious salinity drift.
+            w_lat = jnp.cos(lat_rad)[:, None]
+            w_full = jnp.broadcast_to(w_lat, fw_flux_atm.shape)
+            fw_global_mean = jnp.sum(fw_flux_atm * w_full) / jnp.sum(w_full)
+            fw_flux_atm = fw_flux_atm - fw_global_mean
         fw_flux_atm = jnp.clip(fw_flux_atm, -0.05, 0.05)
 
         precip_land_input = jnp.maximum(fw_flux_atm, 0.0) / 1000.0 # m/s
