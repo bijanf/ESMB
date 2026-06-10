@@ -1,5 +1,63 @@
 # Changelog
 
+## [Unreleased] - 2026-06-10
+
+### Added
+- **Observation-validation framework** (`chronos_esm/validation/`): scores model
+  output against WOA18 (ocean T/S) and ERA5 (near-surface atmosphere) with
+  area-weighted skill metrics (bias, RMSE, pattern correlation, Taylor stats),
+  bias maps, zonal-mean comparisons, and a printable scorecard.
+    - `experiments/validate_control.py`: score saved checkpoints or a short
+      in-process demo against obs (`--era5` to include the atmosphere).
+    - `experiments/make_readme_figures.py`: regenerate the README validation figures.
+- **WOA-seeded ocean init**: `main.init_model(ocean_ic="woa")` and
+  `run_century_physics.py --ocean-ic woa` (now default) seed ocean T/S from
+  WOA18 instead of a uniform 10 °C / 35 psu ocean, drastically shortening spin-up.
+- **Global water conservation**: remove the area-weighted global mean of P-E so
+  global precipitation balances evaporation (no spurious freshwater source/sink).
+- **Global-mean salinity conservation**: renormalise the volume-weighted ocean
+  salinity to 34.7 psu each step, removing the sea-ice-brine / clip / numeric
+  drift that previously ran salinity into the clip.
+- **Diagnosed ocean vertical velocity** `w` from continuity (was held at zero).
+- `cdsapi` dependency (ERA5) and `.gitignore` entries for pip wheels / artifacts.
+
+### Fixed
+- **Crash/NaN guards** (multi-agent code review): polar del^4/del^2 diffusion CFL
+  blow-up (CFL-safe `dx_diff`), missing CO2 safety clamp, legacy-checkpoint resume
+  guards (`land_temp`/`sst`/vort-div pole `dx=0`), `rotate_tensor` lost `return`,
+  `CHRONOS_RESOLUTION` import crash -> warn+fallback, `run_scenario` restart
+  missing `phi_s`/`soil_carbon`, `spectral` scalar-`dx` indexing, `soft_clip`
+  divide-by-zero.
+- **AMOC diagnostic**: use the stretched `dz`; remove the barotropic throughflow
+  and restrict to ocean cells so the overturning streamfunction closes (the
+  previously reported ~18-20 Sv was an open-basin artifact; 26.5N bottom value
+  -201.8 -> -0.0 Sv).
+- **SST/SSS collapse**: the per-step del^2 Shapiro filter (strength 0.5) erased
+  resolved gradients; replaced with a scale-selective biharmonic form, off by
+  default (noise control is the physical Laplacian diffusion). SST-vs-WOA18
+  pattern correlation recovered from ~0.2 to ~0.95-1.0.
+
+### Changed
+- **Ocean vertical grid** stretched (50 m surface -> ~550 m deep, 15 levels,
+  5000 m total) instead of uniform ~333 m; shared between dynamics `dz` and the
+  IC depth coordinate. Removes the ~3x too-sluggish surface response.
+- **Ocean shortwave** no longer double-counts planetary albedo (applies ocean
+  albedo with atmospheric transmission), fixing a systematic cold bias.
+- **River runoff** uses non-wrapping latitude shifts, so polar runoff no longer
+  leaks pole-to-pole across the non-periodic boundary.
+- Default ocean `shapiro_strength` 0.1 -> 0.0; README rewritten to reflect the
+  validation-driven status and corrected AMOC.
+
+### Known Issues
+- **No thermohaline overturning yet** (~0 Sv): needs a multi-decade spin-up now
+  that the ocean preserves realistic density structure.
+- **Warm subtropical SST bias** (bounded; a shortwave/radiation calibration item).
+- **Atmosphere biases**: precipitation magnitude and sea-level-pressure variance.
+- **High-latitude grid-scale SST noise** (worst in the NH): land-ocean "bleed" --
+  the ocean step evolves land cells and mixes them across coastlines. Naive
+  del^2/del^4 filtering either collapses gradients or blows up at coasts; the
+  proper fix is land-aware (no-flux at coasts) tracer advection/diffusion.
+
 ## [Unreleased] - 2025-12-23
 
 ### Added
