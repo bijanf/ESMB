@@ -37,11 +37,33 @@ def init_model(
     nx_atmos: int = ATMOS_GRID.nlon,
     ny_ocean: int = OCEAN_GRID.nlat,
     nx_ocean: int = OCEAN_GRID.nlon,
+    ocean_ic: str = "flat",
 ) -> coupled_state.CoupledState:
-    """Initialize the full coupled model state."""
+    """Initialize the full coupled model state.
+
+    ocean_ic:
+        "flat" (default) -> uniform 10 degC / 35 psu ocean (fast, no network).
+        "woa"            -> seed ocean T/S from the WOA18 climatology
+                            (chronos_esm.data.load_initial_conditions). Strongly
+                            preferred for control/spin-up runs: starting from a
+                            realistic stratification cuts ocean spin-up time
+                            enormously vs a motionless isothermal ocean.
+    """
 
     # Initialize components
     ocean = ocean_driver.init_ocean_state(nz, ny_ocean, nx_ocean)
+
+    if ocean_ic == "woa":
+        from chronos_esm import data
+        temp_ic, salt_ic = data.load_initial_conditions(nz=nz)  # degC, psu
+        # Model carries ocean temperature in Kelvin (eos t0 = 283.15 K).
+        ocean = ocean._replace(
+            temp=jnp.asarray(temp_ic) + 273.15,
+            salt=jnp.asarray(salt_ic),
+        )
+    elif ocean_ic != "flat":
+        raise ValueError(f"Unknown ocean_ic={ocean_ic!r}; use 'flat' or 'woa'.")
+
     atmos = atmos_driver.init_atmos_state(ny_atmos, nx_atmos)
     land = land_driver.init_land_state(ny_atmos, nx_atmos)
 

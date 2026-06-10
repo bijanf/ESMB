@@ -17,6 +17,9 @@ pooch==1.8.2
 # Optional: for future visualization
 matplotlib>=3.7.0
 
+# Validation framework (obs/reanalysis benchmarking)
+cdsapi>=0.7.0   # ERA5 download via Copernicus CDS (needs ~/.cdsapirc)
+
 # Development & Code Quality
 black>=23.3.0
 flake8>=6.0.0

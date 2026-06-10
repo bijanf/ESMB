@@ -113,6 +113,9 @@ def main_run():
                         help="Resume from checkpoint (e.g. 'year_042' or full path)")
     parser.add_argument("--years", type=float, default=100.0,
                         help="Total years to simulate")
+    parser.add_argument("--ocean-ic", choices=["woa", "flat"], default="woa",
+                        help="Fresh-start ocean init: 'woa' (WOA18 climatology, "
+                             "default) or 'flat' (uniform 10C/35psu).")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -149,8 +152,8 @@ def main_run():
         else:
             start_year = int(state.time / (365 * 24 * 3600))
     else:
-        print("Fresh initialization...")
-        state = main.init_model()
+        print(f"Fresh initialization (ocean_ic={args.ocean_ic})...")
+        state = main.init_model(ocean_ic=args.ocean_ic)
 
     years_to_run = args.years - start_year
     if years_to_run <= 0:
