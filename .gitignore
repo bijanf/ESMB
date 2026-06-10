@@ -11,3 +11,12 @@ analysis_results/
 experiments/generated/
 *.png
 !timeseries_verification.png
+
+# pip-download artifacts (install from requirements.txt on the cluster instead)
+*.whl
+*.tar.gz
+*.zip
+*.npy
+.venv/
+env/
+*.egg-info/
