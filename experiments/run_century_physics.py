@@ -164,10 +164,12 @@ def main_run():
 
     total_steps = int(years_to_run * steps_per_year)
 
+    ocean_mask_3d, surface_mask = main.ocean_masks(nz=15)
     params = main.ModelParams(
         co2_ppm=280.0,
         solar_constant=1361.0,
-        mask=data.load_bathymetry_mask(nz=15),
+        mask=surface_mask,
+        ocean_mask_3d=ocean_mask_3d,
     )
     reg = main.regrid.Regridder()
     logger = log_utils.setup_logger("century_physics", OUTPUT_DIR / "model_physics.log")

@@ -77,7 +77,8 @@ def demo_states(n):
     from chronos_esm import main
     print(f"[demo] running {n} coupled steps from init_model(ocean_ic='woa') ...")
     state = main.init_model(ocean_ic="woa")
-    params = main.ModelParams()
+    ocean_mask_3d, surface_mask = main.ocean_masks(nz=state.ocean.u.shape[0])
+    params = main.ModelParams(mask=surface_mask, ocean_mask_3d=ocean_mask_3d)
     regridder = main.regrid.Regridder()
     states = []
     for i in range(n):

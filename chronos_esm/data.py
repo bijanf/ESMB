@@ -321,3 +321,71 @@ def load_bathymetry_mask(nz: int = 15):
     mask_boolean = mask_interp > 0.5
 
     return jnp.array(mask_boolean)
+
+
+def _block_mean(a, fy, fx):
+    """Block-average a 2-D array by integer factors (crops to a multiple)."""
+    ny2 = (a.shape[0] // fy) * fy
+    nx2 = (a.shape[1] // fx) * fx
+    a = a[:ny2, :nx2]
+    return a.reshape(a.shape[0] // fy, fy, a.shape[1] // fx, fx).mean(axis=(1, 3))
+
+
+def load_ocean_depth(ny: int = OCEAN_GRID.nlat, nx: int = OCEAN_GRID.nlon,
+                     min_depth: float = 500.0, total_depth: float = 5000.0,
+                     smooth_sigma: float = 0.8, remove_ponds: bool = True):
+    """Derive an ocean depth field H(x,y) [m, positive down] from ETOPO.
+
+    Steps: depth = max(0, -elevation); block-mean coarsen (anti-alias); regrid to
+    the model grid; cap at `total_depth`; Gaussian-smooth; restrict to the WOA
+    land/sea mask (so the ocean footprint matches the coupler); clamp wet cells to
+    >= `min_depth`; optionally drop isolated one-cell ocean ponds. Land cells get
+    depth 0. This is a STATIC field (computed once at setup).
+    """
+    from scipy.ndimage import gaussian_filter
+
+    path = fetch_etopo1()
+    ds = xr.open_dataset(path)
+    var = next(k for k in ("z", "rose", "Band1", "topo") if k in ds)
+    z = ds[var].values.astype("float32")
+    lat_src = (ds["y"] if "y" in ds.coords else ds["lat"]).values.astype("float32")
+    lon_src = (ds["x"] if "x" in ds.coords else ds["lon"]).values.astype("float32")
+
+    depth_full = np.maximum(-z, 0.0)  # 0 on land, positive in ocean
+
+    # Coarsen ETOPO (~1 arc-min) to ~0.5 deg before interpolation to avoid aliasing.
+    fy = max(1, depth_full.shape[0] // 360)
+    fx = max(1, depth_full.shape[1] // 720)
+    depth_c = _block_mean(depth_full, fy, fx)
+    lat_c = _block_mean(lat_src[:, None], fy, 1)[:, 0]
+    lon_c = _block_mean(lon_src[None, :], 1, fx)[0]
+    if lat_c[0] > lat_c[-1]:
+        lat_c = lat_c[::-1]
+        depth_c = depth_c[::-1, :]
+
+    depth_pad, lon_pad = pad_periodic_longitude(depth_c, lon_c)
+    interp = RegularGridInterpolator((lat_c, lon_pad), depth_pad,
+                                     bounds_error=False, fill_value=0.0)
+    lat_model = np.linspace(-90, 90, ny)
+    lon_model = np.linspace(-180, 180, nx, endpoint=False)
+    Y, X = np.meshgrid(lat_model, lon_model, indexing="ij")
+    H = interp(np.stack([Y.ravel(), X.ravel()], -1)).reshape(ny, nx)
+
+    H = np.minimum(H, total_depth)
+    if smooth_sigma and smooth_sigma > 0:
+        H = gaussian_filter(H, smooth_sigma, mode="nearest")
+
+    # Restrict to the WOA ocean footprint (consistent with the coupler mask).
+    omask = np.asarray(load_bathymetry_mask(nz=1)).astype(bool)
+    H = np.where(omask, np.maximum(H, min_depth), 0.0)
+
+    if remove_ponds:
+        wet = H > 0
+        neighbours = (
+            np.roll(wet, 1, 0) | np.roll(wet, -1, 0)
+            | np.roll(wet, 1, 1) | np.roll(wet, -1, 1)
+        )
+        isolated = wet & ~neighbours
+        H = np.where(isolated, 0.0, H)
+
+    return jnp.array(H)

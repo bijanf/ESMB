@@ -67,18 +67,10 @@ def step_ocean(
     Ab: float = 0.0,
     shapiro_strength: float = 0.0,
     smag_constant: float = 0.1,
+    ocean_mask_3d: Optional[jnp.ndarray] = None,
 ) -> OceanState:
 
     # Helpers
-    def compute_laplacian_operator(field):
-        d2x = (jnp.roll(field, 1, axis=-1) + jnp.roll(field, -1, axis=-1) - 2 * field) / dx**2
-        field_padded = jnp.pad(field, [(0,0)] * (len(field.shape)-2) + [(1,1), (0,0)], mode="edge")
-        if len(field.shape) == 3:
-            d2y = (field_padded[:, :-2, :] - 2 * field + field_padded[:, 2:, :]) / dy**2
-        else:
-            d2y = (field_padded[:-2, :] - 2 * field + field_padded[2:, :]) / dy**2
-        return d2x + d2y
-
     def compute_shapiro_filter(field, strength):
         # Scale-selective (biharmonic, del^4) filter: strongly damps 2-grid-point
         # checkerboard noise while leaving resolved gradients nearly untouched.
@@ -94,13 +86,6 @@ def step_ocean(
             return d2x + d2y
         # del^4 = lap(lap); /16 so strength~0.25 fully removes a 2dx mode.
         return field - (strength / 16.0) * _lap(_lap(field))
-
-    def vertical_diffusion(field, kappa_z, dz_3d):
-        dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])
-        grad = (field[1:] - field[:-1]) / dist
-        flux_int = -kappa_z[1:-1] * grad
-        fluxes = jnp.concatenate([jnp.zeros((1, ny, nx)), flux_int, jnp.zeros((1, ny, nx))], axis=0)
-        return (fluxes[:-1] - fluxes[1:]) / dz_3d
 
     # 1. Update Density
     rho = equation_of_state(state.temp, state.salt)
@@ -146,31 +131,74 @@ def step_ocean(
     u_geo = -(r_drag * dp_dx + f_clamped * dp_dy) / denom
     v_geo = (f_clamped * dp_dx - r_drag * dp_dy) / denom
     
-    u_bc = u_geo - (jnp.sum(u_geo * dz_3d, axis=0) / H_total)[None, :, :]
-    v_bc = v_geo - (jnp.sum(v_geo * dz_3d, axis=0) / H_total)[None, :, :]
-    
-    u_new, v_new = u_bt[None, :, :] + u_bc, v_bt[None, :, :] + v_bc
+    # --- Bathymetry wet masks: enforce no-flux at coasts and the sea floor ---
+    # maskC = 1 in wet cells, 0 in land/below-floor. Face masks are open only if
+    # BOTH adjacent centers are wet (MITgcm hFac MIN rule), so no advective or
+    # diffusive flux is ever exchanged with a dry cell. All static -> AD-safe.
+    # With no mask supplied the whole domain is wet (legacy flat-bottom behaviour).
+    if ocean_mask_3d is not None:
+        maskC = ocean_mask_3d.astype(u_geo.dtype)
+    else:
+        maskC = jnp.ones((nz, ny, nx), u_geo.dtype)
+    surf2d = maskC[0]
+    fW = maskC * jnp.roll(maskC, 1, 2)
+    fE = maskC * jnp.roll(maskC, -1, 2)
+    fS = (maskC * jnp.roll(maskC, 1, 1)).at[:, 0, :].set(0.0)
+    fN = (maskC * jnp.roll(maskC, -1, 1)).at[:, -1, :].set(0.0)
+    # vertical interface below cell k is open only if k+1 is also wet (floor=no-flux)
+    iface = (maskC * jnp.concatenate([maskC[1:], jnp.zeros_like(maskC[:1])], 0))[:-1]
+    wet_dz = dz_3d * maskC
+    H_col = jnp.maximum(jnp.sum(wet_dz, axis=0), dz[0])  # per-column wet depth [m]
 
-    # 5. Tracers (RK4)
+    # Baroclinic anomaly: remove the WET-column vertical mean (per-column depth).
+    u_bar = jnp.sum(u_geo * wet_dz, axis=0) / H_col
+    v_bar = jnp.sum(v_geo * wet_dz, axis=0) / H_col
+    u_bc = (u_geo - u_bar[None, :, :]) * maskC
+    v_bc = (v_geo - v_bar[None, :, :]) * maskC
+
+    u_new = (u_bt[None, :, :] + u_bc) * maskC
+    v_new = (v_bt[None, :, :] + v_bc) * maskC
+    u_eff = u_eff * maskC
+    v_eff = v_eff * maskC
+
+    # 5. Tracers (RK4) with flux-masked advection/diffusion (no-flux at coast/floor)
     heat_flux, fw_flux, dic_flux = surface_fluxes
-    fT_s, fS_s, fD_s = heat_flux/(RHO_WATER*3985.*dz[0]), -fw_flux*35./(RHO_WATER*dz[0]), dic_flux/dz[0]
+    # Surface fluxes enter only the top WET cell.
+    fT_s = heat_flux / (RHO_WATER * 3985. * dz[0]) * surf2d
+    fS_s = -fw_flux * 35. / (RHO_WATER * dz[0]) * surf2d
+    fD_s = dic_flux / dz[0] * surf2d
     k_z = mixing.compute_vertical_diffusivity(rho, dz)
+    diff_coef = 20000. * pole_mask_3d + kappa_h * interior_mask_3d
+
+    def _nbrs(F):
+        # Neighbour value across each face; a CLOSED face returns the centre value
+        # (zero gradient) so neither advection nor diffusion exchanges with dry cells.
+        FW = jnp.where(fW > 0, jnp.roll(F, 1, 2), F)
+        FE = jnp.where(fE > 0, jnp.roll(F, -1, 2), F)
+        FS = jnp.where(fS > 0, jnp.roll(F, 1, 1), F)
+        FN = jnp.where(fN > 0, jnp.roll(F, -1, 1), F)
+        return FW, FE, FS, FN
+
+    def _horiz(F):
+        FW, FE, FS, FN = _nbrs(F)
+        dF_dx = jnp.where(u_eff > 0, F - FW, FE - F) / dx
+        dF_dy = jnp.where(v_eff > 0, F - FS, FN - F) / dy
+        adv = -(u_eff * dF_dx + v_eff * dF_dy)
+        lap = ((FE - F) + (FW - F)) / dx**2 + ((FN - F) + (FS - F)) / dy**2
+        return adv + lap * diff_coef
+
+    def _vdiff(F):
+        dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])
+        grad = (F[1:] - F[:-1]) / dist
+        flux = -k_z[1:-1] * grad * iface  # zero flux through dry interfaces / the floor
+        flux = jnp.concatenate([jnp.zeros((1, ny, nx)), flux, jnp.zeros((1, ny, nx))], axis=0)
+        return (flux[:-1] - flux[1:]) / dz_3d
 
     def tendencies(T, S, D):
-        dT_dx = jnp.where(u_eff > 0, T - jnp.roll(T, 1, 2), jnp.roll(T, -1, 2) - T) / dx
-        T_s = jnp.roll(T, 1, 1).at[:, 0, :].set(0.0)
-        T_n = jnp.roll(T, -1, 1).at[:, -1, :].set(0.0)
-        dT_dy = jnp.where(v_eff > 0, T - T_s, T_n - T) / dy
-        adv_T = -(u_eff * dT_dx + v_eff * dT_dy)
-        
-        diff_T = compute_laplacian_operator(T) * (20000.*pole_mask_3d + kappa_h*interior_mask_3d)
-        dz_T = vertical_diffusion(T, k_z, dz_3d)
-        
-        res_T = (adv_T + diff_T + dz_T).at[0].add(fT_s)
-        # Salt/DIC similar
-        res_S = (-(u_eff * (jnp.where(u_eff>0, S-jnp.roll(S,1,2), jnp.roll(S,-1,2)-S)/dx) + v_eff * (jnp.where(v_eff>0, S-jnp.roll(S,1,1).at[:,0,:].set(0.0), jnp.roll(S,-1,1).at[:,-1,:].set(0.0))/dy)) + compute_laplacian_operator(S)*(20000.*pole_mask_3d + kappa_h*interior_mask_3d) + vertical_diffusion(S, k_z, dz_3d)).at[0].add(fS_s)
-        res_D = (-(u_eff * (jnp.where(u_eff>0, D-jnp.roll(D,1,2), jnp.roll(D,-1,2)-D)/dx) + v_eff * (jnp.where(v_eff>0, D-jnp.roll(D,1,1).at[:,0,:].set(0.0), jnp.roll(D,-1,1).at[:,-1,:].set(0.0))/dy)) + vertical_diffusion(D, k_z, dz_3d)).at[0].add(fD_s)
-        return res_T, res_S, res_D
+        res_T = (_horiz(T) + _vdiff(T)).at[0].add(fT_s)
+        res_S = (_horiz(S) + _vdiff(S)).at[0].add(fS_s)
+        res_D = (_horiz(D) + _vdiff(D)).at[0].add(fD_s)
+        return res_T * maskC, res_S * maskC, res_D * maskC  # freeze dry cells
 
     k1_T, k1_S, k1_D = tendencies(state.temp, state.salt, state.dic)
     k2_T, k2_S, k2_D = tendencies(state.temp+0.5*dt*k1_T, state.salt+0.5*dt*k1_S, state.dic+0.5*dt*k1_D)
@@ -218,11 +246,10 @@ def step_ocean(
     # ocean-only global mean back to the observed reference each step -- a gentle
     # additive shift that removes the net drift without altering the spatial
     # (gradient) structure that drives the circulation.
-    if mask is not None:
-        S_REF_GLOBAL = 34.7  # observed global-mean ocean salinity [psu]
-        vol = dz_3d * mask.astype(salt_new.dtype)[None, :, :]
-        s_mean = jnp.sum(salt_new * vol) / (jnp.sum(vol) + 1e-12)
-        salt_new = salt_new - (s_mean - S_REF_GLOBAL)
+    S_REF_GLOBAL = 34.7  # observed global-mean ocean salinity [psu]
+    vol = dz_3d * maskC  # wet-volume weighting (per-column depth aware)
+    s_mean = jnp.sum(salt_new * vol) / (jnp.sum(vol) + 1e-12)
+    salt_new = salt_new - (s_mean - S_REF_GLOBAL) * maskC  # shift wet cells only
 
     # Diagnose vertical velocity from continuity (previously left at zeros).
     # Hydrostatic continuity: dw/dz = -(du/dx + dv/dy). With a rigid bottom
@@ -237,7 +264,7 @@ def step_ocean(
     dvdy = (v_pad[:, 2:, :] - v_pad[:, :-2, :]) / (2 * dy)
     div_h = dudx + dvdy
     w_flux = div_h * dz_3d
-    w_new = -jnp.cumsum(w_flux[::-1], axis=0)[::-1]
+    w_new = (-jnp.cumsum(w_flux[::-1], axis=0)[::-1]) * maskC
 
     return OceanState(u=u_new, v=v_new, w=w_new, temp=temp_new, salt=salt_new, psi=psi_new, rho=equation_of_state(temp_new, salt_new), dic=dic_new)
 

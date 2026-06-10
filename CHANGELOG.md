@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased] - 2026-06-11
+
+### Added
+- **Variable-depth bathymetry** (full-cell "staircase") derived from ETOPO
+  (`data.load_ocean_depth`): depth = max(0, -elevation), block-mean coarsened,
+  Gaussian-smoothed, restricted to the WOA ocean footprint, min depth 500 m,
+  isolated one-cell ponds removed. `ocean/bathymetry.py` turns it into a static
+  3-D wet mask + C-grid face masks (`main.ocean_masks`, `ModelParams.ocean_mask_3d`).
+- **Land-aware (wet-point) flux-masked ocean operators** (`step_ocean`): tracer
+  advection AND diffusion exchange only across open faces (face open iff both
+  adjacent centers are wet — MITgcm hFac MIN rule), no flux through the sea floor,
+  surface flux only into the top wet cell, dry cells frozen. Per-column wet depth
+  `H_col` used for the baroclinic vertical-mean removal; velocities and `w` masked.
+  Salt conservation now weights by the wet volume. Approach validated by deep
+  research (Adcroft/Hill/Marshall 1997; MITgcm; Veros) and a 5-dimension
+  adversarial code review (no defects found).
+
+### Known Issues
+- The bathymetry/flux-masking did NOT resolve the high-latitude grid-scale SST
+  noise: a flat-vs-bathymetry run showed it is generated INTERNALLY in the
+  high-lat dynamics (convective-adjustment patchiness / geostrophic velocity at
+  small polar dx), not by land-bleed. Separate fix needed.
+- Barotropic streamfunction still uses a flat reference depth (no topographic
+  steering of the depth-integrated flow); variable-H external mode (∇·(1/H∇ψ),
+  JEBAR) is deferred pending dedicated research.
+- Partial bottom cells (hFac) deferred; full-cell staircase is the baseline.
+
 ## [Unreleased] - 2026-06-10
 
 ### Added

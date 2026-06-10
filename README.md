@@ -9,7 +9,9 @@ Chronos-ESM is a fully differentiable, coupled Earth System Model (Ocean, Atmosp
 ### Key Features
 *   **Physics**: Primitive-equation ocean (Veros-like, z-levels), spectral atmosphere, thermodynamic sea ice, bucket land.
 *   **Technology**: JAX-based end-to-end differentiability for gradient-based tuning.
-*   **Resolution**: T31 (~3.75°). Ocean: 15 stretched z-levels to a total depth of **5000 m** (layer thickness ~50 m at the surface growing to ~550 m at the bottom). Currently a flat 5000 m bottom with a 2-D land/sea mask — real (variable-depth) bathymetry is not yet wired in.
+*   **Resolution**: T31 (~3.75°). Ocean: 15 stretched z-levels to a maximum depth of **5000 m** (layer thickness ~50 m at the surface growing to ~550 m at the bottom). **Variable-depth bathymetry** is derived from ETOPO (full-cell "staircase"); tracer advection/diffusion are flux-masked (no-flux at coasts and the sea floor). The barotropic streamfunction still uses a flat reference depth — topographic steering of the depth-integrated flow is a planned refinement.
+
+![Ocean bathymetry](docs/figures/bathymetry.png)
 *   **Performance**: ~280 simulated years per day on a single GPU (T31).
 
 ## Project Status (Jun 2026)

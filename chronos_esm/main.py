@@ -39,7 +39,8 @@ class ModelParams(NamedTuple):
     co2_ppm: float = 280.0
     co2_increase_rate: float = 0.0  # Fractional increase per year (e.g. 0.01 for 1%)
     solar_constant: float = 1361.0
-    mask: Optional[jnp.ndarray] = None  # Land mask (True=Ocean)
+    mask: Optional[jnp.ndarray] = None  # 2-D surface land/sea mask (True=Ocean)
+    ocean_mask_3d: Optional[jnp.ndarray] = None  # 3-D wet mask (nz,ny,nx) from bathymetry
 
 
 def init_model(
@@ -82,6 +83,24 @@ def init_model(
     state = coupled_state.init_coupled_state(ocean, atmos, land)
 
     return state
+
+
+def ocean_masks(nz: int = 15):
+    """Build the static ocean masks from ETOPO bathymetry (computed once at setup).
+
+    Returns (ocean_mask_3d, surface_mask):
+      ocean_mask_3d : (nz, ny, nx) float wet mask (1=ocean cell, 0=land/below floor)
+      surface_mask  : (ny, nx) bool surface land/sea mask (= top wet layer)
+    Pass these into ModelParams(mask=surface_mask, ocean_mask_3d=ocean_mask_3d) so the
+    ocean step enforces no-flux at coasts and the sea floor and uses per-column depth.
+    """
+    from chronos_esm import data
+    from chronos_esm.config import OCEAN_DZ
+    from chronos_esm.ocean import bathymetry
+    depth = data.load_ocean_depth(ny=OCEAN_GRID.nlat, nx=OCEAN_GRID.nlon)
+    mask3d = bathymetry.build_wet_mask(depth, OCEAN_DZ)
+    surface = mask3d[0] > 0.5
+    return mask3d, surface
 
 
 @partial(jax.jit, static_argnames=["regridder"])
@@ -558,7 +577,8 @@ def step_coupled(
 
         Ab=Ab,
         shapiro_strength=shapiro_strength,
-        smag_constant=smag_constant
+        smag_constant=smag_constant,
+        ocean_mask_3d=params.ocean_mask_3d,
     )
     
     # Apply Bathymetry Mask
