@@ -108,6 +108,44 @@ def main():
         plots.zonal_mean_plot(metrics.zonal_mean(m), metrics.zonal_mean(obs_m), mlat,
                               title, units, os.path.join(OUT, f"zonal_{key}.png"))
 
+    # --- AMOC: Atlantic overturning streamfunction (map) + value vs RAPID ---
+    amoc_max = None
+    try:
+        import jax.numpy as jnp
+        from chronos_esm.ocean import diagnostics as ocean_diag
+        from chronos_esm.config import OCEAN_DEPTH_CENTERS
+        amoc = ocean_diag.compute_amoc(state.ocean, ocean_mask=jnp.asarray(omask))
+        psi = np.asarray(amoc["streamfunction"])  # (nz, ny) Sv
+        latd = grid.model_lat(psi.shape[1])
+        depth = np.asarray(OCEAN_DEPTH_CENTERS)
+        amoc_max = float(np.nanmax(psi))
+        plots.amoc_streamfunction(psi, latd, depth,
+                                  os.path.join(OUT, "amoc_streamfunction.png"),
+                                  amoc_max=amoc_max, rapid=obs.AMOC_RAPID["value"])
+    except Exception as e:  # noqa: BLE001
+        print(f"AMOC map skipped ({e})")
+
+    # AMOC time-series from yearly checkpoints, if a multi-year run exists.
+    amoc_ts = None
+    import glob as _glob
+    yearly = sorted(_glob.glob("outputs/century_physics/year_*.nc"))
+    if len(yearly) >= 2:
+        try:
+            import jax.numpy as jnp
+            from chronos_esm.ocean import diagnostics as ocean_diag
+            yrs, vals = [], []
+            for p in yearly:
+                stp = io.load_state_from_netcdf(p)
+                d = ocean_diag.compute_amoc_diagnostics(stp.ocean)
+                yrs.append(int("".join(ch for ch in os.path.basename(p) if ch.isdigit()) or 0))
+                vals.append(float(d.get("amoc_max", np.nan)))
+            plots.drift_timeseries(np.array(yrs), {"AMOC max": (np.array(vals), "Sv")},
+                                   os.path.join(OUT, "amoc_timeseries.png"),
+                                   title="AMOC evolution")
+            amoc_ts = True
+        except Exception as e:  # noqa: BLE001
+            print(f"AMOC time-series skipped ({e})")
+
     # --- scorecard table (markdown) ---
     tbl = ["| field | units | bias | RMSE | corr | std ratio | n |",
            "|---|---|---:|---:|---:|---:|---:|"]
@@ -138,6 +176,16 @@ def main():
             lines.append(f"![{k} bias map](docs/figures/biasmap_{k}.png)")
             lines.append(f"![{k} zonal mean](docs/figures/zonal_{k}.png)")
             lines.append("")
+    if amoc_max is not None:
+        lines.append("### AMOC (Atlantic overturning)")
+        lines.append(f"Model max {amoc_max:.1f} Sv vs RAPID ~{obs.AMOC_RAPID['value']:.0f} Sv "
+                     "at 26.5N. (A multi-decade spin-up is needed for a realistic AMOC.)")
+        lines.append("![AMOC streamfunction](docs/figures/amoc_streamfunction.png)")
+        if amoc_ts:
+            lines.append("![AMOC time series](docs/figures/amoc_timeseries.png)")
+        else:
+            lines.append("_(Time series appears once a multi-year run writes yearly checkpoints.)_")
+        lines.append("")
     block = "\n".join(lines)
 
     print("\n" + table_md)

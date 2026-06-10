@@ -41,8 +41,17 @@ def bias_map(model, obs, lat, lon, title, units, out_path,
         finite = diff[np.isfinite(diff)]
         vlim = float(np.nanpercentile(np.abs(finite), 98)) if finite.size else 1.0
         vlim = vlim or 1.0
-    fvmin = float(np.nanmin([np.nanmin(model), np.nanmin(obs)]))
-    fvmax = float(np.nanmax([np.nanmax(model), np.nanmax(obs)]))
+    # Scale Model and Obs panels to the OBSERVED robust range (2-98th pct), shared
+    # so they are directly comparable AND the obs is never flattened by a wildly
+    # out-of-range model (a too-variable model simply saturates the colour scale,
+    # which visually flags the problem instead of hiding it).
+    ofin = obs[np.isfinite(obs)]
+    if ofin.size:
+        fvmin, fvmax = (float(np.nanpercentile(ofin, 2)), float(np.nanpercentile(ofin, 98)))
+    else:
+        fvmin, fvmax = 0.0, 1.0
+    if fvmin == fvmax:
+        fvmax = fvmin + 1.0
 
     fig, axes = plt.subplots(1, 3, figsize=(COL2, COL2 / 3.1))
     for ax, fld, ttl, vv in (
@@ -62,6 +71,7 @@ def bias_map(model, obs, lat, lon, title, units, out_path,
         ax.set_ylim(-90, 90)
         cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, shrink=0.9)
         cb.ax.tick_params(labelsize=5)
+        cb.set_label(units, fontsize=5)
     axes[0].set_ylabel("Latitude")
     fig.suptitle(f"{title} [{units}]", y=1.02)
     fig.tight_layout()
@@ -79,6 +89,37 @@ def zonal_mean_plot(model_zm, obs_zm, lat, title, units, out_path):
     ax.set_ylabel(f"{title} [{units}]")
     ax.set_xlim(-90, 90)
     ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def amoc_streamfunction(psi, lat, depth, out_path, amoc_max=None, rapid=None,
+                        title="Atlantic overturning streamfunction"):
+    """Latitude-depth Atlantic overturning streamfunction [Sv].
+
+    psi: (nz, ny) Sv; lat: (ny) deg; depth: (nz) layer-centre depths [m].
+    """
+    psi = np.asarray(psi)
+    fin = psi[np.isfinite(psi)]
+    vlim = float(np.nanpercentile(np.abs(fin), 99)) if fin.size else 1.0
+    vlim = max(vlim, 1.0)
+    fig, ax = plt.subplots(figsize=(COL1 * 1.5, COL1 * 0.95))
+    lev = np.linspace(-vlim, vlim, 21)
+    cf = ax.contourf(lat, depth, psi, levels=lev, cmap="RdBu_r", extend="both")
+    ax.contour(lat, depth, psi, levels=lev[::4], colors="k", linewidths=0.3)
+    ax.invert_yaxis()
+    ax.set_xlabel("Latitude")
+    ax.set_ylabel("Depth [m]")
+    sub = title
+    if amoc_max is not None:
+        sub += f"\nmax = {amoc_max:.1f} Sv"
+        if rapid is not None:
+            sub += f"  (RAPID ~ {rapid:.0f} Sv)"
+    ax.set_title(sub)
+    cb = fig.colorbar(cf, ax=ax)
+    cb.set_label("Sv", fontsize=6)
     fig.tight_layout()
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
