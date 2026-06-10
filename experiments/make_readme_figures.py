@@ -1,20 +1,26 @@
 """
-Generate README/GitHub validation figures (PNG) from a saved model state.
+Generate the README validation dashboard (PNG maps + scorecard) from a model state.
 
-Scores the state against WOA18 (ocean) + ERA5 (atmosphere) and writes:
-  docs/figures/sst_validation.png  - model vs WOA18 SST + bias map
-  docs/figures/taylor.png          - normalized Taylor diagram, all surface fields
-  docs/figures/scorecard.txt       - the numeric scorecard
+Scores the state against WOA18 (ocean) + ERA5 (atmosphere) and writes, for every
+surface field, a bias map (model / obs / model-obs) and a zonal-mean comparison
+into docs/figures/, plus a scorecard table. It then rewrites the section of
+README.md between the markers:
+
+    <!-- VALIDATION:START -->  ...  <!-- VALIDATION:END -->
+
+so the README always shows the latest simulation's validation. Re-run this after
+a run (or on a checkpoint), commit, and review on GitHub.
 
 Usage:
-    python experiments/make_readme_figures.py [path/to/state.nc]
+    python experiments/make_readme_figures.py [path/to/state.nc] [--label "year 50"]
 """
 
+import argparse
 import os
 import sys
 
 import matplotlib
-matplotlib.use("Agg")  # raster backend for PNG
+matplotlib.use("Agg")
 import numpy as np  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,17 +30,48 @@ from chronos_esm.validation import obs, grid, metrics, plots  # noqa: E402
 from chronos_esm.validation import scorecard as sc  # noqa: E402
 from experiments.validate_control import canonical_fields  # noqa: E402
 
-plots.plt.switch_backend("Agg")  # override plots.py's pdf backend for PNG output
+plots.plt.switch_backend("Agg")
 
 OUT = "docs/figures"
+README = "README.md"
+START, END = "<!-- VALIDATION:START -->", "<!-- VALIDATION:END -->"
+
+# (key, title, group) in display order.
+VARS = [
+    ("sst",    "Sea-surface temperature",   "ocean"),
+    ("sss",    "Sea-surface salinity",      "ocean"),
+    ("t2m",    "2 m air temperature",       "atmos"),
+    ("u_sfc",  "Surface zonal wind",        "atmos"),
+    ("v_sfc",  "Surface meridional wind",   "atmos"),
+    ("precip", "Precipitation",             "atmos"),
+    ("mslp",   "Mean sea-level pressure",   "atmos"),
+]
+
+
+def update_readme_section(block):
+    with open(README) as f:
+        txt = f.read()
+    if START in txt and END in txt:
+        pre = txt.split(START)[0]
+        post = txt.split(END)[1]
+        txt = f"{pre}{START}\n{block}\n{END}{post}"
+    else:  # append a new section if markers are missing
+        txt = txt.rstrip() + f"\n\n## Validation dashboard\n{START}\n{block}\n{END}\n"
+    with open(README, "w") as f:
+        f.write(txt)
 
 
 def main():
-    state_path = sys.argv[1] if len(sys.argv) > 1 else "outputs/century_physics/final_state.nc"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("state", nargs="?", default="outputs/century_physics/final_state.nc")
+    ap.add_argument("--label", default=None, help="human label for the state (e.g. 'year 50')")
+    ap.add_argument("--no-readme", action="store_true", help="write figures only, don't touch README")
+    args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
 
-    print(f"Scoring {state_path} ...")
-    state = io.load_state_from_netcdf(state_path)
+    label = args.label or os.path.basename(args.state)
+    print(f"Scoring {args.state} ({label}) ...")
+    state = io.load_state_from_netcdf(args.state)
     mf = canonical_fields(state)
 
     ocean_surface = obs.woa18_surface()
@@ -45,40 +82,70 @@ def main():
         era5 = None
     obs_spec = sc.assemble_obs(ocean_surface=ocean_surface, era5=era5)
 
-    # Numeric scorecard (reuse the library; it writes PDFs we discard, but
-    # returns the rows we want and the taylor entries via figures=False path).
-    rows, _ = sc.run_scorecard(
-        {k: v for k, v in mf.items() if k in obs_spec}, obs_spec, make_figures=False)
-    with open(os.path.join(OUT, "scorecard.txt"), "w") as fh:
-        fh.write(sc.format_scorecard(rows))
-    print(sc.format_scorecard(rows))
-
-    # Ocean land/sea mask, so the model panels show ocean only (the dynamics
-    # also evolve "land" cells; they are excluded from every metric).
-    nlat, nlon = mf["sst"].shape
     omask = np.asarray(data.load_bathymetry_mask(nz=15)).astype(bool)
     if omask.ndim == 3:
         omask = omask[0]
 
-    def ocean_only(field):
-        return np.where(omask, field, np.nan)
+    rows = []
+    for key, title, group in VARS:
+        if key not in obs_spec or key not in mf:
+            continue
+        units, scale, cmap, _ = sc._DISPLAY[key]
+        m = np.asarray(mf[key]) * scale
+        nlat, nlon = m.shape
+        mlat, mlon = grid.model_lat(nlat), grid.model_lon(nlon)
+        o = obs_spec[key]
+        obs_m = grid.regrid_to_model(o["obs"], o["lat"], o["lon"], mlat, mlon) * scale
+        if group == "ocean":
+            m = np.where(omask, m, np.nan)  # ocean cells only
+        w = grid.area_weights(mlat)
+        s = metrics.area_weighted_stats(m, obs_m, w)
+        t = metrics.taylor_stats(m, obs_m, w)
+        rows.append((key, units, s, t["std_ratio"]))
 
-    mlat, mlon = grid.model_lat(nlat), grid.model_lon(nlon)
-    woa_sst = grid.regrid_to_model(ocean_surface["sst"], ocean_surface["lat"],
-                                   ocean_surface["lon"], mlat, mlon)
+        plots.bias_map(m, obs_m, mlat, mlon, title, units,
+                       os.path.join(OUT, f"biasmap_{key}.png"), cmap=cmap)
+        plots.zonal_mean_plot(metrics.zonal_mean(m), metrics.zonal_mean(obs_m), mlat,
+                              title, units, os.path.join(OUT, f"zonal_{key}.png"))
 
-    # --- Figure 1: SST model vs WOA18 (ocean-only) ---
-    plots.bias_map(ocean_only(mf["sst"]), woa_sst, mlat, mlon,
-                   "Sea-surface temperature", "degC",
-                   os.path.join(OUT, "sst_validation.png"))
+    # --- scorecard table (markdown) ---
+    tbl = ["| field | units | bias | RMSE | corr | std ratio | n |",
+           "|---|---|---:|---:|---:|---:|---:|"]
+    for key, units, s, sr in rows:
+        tbl.append(f"| {key} | {units} | {s['bias']:.2f} | {s['rmse']:.2f} | "
+                   f"{s['corr']:.2f} | {sr:.2f} | {s['n']} |")
+    table_md = "\n".join(tbl)
+    with open(os.path.join(OUT, "scorecard.md"), "w") as f:
+        f.write(table_md + "\n")
 
-    # --- Figure 2: zonal-mean SST, model vs WOA18 ---
-    plots.zonal_mean_plot(metrics.zonal_mean(ocean_only(mf["sst"])),
-                          metrics.zonal_mean(woa_sst), mlat,
-                          "Zonal-mean SST", "degC",
-                          os.path.join(OUT, "sst_zonal.png"))
+    # --- README block (table + grouped maps) ---
+    obs_src = "WOA18 + ERA5" if era5 is not None else "WOA18"
+    lines = [
+        f"_Validation of `{args.state}` ({label}) against {obs_src}, "
+        f"auto-generated by `experiments/make_readme_figures.py`. "
+        f"A perfect model has bias 0, corr 1, std ratio 1._",
+        "", table_md, "",
+    ]
+    for grp, header, ref in [("ocean", "Ocean (vs WOA18)", ""),
+                             ("atmos", "Atmosphere (vs ERA5)", "")]:
+        grp_keys = [k for k, _, g in VARS if g == grp and any(r[0] == k for r in rows)]
+        if not grp_keys:
+            continue
+        lines.append(f"### {header}")
+        for k in grp_keys:
+            title = next(t for kk, t, _ in VARS if kk == k)
+            lines.append(f"**{title}**")
+            lines.append(f"![{k} bias map](docs/figures/biasmap_{k}.png)")
+            lines.append(f"![{k} zonal mean](docs/figures/zonal_{k}.png)")
+            lines.append("")
+    block = "\n".join(lines)
 
-    print(f"\nWrote figures to {OUT}/")
+    print("\n" + table_md)
+    if not args.no_readme:
+        update_readme_section(block)
+        print(f"\nUpdated {README} validation dashboard and {OUT}/ figures.")
+    else:
+        print(f"\nWrote figures to {OUT}/ (README not modified).")
 
 
 if __name__ == "__main__":
