@@ -11,6 +11,7 @@ analysis_results/
 experiments/generated/
 *.png
 !timeseries_verification.png
+!docs/figures/*.png
 
 # pip-download artifacts (install from requirements.txt on the cluster instead)
 *.whl
