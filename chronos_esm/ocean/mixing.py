@@ -207,56 +207,50 @@ def rotate_tensor(kappa_iso: float, sx: jnp.ndarray, sy: jnp.ndarray) -> jnp.nda
 def compute_vertical_diffusivity(
     rho: jnp.ndarray,
     dz: jnp.ndarray,
+    dt: float = 900.0,
     kappa_bg: float = 1e-5,
     kappa_convect: float = 10.0,
+    ramp_scale: float = 0.02,
 ) -> jnp.ndarray:
     """
-    Compute vertical diffusivity based on static stability.
-    
-    If stratification is unstable (drho/dz < 0), use large convective diffusivity.
-    Otherwise use background diffusivity.
-    
+    Smooth (ramped) convective vertical diffusivity with an explicit-stability cap.
+
+    A HARD on/off convective switch (kappa jumps bg -> convect where drho < 0) fires
+    patchily column-by-column and, combined with the explicit-diffusion CFL limit
+    being violated at the thin surface layer (dt*kappa/dz^2 >> 1), produces grid-scale
+    SST noise that grows toward the high latitudes. Instead we:
+      1. ramp kappa SMOOTHLY with the degree of static instability (-drho), so
+         neighbouring columns get continuously-varying (not 0/1) mixing; and
+      2. cap each interface's kappa at its local explicit-stability limit
+         (0.45*dz^2/dt), so thin surface layers stay numerically stable while thick
+         deep layers can still mix strongly (genuine deep convection is retained).
+    The smooth ramp also removes the non-differentiable jnp.where step (AD-friendlier).
+
     Args:
         rho: Density (nz, ny, nx)
         dz: Layer thicknesses (nz,)
+        dt: Ocean time step [s] (for the explicit-stability cap)
         kappa_bg: Background diffusivity [m^2/s]
-        kappa_convect: Convective diffusivity [m^2/s]
-        
+        kappa_convect: Max convective diffusivity [m^2/s] (where strongly unstable)
+        ramp_scale: Density-instability scale [kg/m^3] over which kappa ramps up
+
     Returns:
-        kappa_z: Vertical diffusivity at cell interfaces (nz+1, ny, nx)
-                 defined at top of cell k.
-                 kappa_z[k] is diff at interface k-1/2 (between k-1 and k).
+        kappa_z: Vertical diffusivity at cell interfaces (nz+1, ny, nx);
                  kappa_z[0] = 0 (surface), kappa_z[nz] = 0 (bottom).
     """
     nz, ny, nx = rho.shape
-    
-    # Calculate stability N^2 ~ drho/dz
-    # We need drho/dz at interfaces.
-    # rho[k] is cell center. Interface k is betwen k-1 and k.
-    
-    # dz between centers
     dz_3d = dz.reshape(-1, 1, 1)
-    dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])
-    
-    # drho at interfaces 1..nz-1
+
+    # drho at interior interfaces 1..nz-1 (rho[k]-rho[k-1]); < 0 => denser on top.
     drho = rho[1:] - rho[:-1]
-    
-    # Check stability.
-    # Standard: rho increases with depth (index increases).
-    # Stable: rho[k] < rho[k+1] => drho > 0.
-    # Unstable: drho < 0.
-    
-    # Define kappa at interfaces
-    # Interior interfaces 1..nz-1
-    is_unstable = drho < 0
-    kappa_interior = jnp.where(is_unstable, kappa_convect, kappa_bg)
-    
-    # Pad top and bottom (zero flux BC implies 0 diffusivity effectively, 
-    # but strictly diffusivity can be non-zero if flux is applied.
-    # usually kappa at boundary is used for surface flux penetration if not applied as source.
-    # Here we treat surface flux as source term in T equation, so kappa_z[0]=0 is consistent for diffusion operator.
-    
+    instab = jnp.maximum(-drho, 0.0)
+    ramp = 1.0 - jnp.exp(-instab / ramp_scale)  # 0 (stable) -> 1 (strongly unstable)
+    kappa_interior = kappa_bg + (kappa_convect - kappa_bg) * ramp
+
+    # Explicit-stability cap per interface (thinner adjacent layer governs).
+    dz_if = jnp.minimum(dz_3d[:-1], dz_3d[1:])
+    kappa_cfl = 0.45 * dz_if ** 2 / dt
+    kappa_interior = jnp.minimum(kappa_interior, kappa_cfl)
+
     zeros = jnp.zeros((1, ny, nx))
-    kappa_z = jnp.concatenate([zeros, kappa_interior, zeros], axis=0)
-    
-    return kappa_z
+    return jnp.concatenate([zeros, kappa_interior, zeros], axis=0)

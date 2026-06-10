@@ -167,7 +167,7 @@ def step_ocean(
     fT_s = heat_flux / (RHO_WATER * 3985. * dz[0]) * surf2d
     fS_s = -fw_flux * 35. / (RHO_WATER * dz[0]) * surf2d
     fD_s = dic_flux / dz[0] * surf2d
-    k_z = mixing.compute_vertical_diffusivity(rho, dz)
+    k_z = mixing.compute_vertical_diffusivity(rho, dz, dt=dt)
     diff_coef = 20000. * pole_mask_3d + kappa_h * interior_mask_3d
 
     def _nbrs(F):

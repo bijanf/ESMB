@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased] - 2026-06-11b
+
+### Fixed
+- **High-latitude grid-scale SST noise** (the long-standing one): a controlled
+  diagnosis (convection-off vs strong-geostrophic-drag) pinned the cause to the
+  **convective adjustment**, not the geostrophic velocity — turning convection off
+  cut NH SST noise ~20x while damping the velocity did nothing. Root cause: the
+  hard on/off convective switch (kappa 1e-5 -> 10) fires patchily column-by-column
+  and, at the thin 50 m surface layer, violates the explicit vertical-diffusion CFL
+  limit. Replaced it (`ocean/mixing.py compute_vertical_diffusivity`) with a SMOOTH
+  ramp of kappa with the degree of static instability plus a per-interface
+  explicit-stability cap (0.45*dz^2/dt). Result (3000-step WOA run): NH SST noise
+  ~50 -> 1.8, SST corr vs WOA 0.86 -> 0.97, deep convection retained, stable.
+  The smooth ramp also removes the non-differentiable jnp.where step.
+
 ## [Unreleased] - 2026-06-11
 
 ### Added
