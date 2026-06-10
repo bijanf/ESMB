@@ -38,7 +38,9 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # are the key changes; ocean params can be relaxed gently.
 OCEAN_PARAMS = dict(
     Ah=1.0e6,             # Ocean viscosity: 5x reduction (tank=5e6)
-    shapiro_strength=0.5,  # Moderate filtering (tank=0.9)
+    shapiro_strength=0.0,  # OFF: the per-step Shapiro filter collapsed SST/SSS
+                           # gradients (now scale-selective biharmonic; noise is
+                           # controlled by the physical Laplacian diffusion below).
     kappa_gm=2000.0,      # GM bolus (tank=3000)
     kappa_h=1000.0,        # Horizontal diffusivity (tank=2000)
 )

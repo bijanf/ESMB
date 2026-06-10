@@ -75,8 +75,8 @@ def load_states(pattern):
 def demo_states(n):
     """Run n coupled steps from a fresh init and return the per-step states."""
     from chronos_esm import main
-    print(f"[demo] running {n} coupled steps from init_model() ...")
-    state = main.init_model()
+    print(f"[demo] running {n} coupled steps from init_model(ocean_ic='woa') ...")
+    state = main.init_model(ocean_ic="woa")
     params = main.ModelParams()
     regridder = main.regrid.Regridder()
     states = []

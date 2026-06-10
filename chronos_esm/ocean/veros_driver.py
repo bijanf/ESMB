@@ -65,7 +65,7 @@ def step_ocean(
     kappa_bi: float = 0.0,
     Ah: float = 2.0e5,
     Ab: float = 0.0,
-    shapiro_strength: float = 0.1,
+    shapiro_strength: float = 0.0,
     smag_constant: float = 0.1,
 ) -> OceanState:
 
@@ -80,11 +80,20 @@ def step_ocean(
         return d2x + d2y
 
     def compute_shapiro_filter(field, strength):
-        diff_x = (jnp.roll(field, -1, axis=2) - 2 * field + jnp.roll(field, 1, axis=2))
-        field_padded = jnp.pad(field, ((0,0), (1, 1), (0, 0)), mode="edge")
-        diff_y = (field_padded[:, 2:, :] - 2 * field + field_padded[:, :-2, :])
-        correction = (strength / 4.0) * (diff_x + diff_y)
-        return field + correction
+        # Scale-selective (biharmonic, del^4) filter: strongly damps 2-grid-point
+        # checkerboard noise while leaving resolved gradients nearly untouched.
+        # The previous del^2 form (field + strength/4 * laplacian) applied EVERY
+        # step was a strong low-pass smoother that erased real SST/SSS gradients
+        # (WOA structure collapsed to ~uniform within days). Primary grid-noise
+        # control is the physical Laplacian diffusion (kappa_h on tracers, Ah on
+        # momentum); this filter is a light 2dx cleanup, off by default.
+        def _lap(f):
+            d2x = jnp.roll(f, -1, axis=2) - 2 * f + jnp.roll(f, 1, axis=2)
+            fp = jnp.pad(f, ((0, 0), (1, 1), (0, 0)), mode="edge")
+            d2y = fp[:, 2:, :] - 2 * f + fp[:, :-2, :]
+            return d2x + d2y
+        # del^4 = lap(lap); /16 so strength~0.25 fully removes a 2dx mode.
+        return field - (strength / 16.0) * _lap(_lap(field))
 
     def vertical_diffusion(field, kappa_z, dz_3d):
         dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])
