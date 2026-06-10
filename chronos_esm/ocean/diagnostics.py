@@ -122,9 +122,28 @@ def create_atlantic_mask(ny: int = OCEAN_GRID.nlat, nx: int = OCEAN_GRID.nlon) -
 
 
 def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
-                 dz: float = None) -> dict:
+                 dz: float = None, ocean_mask: jnp.ndarray = None,
+                 remove_barotropic: bool = True) -> dict:
     """
     Compute Atlantic Meridional Overturning Circulation (AMOC).
+
+    The overturning streamfunction Psi(z, y) = -int_{z}^{0} (int_x v dx) dz' only
+    represents *overturning* (and closes to ~0 at the floor) if the basin section
+    carries no NET meridional transport. The model's coarse lon-box "Atlantic" is
+    open at its southern edge and to throughflow, so the raw v has a large
+    depth-uniform (barotropic) component -- the wind-driven gyre / ACC passing
+    THROUGH the box -- which otherwise swamps the diagnostic (~-200 Sv). We:
+      1. restrict the integral to real ocean cells (atlantic_mask & ocean_mask), and
+      2. remove the barotropic (depth-mean) transport at each latitude so the
+         streamfunction is the baroclinic overturning and closes at the bottom.
+
+    Args:
+        atlantic_mask : (ny, nx) basin lon-box (created if None).
+        dz            : scalar or (nz,) layer thicknesses (model OCEAN_DZ if None).
+        ocean_mask    : (ny, nx) True=ocean; intersected with atlantic_mask to
+                        exclude land cells (whose velocities are spurious).
+        remove_barotropic : subtract the section depth-mean v per latitude so the
+                        streamfunction measures overturning, not net throughflow.
 
     Returns a dict with:
         streamfunction: (nz, ny) Atlantic overturning in Sv
@@ -136,11 +155,17 @@ def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
     if atlantic_mask is None:
         atlantic_mask = create_atlantic_mask(ny, nx)
 
+    basin = atlantic_mask
+    if ocean_mask is not None:
+        basin = atlantic_mask & ocean_mask.astype(bool)
+
     if dz is None:
         # Use the model's actual (stretched) layer thicknesses, not a uniform
         # 5000/nz, so the depth integral matches the dynamics' vertical grid.
         from chronos_esm.config import OCEAN_DZ
         dz = jnp.asarray(OCEAN_DZ)
+    dz_col = jnp.reshape(jnp.asarray(dz), (-1, 1)) if jnp.ndim(dz) > 0 else (
+        jnp.asarray(dz))
 
     # Latitude-dependent dx
     lat = jnp.linspace(-90, 90, ny)
@@ -148,20 +173,22 @@ def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
     dx = 2 * jnp.pi * EARTH_RADIUS * jnp.cos(lat_rad) / nx  # (ny,)
     dx_2d = jnp.broadcast_to(dx[:, None], (ny, nx))  # (ny, nx)
 
-    # Mask v to Atlantic only
-    mask_3d = jnp.broadcast_to(atlantic_mask[None, :, :], (nz, ny, nx))
+    # Mask v to the (ocean-only) Atlantic basin.
+    mask_3d = jnp.broadcast_to(basin[None, :, :], (nz, ny, nx))
     v_atlantic = jnp.where(mask_3d, state.v, 0.0)
 
-    # Transport: v * dx  (m^2/s per grid cell)
-    v_transport = v_atlantic * dx_2d[None, :, :]
+    # Zonal transport per layer: sum_x (v * dx) -> (nz, ny), units m^2/s.
+    v_zonal = jnp.sum(v_atlantic * dx_2d[None, :, :], axis=2)
 
-    # Sum over longitude -> (nz, ny)
-    v_zonal = jnp.sum(v_transport, axis=2)
+    if remove_barotropic:
+        # Subtract the depth-mean (barotropic / external-mode) transport per
+        # latitude so the section carries zero net meridional transport and the
+        # streamfunction closes at the bottom.
+        H = jnp.sum(jnp.asarray(dz))
+        barotropic = jnp.sum(v_zonal * dz_col, axis=0, keepdims=True) / H  # (1, ny)
+        v_zonal = v_zonal - barotropic
 
     # Integrate from top down: Psi(k) = -Sum_{i=0}^{k} v_i * dz_i
-    # dz may be a scalar or a per-layer (nz,) array; reshape to (nz,1) so it
-    # broadcasts over latitude in the depth cumsum.
-    dz_col = jnp.reshape(jnp.asarray(dz), (-1, 1)) if jnp.ndim(dz) > 0 else dz
     amoc_sv = -jnp.cumsum(v_zonal * dz_col, axis=0) / 1.0e6
 
     # Extract metrics at 26.5N (RAPID array latitude)

@@ -202,7 +202,22 @@ def step_ocean(
     salt_new = jnp.clip(salt_new, 30.0, 38.0)
     temp_new = jnp.clip(temp_new, 250.0, 320.0)
 
-    return OceanState(u=u_new, v=v_new, w=state.w, temp=temp_new, salt=salt_new, psi=psi_new, rho=equation_of_state(temp_new, salt_new), dic=dic_new)
+    # Diagnose vertical velocity from continuity (previously left at zeros).
+    # Hydrostatic continuity: dw/dz = -(du/dx + dv/dy). With a rigid bottom
+    # (w=0 at the ocean floor) integrate the horizontal divergence upward, so
+    # w at the top of layer k = -sum_{j>=k} (div_h_j * dz_j). w[0] (surface) is
+    # then the net column divergence, ~0 for a non-divergent column.
+    # NOTE: uses the same Cartesian divergence as the rest of the driver (no
+    # cos(lat) metric term yet); diagnostic only -- tracers are not vertically
+    # advected by w here.
+    dudx = (jnp.roll(u_new, -1, axis=2) - jnp.roll(u_new, 1, axis=2)) / (2 * dx)
+    v_pad = jnp.pad(v_new, ((0, 0), (1, 1), (0, 0)), mode="edge")
+    dvdy = (v_pad[:, 2:, :] - v_pad[:, :-2, :]) / (2 * dy)
+    div_h = dudx + dvdy
+    w_flux = div_h * dz_3d
+    w_new = -jnp.cumsum(w_flux[::-1], axis=0)[::-1]
+
+    return OceanState(u=u_new, v=v_new, w=w_new, temp=temp_new, salt=salt_new, psi=psi_new, rho=equation_of_state(temp_new, salt_new), dic=dic_new)
 
 def init_ocean_state(nz, ny, nx) -> OceanState:
     return OceanState(u=jnp.zeros((nz, ny, nx)), v=jnp.zeros((nz, ny, nx)), w=jnp.zeros((nz, ny, nx)),
