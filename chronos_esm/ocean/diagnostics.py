@@ -137,7 +137,10 @@ def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
         atlantic_mask = create_atlantic_mask(ny, nx)
 
     if dz is None:
-        dz = 5000.0 / nz
+        # Use the model's actual (stretched) layer thicknesses, not a uniform
+        # 5000/nz, so the depth integral matches the dynamics' vertical grid.
+        from chronos_esm.config import OCEAN_DZ
+        dz = jnp.asarray(OCEAN_DZ)
 
     # Latitude-dependent dx
     lat = jnp.linspace(-90, 90, ny)
@@ -155,8 +158,11 @@ def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
     # Sum over longitude -> (nz, ny)
     v_zonal = jnp.sum(v_transport, axis=2)
 
-    # Integrate from top down: Psi(k) = -Sum_{i=0}^{k} v_i * dz
-    amoc_sv = -jnp.cumsum(v_zonal * dz, axis=0) / 1.0e6
+    # Integrate from top down: Psi(k) = -Sum_{i=0}^{k} v_i * dz_i
+    # dz may be a scalar or a per-layer (nz,) array; reshape to (nz,1) so it
+    # broadcasts over latitude in the depth cumsum.
+    dz_col = jnp.reshape(jnp.asarray(dz), (-1, 1)) if jnp.ndim(dz) > 0 else dz
+    amoc_sv = -jnp.cumsum(v_zonal * dz_col, axis=0) / 1.0e6
 
     # Extract metrics at 26.5N (RAPID array latitude)
     lat_26n_idx = jnp.argmin(jnp.abs(lat - 26.5))
