@@ -328,6 +328,19 @@ def step_atmos(
     dx = 2 * jnp.pi * R_EARTH * cos_lat / nx
     dy = jnp.pi * R_EARTH / ny
 
+    # CFL-safe grid spacing for the diffusion operators ONLY.
+    # The dynamical dx above collapses to ~4 m at the pole rows (cos_lat is
+    # floored to 1e-5), and the del^4 / del^2 diffusion operators scale as
+    # 1/dx^4 and 1/dx^2, so at the poles dt*nu/dx^n exceeds the explicit-Euler
+    # stability limit by ~14 orders of magnitude -> overflow / NaN (or, where a
+    # safety clamp exists, the pole rows saturate to the clamp every step and
+    # inject noise into the meridional gradients). Floor the *diffusion* dx so
+    # the few pole-most rows are damped like the first fully-resolved row off the
+    # pole (|lat| ~ 80 deg) instead of blowing up. The dynamical dx (gradients,
+    # advection, pressure-gradient Laplacian) is left untouched.
+    cos_lat_diff = jnp.maximum(jnp.abs(cos_lat), jnp.cos(jnp.deg2rad(80.0)))
+    dx_diff = 2 * jnp.pi * R_EARTH * cos_lat_diff / nx
+
     # 1. Recover U, V from Vorticity, Divergence
     # Pre-filter vorticity/divergence BEFORE Helmholtz inversion.
     # At poles, dx→0 causes kx²→∞ in the wavenumber-dependent coefficients,
@@ -489,11 +502,12 @@ def step_atmos(
     nu4_q = 5.0e13
     nu4_co2 = 5.0e13
 
-    hyperdiff_zeta = spectral.compute_bilaplacian(state.vorticity, dx, dy)
-    hyperdiff_div = spectral.compute_bilaplacian(state.divergence, dx, dy)
-    hyperdiff_temp = spectral.compute_bilaplacian(state.temp, dx, dy)
-    hyperdiff_q = spectral.compute_bilaplacian(state.q, dx, dy)
-    hyperdiff_co2 = spectral.compute_bilaplacian(state.co2, dx, dy)
+    # Use the CFL-safe dx_diff (not dx) so the pole rows don't blow up.
+    hyperdiff_zeta = spectral.compute_bilaplacian(state.vorticity, dx_diff, dy)
+    hyperdiff_div = spectral.compute_bilaplacian(state.divergence, dx_diff, dy)
+    hyperdiff_temp = spectral.compute_bilaplacian(state.temp, dx_diff, dy)
+    hyperdiff_q = spectral.compute_bilaplacian(state.q, dx_diff, dy)
+    hyperdiff_co2 = spectral.compute_bilaplacian(state.co2, dx_diff, dy)
 
     # Polar-only del^2 (active above 60° latitude, zero below)
     nu_base = 2.0e6
@@ -502,9 +516,9 @@ def step_atmos(
     polar_mask = jnp.clip((jnp.abs(lat_rad[:, None]) - jnp.deg2rad(60.0)) / jnp.deg2rad(20.0), 0.0, 1.0)
     nu_polar = nu_base * polar_boost * polar_mask
 
-    diff_zeta = spectral.compute_laplacian(state.vorticity, dx, dy)
-    diff_div = spectral.compute_laplacian(state.divergence, dx, dy)
-    diff_temp = spectral.compute_laplacian(state.temp, dx, dy)
+    diff_zeta = spectral.compute_laplacian(state.vorticity, dx_diff, dy)
+    diff_div = spectral.compute_laplacian(state.divergence, dx_diff, dy)
+    diff_temp = spectral.compute_laplacian(state.temp, dx_diff, dy)
 
     # 4. Time Integration (Forward Euler + del^4 + polar del^2)
     new_vorticity = state.vorticity + dt * (dzeta_dt - nu4_vort * hyperdiff_zeta + nu_polar * diff_zeta)
@@ -528,6 +542,12 @@ def step_atmos(
     new_temp = jnp.clip(new_temp, 150.0, 350.0)
     new_vorticity = jnp.clip(new_vorticity, -5e-4, 5e-4)
     new_divergence = jnp.clip(new_divergence, -5e-4, 5e-4)
+    # CO2 was the only prognostic field with no clamp; bound it to keep a stray
+    # diffusion/advection overshoot from overflowing to Inf and poisoning the
+    # whole field via co2_mean. CO2 is carried in ppm (~280), so the 1e6 ceiling
+    # is far above any scenario yet well below float overflow -> never touches
+    # physics, only prevents a runaway.
+    new_co2 = jnp.clip(new_co2, 0.0, 1.0e6)
 
     # 6. Polar Filter
     new_vorticity = spectral.polar_filter(new_vorticity, lat_rad)

@@ -201,6 +201,8 @@ def rotate_tensor(kappa_iso: float, sx: jnp.ndarray, sy: jnp.ndarray) -> jnp.nda
 
     K = jnp.stack([row0, row1, row2], axis=0)
 
+    return K
+
 
 def compute_vertical_diffusivity(
     rho: jnp.ndarray,

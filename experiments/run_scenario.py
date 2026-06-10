@@ -62,6 +62,8 @@ def load_restart_state(restart_file: Path):
         v=jnp.array(ds.atmos_v.values),
         psi=jnp.zeros_like(ds.atmos_u.values), # diagnostic
         chi=jnp.zeros_like(ds.atmos_u.values), # diagnostic
+        phi_s=jnp.array(ds.atmos_phi_s.values) if 'atmos_phi_s' in ds
+        else jnp.zeros_like(ds.atmos_u.values),  # surface geopotential (required field)
     )
 
     # Ice
@@ -83,6 +85,8 @@ def load_restart_state(restart_file: Path):
              soil_moisture=jnp.array(ds.land_soil_moisture.values),
              snow_depth=jnp.array(ds.land_snow_depth.values),
              lai=jnp.array(ds.land_lai.values) if 'land_lai' in ds else 2.0 * jnp.ones((ny, nx)),
+             soil_carbon=jnp.array(ds.land_soil_carbon.values) if 'land_soil_carbon' in ds
+             else 10.0 * jnp.ones((ny, nx)),  # required field
          )
     else:
          print("Warning: initializing fresh Land state (not found in restart)")

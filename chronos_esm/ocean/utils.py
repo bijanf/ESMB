@@ -21,4 +21,7 @@ def soft_clip(x, lo, hi, sharpness=3.0):
     """
     mid = (lo + hi) / 2.0
     half_range = (hi - lo) / 2.0
+    # Guard against a collapsed (lo == hi) or inverted (lo > hi) band, which
+    # would divide by zero / negative and produce NaN or wrong-side clipping.
+    half_range = jnp.maximum(half_range, 1e-12)
     return mid + half_range * jnp.tanh(sharpness * (x - mid) / half_range)

@@ -24,7 +24,19 @@ elif RESOLUTION == "T31":
     NLON = 96
     DEFAULT_DT_ATMOS = 30.0  # Reverted to 30s for stability (Safe Baseline)
 else:
-    raise ValueError(f"Unknown resolution: {RESOLUTION}. Supported: T31, T63")
+    # Don't hard-crash the whole package import on an unrecognized env value
+    # (e.g. a typo like CHRONOS_RESOLUTION=t32). Warn and fall back to T31.
+    import warnings
+
+    warnings.warn(
+        f"Unknown CHRONOS_RESOLUTION={RESOLUTION!r}; supported: T31, T63. "
+        "Falling back to T31.",
+        stacklevel=2,
+    )
+    RESOLUTION = "T31"
+    NLAT = 48
+    NLON = 96
+    DEFAULT_DT_ATMOS = 30.0
 
 # Atmospheric grid
 NLAT_ATMOS = NLAT
@@ -34,6 +46,33 @@ NLON_ATMOS = NLON
 NLAT_OCEAN = NLAT
 NLON_OCEAN = NLON
 NZ_OCEAN = 15  # Default vertical levels
+
+# Ocean vertical discretization (stretched grid).
+# A uniform dz = total/nz makes the surface layer ~333 m thick, which gives an
+# unphysically large surface heat capacity and a sluggish SST response to fluxes
+# (heat/freshwater forcing is applied as flux / (rho * cp * dz[0])). Use a
+# stretched grid with a thin (~50 m) surface layer growing toward the deep
+# ocean, summing to OCEAN_TOTAL_DEPTH. OCEAN_DZ feeds the model layer thickness
+# and OCEAN_DEPTH_CENTERS is the depth coordinate the initial conditions are
+# interpolated onto, so the two stay consistent.
+OCEAN_TOTAL_DEPTH = 5000.0  # [m]
+
+
+def _ocean_vertical_grid(nz, total_depth=OCEAN_TOTAL_DEPTH, stretch=1.7):
+    """Return (dz, centers) for a stretched ocean column.
+
+    Interfaces are placed at total_depth * (linspace(0,1,nz+1) ** stretch);
+    dz is the layer thickness and centers are the layer midpoint depths.
+    """
+    import numpy as _np
+
+    zi = total_depth * (_np.linspace(0.0, 1.0, nz + 1) ** stretch)
+    dz = _np.diff(zi)
+    centers = 0.5 * (zi[:-1] + zi[1:])
+    return dz, centers
+
+
+OCEAN_DZ, OCEAN_DEPTH_CENTERS = _ocean_vertical_grid(NZ_OCEAN)
 
 # ============================================================================
 # Physical Constants

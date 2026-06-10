@@ -109,10 +109,16 @@ def load_initial_conditions(nz: int = 15):
     lat_model = np.linspace(-90, 90, OCEAN_GRID.nlat)
     lon_model = np.linspace(-180, 180, OCEAN_GRID.nlon, endpoint=False)
 
-    # Vertical grid (simple linear or stretched)
-    # We need to map WOA depths to model levels
-    # Let's assume model has 15 levels down to 5000m
-    depth_model = np.linspace(0, 5000, nz)
+    # Vertical grid: interpolate WOA depths onto the model's stretched layer
+    # centers (config.OCEAN_DEPTH_CENTERS), so the ICs sit at the same depths
+    # the dynamics uses for those layers (config.OCEAN_DZ).
+    from chronos_esm.config import OCEAN_DEPTH_CENTERS
+
+    if nz == len(OCEAN_DEPTH_CENTERS):
+        depth_model = np.asarray(OCEAN_DEPTH_CENTERS)
+    else:
+        # Fallback for a non-default level count: stretched grid, thin surface.
+        depth_model = 5000.0 * (np.linspace(0.0, 1.0, nz) ** 1.7)
 
     # Interpolation
     # 3D Interpolator: (depth, lat, lon)

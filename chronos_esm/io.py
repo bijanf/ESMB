@@ -270,7 +270,10 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
         
         lat = jnp.linspace(-90, 90, ny_atm)
         lat_rad = jnp.deg2rad(lat)
-        dx = 2 * jnp.pi * EARTH_RADIUS * jnp.cos(lat_rad)[:, None] / nx_atm
+        # Floor cos(lat) so the pole rows don't give dx=0 (cos(+-90)=0), which
+        # would divide by zero in compute_gradients and produce NaN vort/div.
+        cos_lat = jnp.maximum(jnp.abs(jnp.cos(lat_rad)[:, None]), 1e-3)
+        dx = 2 * jnp.pi * EARTH_RADIUS * cos_lat / nx_atm
         dy = jnp.pi * EARTH_RADIUS / ny_atm
         
         du_dx, du_dy = spectral.compute_gradients(u_atm, dx, dy)
@@ -296,8 +299,19 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
     )
 
     # --- Land ---
-    land_temp = jnp.array(ds.land_temp.values)
-    land_snow = jnp.array(ds.land_snow_depth.values)
+    # Guard these reads: pre-overhaul checkpoints (e.g. the documented legacy
+    # resume point outputs/century_run/year_042.nc) don't contain land_temp /
+    # land_snow_depth / sst, and unconditional ds.<var> access raises
+    # AttributeError. Fall back to sensible defaults like the ln_ps/co2 reads.
+    if 'land_temp' in ds:
+        land_temp = jnp.array(ds.land_temp.values)
+    else:
+        print("Warning: land_temp not in restart. Defaulting to surface air temp.")
+        land_temp = temp_atm
+    if 'land_snow_depth' in ds:
+        land_snow = jnp.array(ds.land_snow_depth.values)
+    else:
+        land_snow = jnp.zeros_like(land_temp)
     
     # Defaults for missing fields
     BUCKET_DEPTH = 0.15
@@ -314,7 +328,11 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
     )
     
     # --- Fluxes ---
-    sst = jnp.array(ds.sst.values)
+    if 'sst' in ds:
+        sst = jnp.array(ds.sst.values)
+    else:
+        print("Warning: sst not in restart. Defaulting to ocean surface temp.")
+        sst = temp[0]  # ocean surface layer
     
     if 'wind_stress_x' in ds:
         tau_x = jnp.array(ds.wind_stress_x.values)

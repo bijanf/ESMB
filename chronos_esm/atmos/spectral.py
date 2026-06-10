@@ -245,10 +245,12 @@ def inverse_laplacian(
     # dx is passed in. If it's a scalar, we assume constant. 
     # If it's (ny, 1), we broadcast.
     if isinstance(dx, (float, int)) or dx.ndim == 0:
-         dx_val = dx
+         # Scalar dx: broadcast to a per-latitude column so the dx_val[:, None]
+         # indexing below works (the docstring advertises scalar dx support).
+         dx_val = jnp.full((ny,), dx)
     else:
          dx_val = dx.squeeze() # (ny,)
-    
+
     # kx shape: (ny, nk)
     # kx = 2*pi*k / (nlon * dx)
     kx = (2 * jnp.pi * k_idx[None, :]) / (nlon * dx_val[:, None])
@@ -365,7 +367,8 @@ def solve_helmholtz(
     k_idx = jnp.arange(nx_half)
 
     if isinstance(dx, (float, int)) or dx.ndim == 0:
-        dx_val = dx
+        # Scalar dx: broadcast to a per-latitude column (see inverse_laplacian).
+        dx_val = jnp.full((ny,), dx)
     else:
         dx_val = dx.squeeze()
 

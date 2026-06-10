@@ -12,7 +12,7 @@ import jax.numpy as jnp
 
 from chronos_esm.atmos import dynamics as atmos_driver
 from chronos_esm.atmos import physics as atmos_physics
-from chronos_esm.config import ATMOS_GRID, DT_ATMOS, DT_OCEAN, OCEAN_GRID
+from chronos_esm.config import ALBEDO_OCEAN, ATMOS_GRID, DT_ATMOS, DT_OCEAN, OCEAN_GRID
 from chronos_esm.coupler import regrid
 from chronos_esm.coupler import state as coupled_state
 from chronos_esm.ice import driver as ice_driver
@@ -239,12 +239,18 @@ def step_coupled(
         # Convert to flux rate [kg/m^2/s] (depth per step -> rate)
         runoff_flux = land_runoff * 1000.0 / DT_ATMOS  # m -> kg/m^2/s
 
-        # Spread runoff from land to adjacent ocean cells using jnp.roll
-        # Average of 4 neighbors, masked to ocean-only
-        runoff_spread = 0.25 * (jnp.roll(runoff_flux * land_mask, 1, axis=0)
-                                + jnp.roll(runoff_flux * land_mask, -1, axis=0)
-                                + jnp.roll(runoff_flux * land_mask, 1, axis=1)
-                                + jnp.roll(runoff_flux * land_mask, -1, axis=1))
+        # Spread runoff from land to adjacent ocean cells.
+        # Average of 4 neighbors, masked to ocean-only.
+        # Latitude (axis 0) is NOT periodic: use zero-filled shifts so polar land
+        # runoff cannot wrap from the south pole row into the north pole row (and
+        # vice versa). Longitude (axis 1) IS periodic, so jnp.roll is correct there.
+        rf = runoff_flux * land_mask
+        shift_north = jnp.concatenate([jnp.zeros_like(rf[:1]), rf[:-1]], axis=0)
+        shift_south = jnp.concatenate([rf[1:], jnp.zeros_like(rf[:1])], axis=0)
+        runoff_spread = 0.25 * (shift_north
+                                + shift_south
+                                + jnp.roll(rf, 1, axis=1)
+                                + jnp.roll(rf, -1, axis=1))
         # Only deposit in ocean cells
         runoff_to_ocean = runoff_spread * ocean_mask
 
@@ -259,9 +265,16 @@ def step_coupled(
         # We need Surface Energy Balance for Ocean Driving
         # Net Heat = SW_net + LW_down - LW_up - Sensible - Latent
         
-        # SW Net (Consistent with Atmosphere Albedo)
-        # sw_down already includes (1-Albedo) * 0.52 from physics.py
-        sw_net_ocean = sw_down
+        # SW Net into the ocean.
+        # sw_down = insolation * (1 - planetary_albedo) * 0.60, where
+        # planetary_albedo = 0.05 + 0.6*sin(lat)^2 reaches 0.65 at the poles
+        # (it is meant to proxy cloud/ice/surface reflection for the *atmosphere*).
+        # Re-using it directly for the ocean double-counts surface reflection and
+        # strips ~80% of polar SW from open water. Back out the planetary albedo
+        # and substitute the ocean albedo, keeping the atmospheric-transmission
+        # factor (0.60). (1 - planetary_albedo) >= 0.35 everywhere, so no /0.
+        planetary_albedo = atmos_physics.compute_albedo(lat_rad)[:, None]
+        sw_net_ocean = sw_down * (1.0 - ALBEDO_OCEAN) / (1.0 - planetary_albedo)
         
         # LW Up (Stefan-Boltzmann)
         sst_kelvin = current_state.fluxes.sst
@@ -472,14 +485,14 @@ def step_coupled(
     cos_lat_ocn = jnp.maximum(cos_lat_ocn, 0.05) 
     dx_ocn_array = (2 * jnp.pi * EARTH_RADIUS * cos_lat_ocn[:, None]) / OCEAN_GRID.nlon
     
-    # Vertical Grid (dz)
-    # Must match data.load_initial_conditions: linspace(0, 5000, 15) -> 14 intervals of ~357m ?
-    # Wait, load_initial_conditions does linspace(0, 5000, 15) for interpolation target.
-    # Usually this defines the cell centers or interfaces.
-    # If 15 levels, total depth 5000m.
-    # dz = 5000 / 15 = 333.33 m.
-    # Let's use this to match total depth ~5000m.
-    dz_ocn = jnp.ones(state.ocean.u.shape[0]) * (5000.0 / state.ocean.u.shape[0])
+    # Vertical Grid (dz): stretched column with a thin (~50 m) surface layer.
+    # Defined once in config.OCEAN_DZ and shared with data.load_initial_conditions
+    # (which interpolates ICs onto config.OCEAN_DEPTH_CENTERS), so the layer
+    # thicknesses and the IC depth coordinate stay consistent. Avoids the
+    # uniform ~333 m surface layer that made SST/SSS respond ~3x too slowly.
+    from chronos_esm.config import OCEAN_DZ
+
+    dz_ocn = jnp.asarray(OCEAN_DZ)
     
     # Step Ocean (DT_OCEAN)
     new_ocean = ocean_driver.step_ocean(
