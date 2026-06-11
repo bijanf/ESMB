@@ -18,11 +18,21 @@ Add a hydrological cycle to the dinosaur multi-level atmosphere
 - **Precipitation magnitude fixed**: global-mean precip ~2.6 mm/day (observed
   ~2.9), vs the single-level model's ~1.1 mm/day dry bias. Surface humidity builds
   to a realistic ~9 g/kg. Stable and finite.
-- **ITCZ still weak**: large-scale condensation alone gives fairly uniform rain
-  (slight tropical max, small polar excess) until the Hadley cell equilibrates
-  (the jet needs ~60-90 days to spin up). Sharpening the ITCZ (stronger
-  convergence / a convective closure) and balancing the coupled surface energy
-  budget are the remaining Phase 3 items.
+- **ITCZ emerges with equilibration**: as the Hadley cell spins up (jet -> ~13 m/s
+  by day 60), tropical precip increasingly dominates (trop/subtrop ratio 0.95 ->
+  1.46) and the subtropics/poles dry out -- a real ITCZ forming from the resolved
+  circulation, with no convection scheme (the single-level model could not do this
+  at all). It sharpens further as the jet approaches its ~25 m/s equilibrium.
+
+### Phase 3b: consistent moist coupling + energy balance (run_dino_coupled.py)
+- The coupled ocean fluxes now use the atmosphere's OWN near-surface humidity and
+  precipitation: latent heat / evaporation from `q_sfc`, freshwater = real P - E.
+- **Heat-flux adjustment**: remove the area-weighted global-mean net heat so the
+  control run has no net global ocean heating/cooling (cuts the SST drift roughly
+  in half: ~-0.27 C / 30 days). Coupled run is stable with realistic winds
+  (|u|max ~16-19 m/s) and wind-driven currents (~0.06 m/s).
+- Remaining (Phase 4): persist the dinosaur modal state in io.py; long coupled
+  spin-up + benchmark the multi-level atmosphere vs ERA5 in the dashboard.
 
 ## [Unreleased] - 2026-06-11d — Multi-level atmosphere: dinosaur dycore (Phase 1)
 

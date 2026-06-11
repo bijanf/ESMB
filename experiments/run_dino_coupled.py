@@ -48,27 +48,35 @@ def make_regridders(lat_gauss):
     return lin_to_gauss, gauss_to_lin
 
 
-def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K):
-    """Bulk surface fluxes on the linear grid. Returns (net_heat W/m2, fw kg/m2/s,
-    tau_x Pa, tau_y Pa)."""
-    lat_rad = np.deg2rad(LAT_LIN)[:, None]
+_WLAT = np.cos(np.deg2rad(LAT_LIN))[:, None]
+
+
+def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, balance_heat=True):
+    """Bulk surface fluxes on the linear grid, consistent with the atmosphere's
+    own near-surface humidity and precipitation. Returns (net_heat W/m2,
+    fw kg/m2/s, tau_x Pa, tau_y Pa)."""
     # annual-mean-ish shortwave into the ocean (insolation * transmission * (1-albedo))
     insol = np.asarray(aphys.compute_solar_insolation(jnp.asarray(LAT_LIN) * np.pi / 180.0,
                                                       day_of_year=80.0))[:, None]
     sw_net = np.maximum(insol, 0.0) * (1.0 - ALBEDO_OCEAN)
-    # longwave
     lw_down = 0.8 * 5.67e-8 * np.maximum(t_air_K - 10.0, 150.0) ** 4
     lw_up = 0.98 * 5.67e-8 * sst_K ** 4
-    # turbulent fluxes: fixed-RH boundary layer for latent heat
-    p_surf = 1.0e5
-    q_air = 0.7 * np.asarray(aphys.compute_saturation_humidity(jnp.asarray(t_air_K), p_surf))
+    # turbulent fluxes using the ATMOSPHERE's actual near-surface humidity q_air
+    # (so latent heat / evaporation are consistent with the moisture budget).
     sens, lat = aphys.compute_surface_fluxes(jnp.asarray(t_air_K), jnp.asarray(q_air),
                                              jnp.asarray(u_sfc), jnp.asarray(v_sfc),
                                              jnp.asarray(sst_K))
     sens, lat = np.asarray(sens), np.asarray(lat)
-    net_heat = np.clip(sw_net + lw_down - lw_up - sens - lat, -1500.0, 1500.0)
+    net_heat = sw_net + lw_down - lw_up - sens - lat
+    if balance_heat:
+        # Heat-flux adjustment: remove the area-weighted global mean so the control
+        # run has no net global ocean heating/cooling (prevents SST drift while
+        # preserving the spatial flux pattern). Analogous to the freshwater
+        # water-conservation already used for the single-level model.
+        net_heat = net_heat - np.sum(net_heat * _WLAT) / np.sum(np.broadcast_to(_WLAT, net_heat.shape))
+    net_heat = np.clip(net_heat, -1500.0, 1500.0)
     evap = lat / 2.5e6
-    fw = -evap  # P-E with P deferred to Phase 3 (no prognostic precip yet)
+    fw = precip_atm - evap  # real P - E
     wind_mag = np.maximum(np.sqrt(u_sfc ** 2 + v_sfc ** 2), 1.0)
     tau_x = np.clip(RHO_AIR * CD * wind_mag * u_sfc, -0.3, 0.3)
     tau_y = np.clip(RHO_AIR * CD * wind_mag * v_sfc, -0.3, 0.3)
@@ -120,8 +128,9 @@ def main_cli():
             dino_state = atm.step(dino_state, sst_g, n_days=args.interval)
             diag = atm.diagnostics(dino_state)
             u_sfc = gauss_to_lin(diag["u_sfc"]); v_sfc = gauss_to_lin(diag["v_sfc"])
-            t_air = gauss_to_lin(diag["t_sfc"])
-            nh, fw, tx, ty = ocean_fluxes(sst_lin, u_sfc, v_sfc, t_air)
+            t_air = gauss_to_lin(diag["t_sfc"]); q_air = gauss_to_lin(diag["q_sfc"])
+            precip_a = gauss_to_lin(diag["precip"])
+            nh, fw, tx, ty = ocean_fluxes(sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a)
             fluxes = (jnp.asarray(nh), jnp.asarray(fw), jnp.zeros_like(jnp.asarray(nh)))
             state = state._replace(ocean=ocean_interval(state.ocean, fluxes, (jnp.asarray(tx), jnp.asarray(ty))))
         diag = atm.diagnostics(dino_state)
