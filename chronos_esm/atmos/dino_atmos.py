@@ -53,6 +53,30 @@ def _tree_add(a, b):
     return jax.tree_util.tree_map(lambda x, y: x + y, a, b)
 
 
+def save_state(state, path):
+    """Persist a dinosaur modal State (complex spectral coefficients + humidity
+    tracer + sim_time) to a .npz for restarting long coupled runs."""
+    np.savez(path,
+             vorticity=np.asarray(state.vorticity),
+             divergence=np.asarray(state.divergence),
+             temperature_variation=np.asarray(state.temperature_variation),
+             log_surface_pressure=np.asarray(state.log_surface_pressure),
+             specific_humidity=np.asarray(state.tracers["specific_humidity"]),
+             sim_time=np.asarray(float(state.sim_time) if state.sim_time is not None else 0.0))
+
+
+def load_state(path):
+    """Load a dinosaur modal State saved by `save_state`."""
+    d = np.load(path, allow_pickle=True)
+    return pe.State(
+        vorticity=jnp.asarray(d["vorticity"]),
+        divergence=jnp.asarray(d["divergence"]),
+        temperature_variation=jnp.asarray(d["temperature_variation"]),
+        log_surface_pressure=jnp.asarray(d["log_surface_pressure"]),
+        tracers={"specific_humidity": jnp.asarray(d["specific_humidity"])},
+        sim_time=jnp.asarray(d["sim_time"]))
+
+
 def _qsat(temp_K, p_Pa):
     """Saturation specific humidity (kg/kg) via Clausius-Clapeyron."""
     t_c = temp_K - 273.15

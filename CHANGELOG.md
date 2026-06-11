@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased] - 2026-06-11f — Multi-level atmosphere: benchmark + io (Phase 4)
+
+### Added
+- **`chronos_esm/atmos/dino_atmos.save_state/load_state`**: persist the dinosaur
+  modal State (complex spectral coefficients + humidity tracer + sim_time) to .npz
+  for restarting long coupled runs. Round-trip verified.
+- **`experiments/benchmark_dino.py`**: spins the SST-coupled atmosphere up on the
+  WOA SST and scores the climatology vs ERA5/WOA18 with the existing scorecard.
+
+### Benchmark (90-day spin-up vs single-level baseline; honest, mixed)
+Multi-level WINS on the fields driven by real thermodynamics/physics:
+- `t2m`: bias 2.42 -> 0.01 K, std-ratio 1.53 -> 0.68 (warm bias gone).
+- `precip`: corr 0.16 -> 0.24, std-ratio 0.41 -> 0.87, and a REAL ITCZ from the
+  resolved Hadley circulation (the single-level had none); global mean ~2.6 mm/day.
+- `sss`: corr 0.84 -> 0.88.
+
+Multi-level is WORSE on two fields, for understood reasons:
+- `u_sfc`: corr 0.72 -> 0.04. The single-level number was PRESCRIBED by the
+  wind-relaxation parameterization; the multi-level earns its winds dynamically.
+  The low 2-D correlation is mostly the aquaplanet's lack of zonal asymmetry +
+  an over-damped bottom level + incomplete spin-up.
+- `mslp`: corr 0.07 -> -0.25. The dinosaur atmosphere is currently AQUAPLANET (no
+  orography), so it cannot reproduce ERA5's topography-dominated sea-level-pressure
+  pattern / stationary waves.
+
+### Remaining to make the multi-level uniformly better
+ETOPO orography in the dycore (mslp + stationary waves); revisit the surface-wind
+level / boundary-layer drag; a longer spin-up to full equilibrium; then wire the
+dinosaur atmosphere into the main coupler + dashboard as the default atmosphere.
+
 ## [Unreleased] - 2026-06-11e — Multi-level atmosphere: prognostic moisture (Phase 3a)
 
 Add a hydrological cycle to the dinosaur multi-level atmosphere
