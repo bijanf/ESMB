@@ -4,6 +4,14 @@
 jax>=0.4.0
 jaxlib>=0.4.0
 
+# Multi-level atmospheric dynamical core (Google Research's differentiable JAX
+# spectral primitive-equation dycore, the engine behind NeuralGCM). Used to
+# replace the single-level barotropic atmosphere with a baroclinic multi-level
+# one. 1.2.1 is compatible with jax 0.8.1 (no jax upgrade needed). NOTE: do NOT
+# use `jcm` -- jcm 1.1.1 on PyPI is built against an unreleased dinosaur and is
+# broken; we build on dinosaur directly. See experiments/dino_held_suarez.py.
+dinosaur-dycore==1.2.1
+
 # Numerical computing
 numpy>=1.24.0
 

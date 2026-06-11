@@ -11,6 +11,33 @@
     WOA18+ERA5 (see Validation dashboard in README). Single-level atmosphere limits
     remain (no synoptic systems, weak ITCZ).
 
+## Next major work: multi-level atmosphere via `dinosaur` (v4, in progress)
+
+The single-level atmosphere's hard limits (no baroclinic eddies -> no synoptic
+systems, weak ITCZ) are being fixed by moving to a MULTI-LEVEL spectral dycore.
+Decision + status (2026-06-11):
+*   **Use Google's `dinosaur` dycore DIRECTLY** (the differentiable JAX spectral
+    primitive-equation core behind NeuralGCM). Installed: `dinosaur-dycore==1.2.1`
+    (compatible with jax 0.8.1 -- NO jax upgrade; the existing model + tests still
+    pass). In `requirements.txt`.
+*   **Do NOT use `jcm`.** jcm 1.1.1 on PyPI is built against an *unreleased*
+    dinosaur (imports `SI_SCALE`, absent from every released dinosaur) and runs
+    inert/unvalidatable. `chronos_esm/atmos/jcm_adapter.py` is therefore DEAD and
+    should be deleted/ignored (it also doesn't match jcm 1.1.1's init API).
+*   **VALIDATED (Phase 1):** `experiments/dino_held_suarez.py` runs dinosaur's dry
+    dycore (T31, 24 sigma levels, ImEx-RK3 + del^4 filter) with Held-Suarez forcing
+    and reproduces the textbook baroclinic jet (twin ~22 m/s upper-trop midlat
+    westerlies + surface trades) from isothermal rest. See
+    `docs/figures/dino_held_suarez_jet.png`. `build_held_suarez_model()` is reusable.
+*   **TODO (Phases 2-4):** wrap dinosaur as a chronos atmosphere module; couple to
+    the ocean with SST-aware forcing + bulk surface fluxes (reuse
+    `atmos/physics.compute_surface_fluxes`); add moisture + large-scale
+    condensation for the ITCZ; persist the modal state in `io.py`; extract surface
+    fields (u10/t2m/mslp/precip) for the validation dashboard; benchmark vs ERA5.
+    dinosaur state is modal (vorticity/divergence/temperature_variation/
+    log_surface_pressure); u,v via `pe.compute_diagnostic_state(state, coords)`
+    `.cos_lat_u[0,1]/cos(lat)`; grid is Gaussian (coords.horizontal.nodal_mesh).
+
 ## Current State: Atmosphere correctness overhaul (v3, 2026-06-11)
 
 The atmosphere was the weak link in the validation dashboard. Diagnosed + fixed

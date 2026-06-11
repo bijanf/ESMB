@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased] - 2026-06-11d — Multi-level atmosphere: dinosaur dycore (Phase 1)
+
+Begin replacing the single-level (barotropic) atmosphere — which fundamentally
+cannot produce synoptic systems or a real ITCZ — with a MULTI-LEVEL spectral
+primitive-equation dycore, to fix the limitations documented in the v3 overhaul.
+
+### Added
+- **`dinosaur-dycore==1.2.1`** dependency: Google Research's differentiable JAX
+  spectral primitive-equation dycore (the engine behind NeuralGCM). Compatible
+  with jax 0.8.1 — no jax upgrade; the existing model and test suite still pass.
+- **`experiments/dino_held_suarez.py`**: validated reference + reusable builder
+  (`build_held_suarez_model`). Runs dinosaur's dry dycore (T31, 24 sigma levels,
+  ImEx-RK3 + del^4 hyperdiffusion filter) with Held-Suarez (1994) forcing and
+  reproduces the textbook baroclinic circulation from an isothermal rest state:
+  twin ~22 m/s upper-tropospheric mid-latitude westerly jets + surface trade
+  easterlies (`docs/figures/dino_held_suarez_jet.png`). This is the circulation
+  the single-level model could never generate — proof the dycore is the right tool.
+
+### Notes
+- **`jcm` is NOT usable** and `chronos_esm/atmos/jcm_adapter.py` is dead: jcm 1.1.1
+  on PyPI is built against an unreleased dinosaur (imports `SI_SCALE`, which exists
+  in no released dinosaur) and runs inert. We build on `dinosaur` directly instead.
+- Next (Phases 2-4): wrap dinosaur as a chronos atmosphere, couple to the ocean
+  (SST-aware forcing + bulk surface fluxes), add moisture/precip for the ITCZ,
+  persist the modal state, and benchmark the multi-level atmosphere vs ERA5.
+
 ## [Unreleased] - 2026-06-11c — Atmosphere correctness overhaul
 
 The validation dashboard flagged the atmosphere as the weak link (sea-level
