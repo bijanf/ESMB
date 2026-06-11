@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased] - 2026-06-11e — Multi-level atmosphere: prognostic moisture (Phase 3a)
+
+Add a hydrological cycle to the dinosaur multi-level atmosphere
+(`chronos_esm/atmos/dino_atmos.py`).
+
+### Added
+- **Prognostic specific humidity** carried as a dinosaur tracer (advected by the
+  dycore), with a surface **evaporation** source (bulk formula from SST) and a
+  **large-scale condensation** sink that rains out supersaturation and latent-heats
+  the column. `diagnostics()` now returns `specific_humidity` and a column
+  `precip` field [kg/m^2/s]. All physics is done in plain jax with float scale
+  factors (no pint inside jit). Updated `tests/test_dino_atmos.py` to check the
+  moisture cycle.
+
+### Result
+- **Precipitation magnitude fixed**: global-mean precip ~2.6 mm/day (observed
+  ~2.9), vs the single-level model's ~1.1 mm/day dry bias. Surface humidity builds
+  to a realistic ~9 g/kg. Stable and finite.
+- **ITCZ still weak**: large-scale condensation alone gives fairly uniform rain
+  (slight tropical max, small polar excess) until the Hadley cell equilibrates
+  (the jet needs ~60-90 days to spin up). Sharpening the ITCZ (stronger
+  convergence / a convective closure) and balancing the coupled surface energy
+  budget are the remaining Phase 3 items.
+
 ## [Unreleased] - 2026-06-11d — Multi-level atmosphere: dinosaur dycore (Phase 1)
 
 Begin replacing the single-level (barotropic) atmosphere — which fundamentally

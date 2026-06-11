@@ -40,3 +40,12 @@ def test_sst_coupled_spinup():
     # surface tropical easterlies (trades)
     usfc = d["u_sfc"].mean(axis=0)
     assert band(usfc, -20, 20) < 0.0
+
+    # prognostic moisture cycle: humidity builds up and precipitation is in a
+    # physically realistic global-mean range (the single-level model was ~1.1
+    # mm/day, far too dry; observed ~2.9).
+    assert np.isfinite(d["precip"]).all()
+    assert float(d["q_sfc"].mean()) > 2e-3            # > 2 g/kg surface humidity
+    precip_mmday = d["precip"].mean(axis=0) * 86400.0
+    gpr = float(np.average(precip_mmday, weights=np.cos(np.deg2rad(lat))))
+    assert 0.5 < gpr < 8.0
