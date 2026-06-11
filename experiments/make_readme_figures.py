@@ -25,10 +25,12 @@ import numpy as np  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import glob as _glob  # noqa: E402
+
 from chronos_esm import io, data  # noqa: E402
 from chronos_esm.validation import obs, grid, metrics, plots  # noqa: E402
 from chronos_esm.validation import scorecard as sc  # noqa: E402
-from experiments.validate_control import canonical_fields  # noqa: E402
+from experiments.validate_control import canonical_fields, mean_fields  # noqa: E402
 
 plots.plt.switch_backend("Agg")
 
@@ -63,16 +65,25 @@ def update_readme_section(block):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("state", nargs="?", default="outputs/century_physics/final_state.nc")
+    ap.add_argument("state", nargs="?", default="outputs/century_physics/final_state.nc",
+                    help="a state .nc file OR a glob (e.g. 'outputs/.../snap_*.nc'); "
+                         "a glob is averaged into a climatology")
     ap.add_argument("--label", default=None, help="human label for the state (e.g. 'year 50')")
     ap.add_argument("--no-readme", action="store_true", help="write figures only, don't touch README")
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
 
-    label = args.label or os.path.basename(args.state)
-    print(f"Scoring {args.state} ({label}) ...")
-    state = io.load_state_from_netcdf(args.state)
-    mf = canonical_fields(state)
+    # Accept a single file or a glob. A glob is averaged into a climatology, which
+    # removes weather noise and the spin-up transient from the dashboard metrics.
+    paths = sorted(_glob.glob(args.state)) if any(c in args.state for c in "*?[") else [args.state]
+    if not paths:
+        raise SystemExit(f"No files match {args.state!r}")
+    label = args.label or (f"mean of {len(paths)} states" if len(paths) > 1
+                           else os.path.basename(args.state))
+    print(f"Scoring {len(paths)} state(s) matching {args.state} ({label}) ...")
+    states = [io.load_state_from_netcdf(p) for p in paths]
+    mf = mean_fields(states) if len(states) > 1 else canonical_fields(states[0])
+    state = states[-1]  # last state used for the ocean mask + AMOC diagnostics
 
     ocean_surface = obs.woa18_surface()
     try:
@@ -127,7 +138,6 @@ def main():
 
     # AMOC time-series from yearly checkpoints, if a multi-year run exists.
     amoc_ts = None
-    import glob as _glob
     yearly = sorted(_glob.glob("outputs/century_physics/year_*.nc"))
     if len(yearly) >= 2:
         try:

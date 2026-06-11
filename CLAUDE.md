@@ -3,19 +3,40 @@
 ## Project Overview
 **Chronos-ESM** is a JAX-based, fully differentiable Earth System Model (Ocean, Atmos, Land) running on GPU.
 *   **Resolution**: T31 (approx 3.75°).
-*   **Physics**: Primitive equations (Ocean), QTCM (Atmos).
-*   **State**: Physics overhaul complete, ready for validation runs.
+*   **Physics**: z-level primitive equations (Ocean); single-level spectral
+    primitive-equation dynamics (Atmos, `atmos/dynamics.py` — barotropic, forward
+    Euler). A `qtcm.py` and a dinosaur/JCM adapter (`jcm_adapter.py`) also exist but
+    are NOT the active atmosphere path.
+*   **State**: Ocean + atmosphere correctness passes done and benchmarked vs
+    WOA18+ERA5 (see Validation dashboard in README). Single-level atmosphere limits
+    remain (no synoptic systems, weak ITCZ).
 
-## Current State: Physics Overhaul (v2)
+## Current State: Atmosphere correctness overhaul (v3, 2026-06-11)
 
-The model has been upgraded from "tank mode" (extreme artificial damping) to physically-grounded dynamics. Six phases were implemented:
+The atmosphere was the weak link in the validation dashboard. Diagnosed + fixed
+the root causes (see CHANGELOG `2026-06-11c`). Benchmark (30-day WOA spin-up vs
+WOA18+ERA5): `mslp` std-ratio 14.67 -> 2.07, bias -71.8 -> +2.9 hPa; `u_sfc` corr
+-0.08 -> 0.72; `precip` corr -0.06 -> 0.16; sst/sss held. Key facts for future work:
+*   The atmosphere is **single-level (barotropic), forward-Euler** (`atmos/dynamics.py
+    step_atmos`). It has NO baroclinic eddies -> no synoptic systems (mslp/v_sfc
+    pattern corr ~0) and a weak ITCZ (precip too dry, rains in subtropics not at the
+    equator). Closing these needs vertical structure (multi-level or external dycore).
+*   **MSLP blow-up was a POLAR instability**: the dynamical `dx` collapsed at the
+    poles; `advect(ln_ps)` + the `R*T*lap(ln_ps)` term detonated there. Fixed by
+    flooring the dynamical `dx` at its 80-deg value (`cos_lat_dyn`).
+*   **Winds are relaxed toward a climatological zonal jet** (`u_target`, tau=2 days),
+    NOT toward rest — a barotropic single level can't generate jets itself. This is
+    an eddy-momentum-flux parameterization; tune `u_target` / tau there.
+*   **`phi_s` is now persisted in checkpoints** (`io.py`); older checkpoints get it
+    reconstructed from ETOPO on load. Restarts no longer lose topography.
 
-### Phase 1: Semi-Implicit Atmospheric Time Stepping - DONE
-*   **File**: `chronos_esm/atmos/spectral.py` - `solve_helmholtz()` function
-*   **File**: `chronos_esm/atmos/dynamics.py` - Lines 606-673
-*   Gravity waves treated implicitly via Helmholtz equation
-*   Linearized around T0=250K reference temperature
-*   Energy fixer alpha reduced from 0.1 to 0.01 (semi-implicit is nearly conservative)
+### Phase 1: Semi-Implicit Atmospheric Time Stepping - NOT WIRED IN (aspirational)
+*   `solve_helmholtz()` exists in `chronos_esm/atmos/spectral.py` but is **unused** —
+    `step_atmos` is forward Euler. The "lines 606-673" referenced here never existed.
+*   At dt=30 s the gravity-wave CFL is tiny (~0.06), so forward Euler's per-step
+    growth is negligible; semi-implicit was NOT the fix the dashboard needed (the
+    pole-`dx` collapse was). Wire in `solve_helmholtz` only if dt is raised.
+*   Energy fixer alpha IS reduced 0.1 -> 0.01 (done, in `step_atmos`).
 
 ### Phase 2: Dynamic Wind Stress - DONE
 *   **File**: `chronos_esm/main.py` - Lines 300-333
@@ -30,11 +51,17 @@ The model has been upgraded from "tank mode" (extreme artificial damping) to phy
 *   Salinity clamp widened: [25,45] → [20,42]
 *   Land runoff routed to adjacent coastal ocean cells
 
-### Phase 4: Reduced Artificial Damping - DONE
-*   **File**: `chronos_esm/atmos/dynamics.py` - Hyperdiffusion (lines 590-597)
-*   Hyperdiffusion reduced ~4x: `nu4_vort=8e13, nu4_div=1.5e14, nu4_temp=5e12`
-*   Wind caps raised from 80 → 150 m/s (allow jet stream dynamics)
-*   Vorticity clamp U_MAX raised from 80 → 150 m/s
+### Phase 4: Atmospheric damping - REVERTED to strong (see v3 overhaul)
+*   **File**: `chronos_esm/atmos/dynamics.py` - Hyperdiffusion block
+*   Hyperdiffusion is back at the strong "tank" values `nu4_vort=3e14,
+    nu4_div=6e14, nu4_temp=2e13`. With the v3 wind relaxation now SETTING the jet,
+    dissipation no longer has to be weak to "let the jet develop" — del^4 only hits
+    small scales and doesn't fight the large-scale relaxed jet. Keeping it strong is
+    what makes the run stable: a 4x-weaker setting let a slow eddy instability grow
+    (|u| -> clamp by ~day 25). This DECOUPLING (relaxation -> realism, hyperdiffusion
+    -> stability) is the key idea — do not weaken hyperdiffusion to chase winds.
+*   Wind clamp is **80 m/s** (lowered from 100) — a tight safety net; the relaxed
+    field sits near ~10 m/s so hitting it flags an instability.
 
 ### Phase 5: AMOC Diagnostics - DONE
 *   **File**: `chronos_esm/ocean/diagnostics.py`

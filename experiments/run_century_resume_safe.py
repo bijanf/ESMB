@@ -70,9 +70,12 @@ for step in range(1, total_steps + 1):
         state.ocean.temp.block_until_ready()
         print(f"Step {{step}}/{{total_steps}} ({{rate:.2f}} steps/s)")
         
-        # Check Atmos Max Wind to catch explosions early
+        # Check Atmos Max Wind to catch explosions early. Threshold sits just below
+        # the 80 m/s hard clamp in step_atmos so it fires as an early warning BEFORE
+        # the wind saturates (the relaxed climatological jet sits near ~10 m/s, so
+        # 75 m/s already signals a developing instability).
         u_max = float(jnp.max(jnp.abs(state.atmos.u)))
-        if u_max > 100.0 or jnp.isnan(u_max):
+        if u_max > 75.0 or jnp.isnan(u_max):
              logger.error(f"Instability Detected! Max Wind={{u_max:.1f}} m/s")
              sys.exit(1)
 

@@ -58,13 +58,20 @@ def load_latest_state(output_dir: Path):
     )
 
     # Atmos
-    # Load topography for phi_s
+    # Surface geopotential phi_s: prefer the value persisted in the checkpoint
+    # (newer runs save it), matching io.load_state_from_netcdf. Only reconstruct
+    # from ETOPO for older checkpoints that predate the field, and fall back to
+    # zeros (with a clear message) if topography cannot be loaded.
     ny, nx = ds.atmos_temp.shape
-    try:
-        topo_m = data.load_topography(ny, nx)
-        phi_s = topo_m * 9.81
-    except:
-        phi_s = jnp.zeros((ny, nx))
+    if 'atmos_phi_s' in ds:
+        phi_s = jnp.array(ds.atmos_phi_s.values)
+    else:
+        try:
+            phi_s = jnp.asarray(data.load_topography(ny, nx)) * 9.81
+            print("Note: atmos_phi_s not in restart; reconstructed from ETOPO topography.")
+        except Exception as e:  # noqa: BLE001
+            print(f"Warning: could not reconstruct phi_s from topography ({e}); using zeros.")
+            phi_s = jnp.zeros((ny, nx))
 
     atmos = atmos_driver.AtmosState(
         u=jnp.array(ds.atmos_u.values),

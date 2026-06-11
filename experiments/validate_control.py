@@ -39,6 +39,19 @@ def _to_celsius(field):
 def canonical_fields(state):
     """Extract the canonical surface fields (NumPy, model units) from a state."""
     a, o, f = state.atmos, state.ocean, state.fluxes
+    # Reduce surface pressure to MEAN SEA LEVEL before comparing to ERA5 MSL: over
+    # topography the surface pressure is much lower than the sea-level pressure
+    # (~550 hPa over a 5 km plateau), so comparing raw exp(ln_ps) to MSL is wrong
+    # over all land. Hypsometric reduction p_msl = p_s * exp(Phi_s / (R_d * T_ref)).
+    # Use a FIXED standard-atmosphere reference T (288 K), NOT the instantaneous
+    # single-level T: topography is static, so a static scale height removes it
+    # cleanly, whereas the model's fluctuating T amplifies variance over high,
+    # cold terrain (exp() of a large, noisy exponent) and inflates the MSLP
+    # variance far above observed.
+    RD = 287.0
+    T_REF = 288.0
+    phi_s = np.asarray(a.phi_s)
+    mslp = np.asarray(np.exp(a.ln_ps)) * np.exp(phi_s / (RD * T_REF))
     return {
         "sst": _to_celsius(np.asarray(o.temp[0])),          # degC
         "sss": np.asarray(o.salt[0]),                       # psu
@@ -46,7 +59,7 @@ def canonical_fields(state):
         "u_sfc": np.asarray(a.u),                           # m/s
         "v_sfc": np.asarray(a.v),                           # m/s
         "precip": np.asarray(f.precip),                     # kg/m^2/s
-        "mslp": np.asarray(np.exp(a.ln_ps)),               # Pa (surface pressure proxy)
+        "mslp": mslp,                                        # Pa (reduced to sea level)
     }
 
 

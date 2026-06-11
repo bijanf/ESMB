@@ -1,5 +1,61 @@
 # Changelog
 
+## [Unreleased] - 2026-06-11c — Atmosphere correctness overhaul
+
+The validation dashboard flagged the atmosphere as the weak link (sea-level
+pressure variance ~15x observed, surface winds *anti*-correlated with ERA5,
+precipitation pattern uncorrelated). Diagnosed each failure with instrumented
+short runs, then fixed the root causes. Benchmark vs WOA18+ERA5 (30-day WOA
+spin-up, mean of days 20-30): `mslp` std-ratio 14.67 -> 2.07 and bias -71.8 ->
++2.9 hPa; `u_sfc` corr -0.08 -> 0.72; `precip` corr -0.06 -> 0.16; sst/sss held.
+
+### Fixed
+- **Surface-pressure (MSLP) blow-up = a POLAR instability** (`atmos/dynamics.py`).
+  The bare lat-lon `dx` collapses to ~4 m at the pole rows (`cos_lat` floored to
+  1e-5), so `advect(ln_ps)` and the `R*T*lap(ln_ps)` pressure-gradient term
+  exploded AT the poles within ~10 steps — ps swung to 100-1200 hPa at lat +-90
+  (zero topography) and pinned to the `[9.2, 11.7]` clamp, giving ps std ~150 hPa
+  vs obs ~12. Only the *diffusion* operators used the CFL-safe `dx_diff`; the
+  *dynamics* used the collapsing `dx`. Floored the dynamical `dx` at its 80-deg
+  value too. Result: ps now physical (549-1054 hPa, std ~48 mostly topographic),
+  no rail hits, stable.
+- **Surface geopotential `phi_s` not persisted** (`io.py`): the loader zeroed it
+  on every restart ("should be static" — but it was never saved), silently
+  removing topography from resumed runs and breaking the MSL pressure reduction
+  (surface pressure stays topographically low while `phi_s` reads 0). Now saved,
+  and reconstructed from ETOPO for older checkpoints that predate the field.
+- **Divergence damping was numerically unstable**: the explicit `-5e-2*div` term
+  gave `dt*rate = 1.5 > 1`, so forward Euler flipped the divergence sign every
+  step (a 2dt oscillation pumping noise into `ln_ps`). Reapplied implicitly,
+  `div/(1+dt*rate)`, unconditionally stable.
+
+### Changed
+- **Winds: relax toward a climatological jet, not toward rest** (`atmos/dynamics.py`).
+  The atmosphere is single-level (barotropic): with no vertical shear it cannot do
+  baroclinic instability or thermal-wind balance, so the winds geostrophically
+  adjusted to a near-standstill (|u| 10 -> <1 m/s, corr vs ERA5 ~0). Replaced the
+  Rayleigh drag-toward-zero with a 2-day relaxation toward an observed zonal-mean
+  surface-wind profile (tropical easterlies + mid-latitude westerlies + weak polar
+  easterlies), parameterizing the unresolved eddy-momentum flux. 2-day (not 6) so
+  the damping beats the barotropic instability of the relaxed jet's shear (at 6
+  days localized eddies ran |u| to the clamp by ~day 25). Wind safety clamp
+  100 -> 80 m/s. Energy-fixer alpha 0.1 -> 0.01 (scheme is near-conservative once
+  the pole instability is gone). Added scale-selective del^4 smoothing of `ln_ps`.
+- **MSL pressure reduction** (`validate_control.canonical_fields`): reduce surface
+  pressure to sea level (`p_s * exp(Phi_s/(R_d*T_ref))`, fixed T_ref=288 K) before
+  comparing to ERA5 MSL, instead of comparing raw surface pressure (which is ~550
+  hPa over a 5 km plateau).
+- **Dashboard climatology** (`make_readme_figures.py`): accepts a glob of states
+  and averages them into a climatology (removes weather noise / spin-up transient).
+
+### Known limitations (single-level atmosphere)
+- No baroclinic eddies -> no synoptic systems: `mslp` and `v_sfc` *pattern*
+  correlations stay near zero, and the **tropical ITCZ is weak**, so precipitation
+  is too dry (-1.8 mm/day) and only weakly correlated (the model rains in the
+  subtropics/mid-latitudes instead of at the equator). Closing these likely needs
+  vertical structure (multi-level dynamics or an external dycore). A modest warm,
+  over-variable near-surface air-temperature bias also remains.
+
 ## [Unreleased] - 2026-06-11b
 
 ### Fixed

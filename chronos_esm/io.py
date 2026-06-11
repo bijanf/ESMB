@@ -125,6 +125,16 @@ def save_state_to_netcdf(state: coupled_state.CoupledState, filepath: Union[str,
                  np.array(state.atmos.co2),
                  {"units": "ppm", "long_name": "CO2 Concentration"},
             ),
+            # Static surface geopotential (topography). Persisted so a restart
+            # does not silently lose topography: without it the loader zeroed
+            # phi_s, which breaks the atmospheric pressure-gradient force and the
+            # sea-level-pressure reduction (surface pressure stays topographically
+            # low while phi_s reads 0, so it cannot be reduced to MSL).
+            "atmos_phi_s": (
+                ("y_atm", "x_atm"),
+                np.array(state.atmos.phi_s),
+                {"units": "m2/s2", "long_name": "Surface Geopotential"},
+            ),
             # Land
             "land_temp": (
                 ("y_atm", "x_atm"),
@@ -290,7 +300,21 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
     # Initialize missing diagnostics
     psi_atm = jnp.zeros((ny_atm, nx_atm))
     chi_atm = jnp.zeros((ny_atm, nx_atm))
-    phi_s_atm = jnp.zeros((ny_atm, nx_atm)) # Topography (should be static)
+
+    # Surface geopotential (static topography). Prefer the persisted field; for
+    # older checkpoints that predate it, reconstruct from ETOPO rather than
+    # zeroing -- a zero phi_s removes topography on every restart, which breaks
+    # both the atmospheric pressure-gradient force and the MSL pressure reduction.
+    if 'atmos_phi_s' in ds:
+        phi_s_atm = jnp.array(ds.atmos_phi_s.values)
+    else:
+        try:
+            from chronos_esm import data
+            phi_s_atm = jnp.asarray(data.load_topography(ny_atm, nx_atm)) * 9.81
+            print("Note: atmos_phi_s not in restart; reconstructed from ETOPO topography.")
+        except Exception as e:  # noqa: BLE001
+            print(f"Warning: could not reconstruct phi_s from topography ({e}); using zeros.")
+            phi_s_atm = jnp.zeros((ny_atm, nx_atm))
 
     atmos = coupled_state.AtmosState(
         u=u_atm, v=v_atm, temp=temp_atm, q=q_atm, 

@@ -325,7 +325,17 @@ def step_atmos(
     # Avoid division by zero at poles
     cos_lat = jnp.where(cos_lat < 1e-5, 1e-5, cos_lat)
 
-    dx = 2 * jnp.pi * R_EARTH * cos_lat / nx
+    # CFL-safe dx for ALL horizontal derivatives (advection, gradients, pressure
+    # gradient, Laplacian) -- not just diffusion. The bare lat-lon dx collapses to
+    # ~4 m at the pole rows (cos_lat floored to 1e-5), so any zonal structure makes
+    # d/dx and d^2/dx^2 explode: advect(ln_ps) and the RT*lap(ln_ps) pressure term
+    # blow up AT the poles within a few steps (diagnosed: ps swung to 100-1200 hPa
+    # at lat +-90 with zero topography, std ~150 hPa vs obs ~12). Flooring cos_lat
+    # at its 80-deg value bounds dx so the handful of pole-most rows integrate with
+    # the ~80-deg metric instead of detonating. Accurate cos_lat is kept above for
+    # area weighting / Coriolis.
+    cos_lat_dyn = jnp.maximum(cos_lat, jnp.cos(jnp.deg2rad(80.0)))
+    dx = 2 * jnp.pi * R_EARTH * cos_lat_dyn / nx
     dy = jnp.pi * R_EARTH / ny
 
     # CFL-safe grid spacing for the diffusion operators ONLY.
@@ -359,9 +369,13 @@ def step_atmos(
     u = -dpsi_dy + dchi_dx
     v = dpsi_dx + dchi_dy
 
-    # Clamp winds to prevent supersonic instability in advection
-    u = jnp.clip(u, -100.0, 100.0)
-    v = jnp.clip(v, -100.0, 100.0)
+    # Clamp winds to prevent supersonic instability in advection. 80 m/s (was 100)
+    # is above the strongest real jet-stream cores yet a tighter safety net: with
+    # the wind relaxed toward a ~10 m/s climatological jet the field should never
+    # approach this, so hitting it flags a developing instability rather than
+    # silently saturating at an unphysical 100 m/s.
+    u = jnp.clip(u, -80.0, 80.0)
+    v = jnp.clip(v, -80.0, 80.0)
 
     # Filter diagnostic winds to prevent CFL violation near poles
     u = spectral.polar_filter(u, lat_rad)
@@ -400,12 +414,32 @@ def step_atmos(
         solar_constant=solar_constant
     )
 
-    # Rayleigh Friction (Linear Damping) for Stability
-    # tau_fric ~ 1 day is standard for simplified GCMs.
-    tau_fric = 86400.0 * 1.0
+    # Momentum relaxation toward a climatological zonal-mean jet.
+    #
+    # This is a SINGLE-LEVEL (barotropic) atmosphere (ATMOS_GRID.nz=1): with no
+    # vertical shear it cannot perform baroclinic instability or thermal-wind
+    # balance, so a meridional temperature gradient drives no sustained pressure
+    # gradient and the winds geostrophically adjust to rest (diagnosed: |u| decays
+    # 10 -> <1 m/s and corr vs ERA5 ~ 0). The eddy-momentum-flux convergence that
+    # builds the real surface westerlies, and the Hadley overturning that drives
+    # the trades, both live in vertical structure this model does not resolve.
+    # We parameterize their net effect as a Rayleigh relaxation toward an observed
+    # zonal-mean surface-wind profile (tropical easterlies + mid-latitude
+    # westerlies + weak polar easterlies) instead of toward zero.
+    #
+    # tau = 2 days (not 6): the relaxed jet has meridional shear that is
+    # barotropically unstable, and at a 6-day timescale localized eddies grew
+    # faster than they were damped (|u| ran to the clamp by ~day 14). A 2-day
+    # relaxation damps deviations from the target faster than the instability
+    # grows, pinning the field close to the (stable, realistic) climatological jet.
+    tau_fric = 86400.0 * 2.0
+    abs_lat = jnp.abs(lat[:, None])  # (ny,1) degrees
+    u_target = (9.0 * jnp.exp(-((abs_lat - 48.0) / 18.0) ** 2)    # midlat westerlies
+                - 5.5 * jnp.exp(-((abs_lat - 13.0) / 11.0) ** 2)  # tropical trades
+                - 2.0 * jnp.exp(-((abs_lat - 80.0) / 10.0) ** 2)) # polar easterlies
 
-    # Drag force [m/s2]
-    drag_u = -u / tau_fric
+    # Drag force [m/s2]: relax u toward the climatological jet, v toward zero.
+    drag_u = -(u - u_target) / tau_fric
     drag_v = -v / tau_fric
 
     # Column Mass approx P0/g ~ 1.0e4 kg/m^2
@@ -483,8 +517,14 @@ def step_atmos(
 
     lap_phi = spectral.compute_laplacian(state.phi_s, dx, dy)
 
-    # Divergence equation (proven stable for 47+ years)
-    ddiv_dt = -term_p - lap_phi + f_cor * state.vorticity - 5.0e-2 * state.divergence + div_forcing
+    # Divergence equation. NOTE: the linear divergence-damping term is applied
+    # IMPLICITLY below (not here). The previous explicit "-5e-2*div" gave
+    # dt*rate = 30*0.05 = 1.5 > 1, so forward Euler overshot and flipped the sign
+    # of divergence every step -> a 2dt oscillation that pumped grid-scale noise
+    # into ln_ps (which has no smoothing of its own). Divergence damping is the
+    # standard device for suppressing spurious gravity-wave / external-mode noise;
+    # applied implicitly (below) it is unconditionally stable for any rate.
+    ddiv_dt = -term_p - lap_phi + f_cor * state.vorticity + div_forcing
 
     dt_dt = advect(state.temp) + forcing_t
     dlnps_dt = advect(state.ln_ps) - state.divergence
@@ -495,12 +535,24 @@ def step_atmos(
     # Polar del^2 handles the lat-lon convergence issue (dx→0 at poles).
     # This replaces the original global del^2 which killed all circulation.
 
-    # del^4 hyperdiffusion coefficients (scale-selective)
+    # del^4 hyperdiffusion coefficients (scale-selective). Kept strong ("tank"
+    # values): del^4 damps only the small (k^4) scales and leaves the large scale
+    # untouched, so it does NOT fight the climatological jet -- that is now set by
+    # the momentum relaxation toward u_target, INDEPENDENT of dissipation strength.
+    # This decoupling (relaxation -> jet realism, hyperdiffusion -> stability) is
+    # what lets dissipation stay strong: a 4x-weaker setting let a slow eddy
+    # instability grow over ~25 days (|u| -> 100 m/s clamp, precip -> 50 mm/day).
     nu4_vort = 3.0e14
     nu4_div = 6.0e14
     nu4_temp = 2.0e13
     nu4_q = 5.0e13
     nu4_co2 = 5.0e13
+    # ln_ps had NO scale-selective smoothing of its own (only the zonal polar
+    # filter), so grid-scale (2dx) checkerboard noise injected by the divergence
+    # accumulated unchecked -> ps_std ~ 150 hPa (obs ~12 hPa). A del^4 term hits
+    # only the 2dx noise and leaves the physical (topographic/synoptic) pressure
+    # structure intact. Scaled like nu4_temp.
+    nu4_lnps = 5.0e12
 
     # Use the CFL-safe dx_diff (not dx) so the pole rows don't blow up.
     hyperdiff_zeta = spectral.compute_bilaplacian(state.vorticity, dx_diff, dy)
@@ -508,6 +560,7 @@ def step_atmos(
     hyperdiff_temp = spectral.compute_bilaplacian(state.temp, dx_diff, dy)
     hyperdiff_q = spectral.compute_bilaplacian(state.q, dx_diff, dy)
     hyperdiff_co2 = spectral.compute_bilaplacian(state.co2, dx_diff, dy)
+    hyperdiff_lnps = spectral.compute_bilaplacian(state.ln_ps, dx_diff, dy)
 
     # Polar-only del^2 (active above 60° latitude, zero below)
     nu_base = 2.0e6
@@ -523,18 +576,28 @@ def step_atmos(
     # 4. Time Integration (Forward Euler + del^4 + polar del^2)
     new_vorticity = state.vorticity + dt * (dzeta_dt - nu4_vort * hyperdiff_zeta + nu_polar * diff_zeta)
     new_divergence = state.divergence + dt * (ddiv_dt - nu4_div * hyperdiff_div + nu_polar * diff_div)
+    # Implicit linear divergence damping: unconditionally stable for any rate (no
+    # 2dt overshoot of the old explicit term). 1/DIV_DAMP ~ 100 s -- strong enough
+    # to absorb gravity-wave / divergent-mode noise (which otherwise grows into the
+    # local |u| blow-up together with the rotational eddies) while still leaving the
+    # large-scale divergent (Hadley/Walker) circulation that organises precip.
+    DIV_DAMP = 1.0e-2  # [1/s]
+    new_divergence = new_divergence / (1.0 + dt * DIV_DAMP)
     new_temp = state.temp + dt * (dt_dt - nu4_temp * hyperdiff_temp + nu_polar * diff_temp)
-    new_ln_ps = state.ln_ps + dt * dlnps_dt
+    new_ln_ps = state.ln_ps + dt * (dlnps_dt - nu4_lnps * hyperdiff_lnps)
 
     # Clamp Pressure (100 hPa to 1200 hPa)
     new_ln_ps = jnp.clip(new_ln_ps, 9.2, 11.7)
     new_q = state.q + dt * (dq_dt - nu4_q * hyperdiff_q)
     new_co2 = state.co2 + dt * (dco2_dt - nu4_co2 * hyperdiff_co2)
 
-    # Energy Fixer (prevent drift over long runs)
+    # Energy Fixer (prevent drift over long runs). alpha reduced 0.1 -> 0.01: with
+    # the pole instability removed the scheme is nearly conservative, so only a
+    # gentle correction is needed and a strong one would spuriously cool/warm the
+    # column in response to transient KE changes.
     new_temp = apply_energy_fixer(
         new_temp, u, v, state.temp, state.u, state.v,
-        cos_lat, alpha=0.1
+        cos_lat, alpha=0.01
     )
 
     # 5. Safety Clamping
