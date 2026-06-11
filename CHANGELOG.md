@@ -18,13 +18,25 @@ primitive-equation dycore, to fix the limitations documented in the v3 overhaul.
   easterlies (`docs/figures/dino_held_suarez_jet.png`). This is the circulation
   the single-level model could never generate — proof the dycore is the right tool.
 
+### Added (Phase 2a: SST-coupled atmosphere module)
+- **`chronos_esm/atmos/dino_atmos.py`** (`DinoAtmosphere`): wraps dinosaur's dry
+  dycore with an SST-COUPLED thermal forcing. The radiative-equilibrium
+  temperature of a Held-Suarez-style relaxation is anchored to the underlying SST
+  at the surface (instead of HS's idealized 315 - 60 sin^2(lat)), keeping HS's
+  vertical lapse, boundary-layer relaxation rates, and Rayleigh drag -- so the
+  atmosphere RESPONDS to the ocean. SST is constant within an ocean coupling
+  interval, so `run_interval(state, sst, n_steps)` is jitted once with SST traced.
+- **`tests/test_dino_atmos.py`**: validated that a realistic SST gradient drives a
+  baroclinic mid-latitude jet (both hemispheres), surface trade easterlies, and a
+  lower atmosphere that tracks the SST gradient (>10 K equator-pole), staying finite.
+
 ### Notes
 - **`jcm` is NOT usable** and `chronos_esm/atmos/jcm_adapter.py` is dead: jcm 1.1.1
   on PyPI is built against an unreleased dinosaur (imports `SI_SCALE`, which exists
   in no released dinosaur) and runs inert. We build on `dinosaur` directly instead.
-- Next (Phases 2-4): wrap dinosaur as a chronos atmosphere, couple to the ocean
-  (SST-aware forcing + bulk surface fluxes), add moisture/precip for the ITCZ,
-  persist the modal state, and benchmark the multi-level atmosphere vs ERA5.
+- Next (Phases 2b-4): wire `DinoAtmosphere` into the ocean coupler (regrid SST in,
+  surface fluxes/wind stress out), add moisture/precip for the ITCZ, persist the
+  modal state, and benchmark the multi-level atmosphere vs ERA5.
 
 ## [Unreleased] - 2026-06-11c — Atmosphere correctness overhaul
 
