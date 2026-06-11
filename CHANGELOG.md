@@ -30,13 +30,26 @@ primitive-equation dycore, to fix the limitations documented in the v3 overhaul.
   baroclinic mid-latitude jet (both hemispheres), surface trade easterlies, and a
   lower atmosphere that tracks the SST gradient (>10 K equator-pole), staying finite.
 
+### Added (Phase 2b: coupled dinosaur atmosphere <-> ocean)
+- **`experiments/run_dino_coupled.py`**: a stable coupled run of the multi-level
+  dinosaur atmosphere with the Chronos ocean. Sequential coupling at a fixed
+  interval: ocean SST -> (regrid linear->Gaussian) -> `DinoAtmosphere.step` ->
+  surface winds/T -> (regrid back) -> bulk fluxes (wind stress + SW/LW/sensible/
+  latent net heat) -> `step_ocean`. Includes a 1-D Gaussian<->linear latitude
+  regridder (longitudes coincide). Validated 30 days: the ocean SST gradient
+  drives a baroclinic mid-latitude jet (->+6 m/s, still spinning up), the winds
+  drive ocean currents (~0.04 m/s), SST stays stable (~17 C, slow drift), all
+  finite. Moisture is a fixed-RH boundary-layer closure for surface latent heat;
+  prognostic moisture/precip (ITCZ) and flux balancing are Phase 3.
+
 ### Notes
 - **`jcm` is NOT usable** and `chronos_esm/atmos/jcm_adapter.py` is dead: jcm 1.1.1
   on PyPI is built against an unreleased dinosaur (imports `SI_SCALE`, which exists
   in no released dinosaur) and runs inert. We build on `dinosaur` directly instead.
-- Next (Phases 2b-4): wire `DinoAtmosphere` into the ocean coupler (regrid SST in,
-  surface fluxes/wind stress out), add moisture/precip for the ITCZ, persist the
-  modal state, and benchmark the multi-level atmosphere vs ERA5.
+- Next (Phases 3-4): prognostic moisture + large-scale condensation for the ITCZ;
+  balance the surface energy budget (remove the slow SST drift); persist the modal
+  state in io.py; extract surface fields (u10/t2m/mslp/precip) and benchmark the
+  multi-level atmosphere vs ERA5 in the dashboard.
 
 ## [Unreleased] - 2026-06-11c — Atmosphere correctness overhaul
 
