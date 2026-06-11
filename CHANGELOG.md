@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased] - 2026-06-11g — Multi-level atmosphere: ETOPO orography
+
+Give the dinosaur atmosphere real topography (it was aquaplanet), for stationary
+waves and a topographically-shaped surface pressure.
+
+### Added / Changed (chronos_esm/atmos/dino_atmos.py)
+- **ETOPO orography** passed to the dinosaur init (`surface_height`) and the
+  dycore, interpolated onto the Gaussian grid index-preserving in longitude (same
+  convention as the coupled SST regrid, so SST and orography stay aligned).
+- **Orography smoothing** (mild Gaussian): raw ETOPO at T31 has sharp gradients
+  that produce Gibbs ripples in the spectral representation and a spurious mass
+  leak (surface pressure drifted ~1.8 hPa/day). Smoothing cut it ~6x.
+- **Dry-mass fixer**: each interval, rescale surface pressure to the initial
+  area-weighted global mean -> global-mean pressure now perfectly stable (0 drift
+  over 40+ days), fixing the MSLP bias.
+- `diagnostics()` reduces surface pressure to MEAN SEA LEVEL with a fixed
+  standard-atmosphere scale height (`mslp`); benchmark uses it.
+
+### Benchmark (90-day spin-up vs single-level baseline; with orography)
+- `mslp`: bias fixed by the mass fixer (the unbalanced version drifted to -145 hPa;
+  now -11.7 hPa). `precip`: corr 0.16 -> **0.33**, std-ratio 0.41 -> 0.83, bias
+  -1.82 -> **-0.54** (real ITCZ). `t2m`: bias 2.42 -> -0.76, std-ratio 1.53 -> 0.71.
+  `sss`: 0.84 -> 0.88. Orography also lifted the surface-wind correlations slightly.
+- **Still weak**: the surface DYNAMIC-field *pattern* correlations (u_sfc ~0,
+  v_sfc/mslp negative). The model's zonal-mean circulation is realistic but its 2-D
+  stationary-wave / surface-wind pattern does not yet match ERA5 -- the next tuning
+  frontier (surface/boundary-layer winds, stationary-wave forcing, seasonal cycle,
+  fuller spin-up), before making dinosaur the default coupled atmosphere.
+
 ## [Unreleased] - 2026-06-11f — Multi-level atmosphere: benchmark + io (Phase 4)
 
 ### Added

@@ -90,7 +90,8 @@ class DinoAtmosphere:
     def __init__(self, truncation="T31", layers=24, dt_minutes=20.0,
                  diffusion_tau_hours=2.0, diffusion_order=2,
                  sigma_b=0.7, kf_per_day=1.0, ka_per_day=1 / 40.0, ks_per_day=1 / 4.0,
-                 minT=200.0, dThz=10.0, tau_cond_hours=3.0, init_rh=0.5):
+                 minT=200.0, dThz=10.0, tau_cond_hours=3.0, init_rh=0.5,
+                 orography=True):
         grid = getattr(spherical_harmonic.Grid, truncation)()
         self.coords = coordinate_systems.CoordinateSystem(
             horizontal=grid,
@@ -98,8 +99,39 @@ class DinoAtmosphere:
         self.specs = pe.PrimitiveEquationsSpecs.from_si()
         self.layers = layers
 
+        # grid geometry (needed before the initial state to place orography)
+        _, sin_lat = grid.nodal_mesh                                 # (nlon, nlat)
+        self.sin_lat = np.asarray(sin_lat)
+        self.cos_lat = np.sqrt(np.maximum(1 - self.sin_lat ** 2, 1e-12))
+        self.lat_deg = np.rad2deg(np.arcsin(self.sin_lat[0]))        # (nlat,)
+        self.nlon, self.nlat = self.sin_lat.shape
+
+        # ETOPO orography on the dinosaur grid. data.load_topography returns
+        # elevation [m] (>=0, ocean=0) on a linear-lat grid; interpolate onto the
+        # Gaussian latitudes, index-preserving in longitude (the SAME convention
+        # the coupled driver uses to regrid SST in), so SST and orography stay
+        # mutually aligned on the dinosaur grid. Real topography gives the
+        # stationary waves and the topographically-shaped surface pressure that
+        # an aquaplanet cannot have.
+        self.orography_m = np.zeros((self.nlon, self.nlat))
+        if orography:
+            from chronos_esm import data
+            from scipy.ndimage import gaussian_filter
+            topo_lin = np.asarray(data.load_topography(self.nlat, self.nlon))  # (nlat,nlon)
+            lat_lin = np.linspace(-90, 90, self.nlat)
+            topo_g = np.stack([np.interp(self.lat_deg, lat_lin, topo_lin[:, j])
+                               for j in range(self.nlon)], axis=0)             # (nlon,nlat)
+            # Smooth the orography before use. Raw ETOPO at T31 has sharp gradients
+            # that produce Gibbs ripples in the spectral (to_modal) representation;
+            # those ripples drive a spurious mass leak (surface pressure drifted
+            # ~1.8 hPa/day). A mild Gaussian smooth (wrap in lon, reflect in lat)
+            # removes the sub-grid sharpness and stabilizes the global-mean pressure.
+            self.orography_m = np.maximum(
+                gaussian_filter(topo_g, sigma=(1.2, 1.2), mode=("wrap", "reflect")), 0.0)
+
         init_fn, aux = pes.isothermal_rest_atmosphere(
-            self.coords, self.specs, p0=1e5 * units.pascal, p1=5e3 * units.pascal)
+            self.coords, self.specs, p0=1e5 * units.pascal, p1=5e3 * units.pascal,
+            surface_height=jnp.asarray(self.orography_m) * units.meter)
         self.ref_temps = aux[xarray_utils.REF_TEMP_KEY]            # (layers,) ~288 K
         self.orography_modal = self.coords.horizontal.to_modal(aux[xarray_utils.OROGRAPHY])
         base_state = init_fn(rng_key=jax.random.PRNGKey(0))
@@ -128,14 +160,9 @@ class DinoAtmosphere:
         self.v_scale_ms = float(self.specs.dimensionalize(1.0, units.meter / units.second).magnitude)
         self.t0_seconds = float(self.specs.dimensionalize(1.0, units.second).magnitude)  # s per nondim time
 
-        # grid geometry
+        # vertical grid
         self.sigma = np.asarray(self.coords.vertical.centers)        # (layers,)
         self.dsigma = 1.0 / layers                                   # equidistant layer thickness
-        _, sin_lat = grid.nodal_mesh                                 # (nlon, nlat)
-        self.sin_lat = np.asarray(sin_lat)
-        self.cos_lat = np.sqrt(np.maximum(1 - self.sin_lat ** 2, 1e-12))
-        self.lat_deg = np.rad2deg(np.arcsin(self.sin_lat[0]))        # (nlat,)
-        self.nlon, self.nlat = self.sin_lat.shape
 
         # HS vertical profiles of relaxation/drag (layers,1,1)
         cutoff = np.maximum(0.0, (self.sigma - self.sigma_b) / (1 - self.sigma_b))
@@ -150,7 +177,21 @@ class DinoAtmosphere:
         self._init_state = dataclasses.replace(
             base_state, tracers={"specific_humidity": q0_modal})
 
+        # dry-mass fixer target: the initial area-weighted global-mean surface
+        # pressure. Restoring it each interval guarantees conservation of global
+        # dry mass (orography otherwise leaks ~0.3 hPa/day even after smoothing).
+        self._area_w = jnp.asarray(self.cos_lat)[None]   # (1, nlon, nlat)
+        init_ps = jnp.exp(self.coords.horizontal.to_nodal(base_state.log_surface_pressure))
+        self._target_ps_mean = float(jnp.sum(init_ps * self._area_w) / jnp.sum(self._area_w))
+
         self._run = jax.jit(self._run_interval, static_argnums=(2,))
+
+    def _fix_mass(self, state):
+        """Rescale surface pressure to conserve the initial global-mean dry mass."""
+        ps = jnp.exp(self.coords.horizontal.to_nodal(state.log_surface_pressure))
+        cur = jnp.sum(ps * self._area_w) / jnp.sum(self._area_w)
+        lnps = self.coords.horizontal.to_modal(jnp.log(ps * (self._target_ps_mean / cur)))
+        return dataclasses.replace(state, log_surface_pressure=lnps)
 
     # ---- SST-anchored equilibrium temperature ----
     def _equilibrium_temperature(self, nodal_surface_pressure, sst_nd):
@@ -210,7 +251,7 @@ class DinoAtmosphere:
         ode = ti.ImplicitExplicitODE.from_functions(
             explicit, self.eq.implicit_terms, self.eq.implicit_inverse)
         step = ti.step_with_filters(ti.imex_rk_sil3(ode, self.dt), [self.diff])
-        return ti.repeated(step, n_steps)(state)
+        return self._fix_mass(ti.repeated(step, n_steps)(state))
 
     # ---- public API ----
     def initial_state(self):
@@ -243,6 +284,9 @@ class DinoAtmosphere:
         qsat = np.asarray(_qsat(jnp.asarray(T), jnp.asarray(p_lvl)))
         cond_si = np.maximum(q - qsat, 0.0) / (self.tau_cond * self.t0_seconds)  # 1/s
         precip = np.sum(cond_si * (ps_Pa * self.dsigma) / G, axis=0)            # kg/m^2/s (nlon,nlat)
+        # reduce surface pressure to mean sea level with a fixed standard-atmosphere
+        # scale height (static, noise-free) so it is comparable to ERA5 MSL.
+        mslp = ps_Pa * np.exp(G * self.orography_m / (287.0 * 288.0))           # Pa
         return dict(u=u, v=v, temperature=T, specific_humidity=q,
                     u_sfc=u[-1], v_sfc=v[-1], t_sfc=T[-1], q_sfc=q[-1],
-                    surface_pressure=ps_Pa, precip=precip, lat_deg=self.lat_deg)
+                    surface_pressure=ps_Pa, mslp=mslp, precip=precip, lat_deg=self.lat_deg)

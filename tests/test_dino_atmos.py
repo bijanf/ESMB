@@ -13,7 +13,7 @@ from chronos_esm.atmos.dino_atmos import DinoAtmosphere  # noqa: E402
 def test_sst_coupled_spinup():
     """A realistic SST gradient must drive a baroclinic jet and pull the lower
     atmosphere toward SST (warm equator, cold poles), and stay finite."""
-    atm = DinoAtmosphere(layers=18)
+    atm = DinoAtmosphere(layers=18, orography=False)  # clean aquaplanet for the idealized check
     lat = atm.lat_deg
     sst1d = 300.0 - 45.0 * np.sin(np.deg2rad(lat)) ** 2          # 300 K eq -> 255 K pole
     sst = np.broadcast_to(sst1d[None, :], (atm.nlon, atm.nlat))

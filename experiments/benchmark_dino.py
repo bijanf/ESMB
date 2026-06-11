@@ -58,7 +58,7 @@ def main_cli():
         if (d + 1) * chunk > args.spinup - args.avg:
             di = atm.diagnostics(state)
             f = {"u_sfc": di["u_sfc"], "v_sfc": di["v_sfc"], "t2m": di["t_sfc"],
-                 "precip": di["precip"], "mslp": di["surface_pressure"]}
+                 "precip": di["precip"], "mslp": di["mslp"]}
             acc = f if acc is None else {k: acc[k] + f[k] for k in acc}
             ndone += 1
     clim = {k: v / ndone for k, v in acc.items()}   # dino-grid climatology
@@ -71,7 +71,7 @@ def main_cli():
         "u_sfc": gauss_to_lin(clim["u_sfc"], lat_g),
         "v_sfc": gauss_to_lin(clim["v_sfc"], lat_g),
         "precip": gauss_to_lin(clim["precip"], lat_g),   # kg/m^2/s
-        "mslp": gauss_to_lin(clim["mslp"], lat_g),       # Pa (aquaplanet: ps == msl)
+        "mslp": gauss_to_lin(clim["mslp"], lat_g),       # Pa (reduced to sea level)
     }
 
     ocean_surface = obs.woa18_surface()
