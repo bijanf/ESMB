@@ -36,8 +36,12 @@ def lin_to_gauss(f_lin, lat_gauss):               # (nlat_lin,nlon) -> (nlon,nla
 
 def main_cli():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--spinup", type=int, default=90)
-    ap.add_argument("--avg", type=int, default=30, help="climatology window (last N days)")
+    ap.add_argument("--spinup", type=int, default=150)
+    ap.add_argument("--avg", type=int, default=90, help="climatology window (last N days)")
+    ap.add_argument("--sample-every", type=int, default=2,
+                    help="sample interval [days] in the averaging window; dense sampling "
+                         "smooths the vigorous transient baroclinic eddies so the (weak) "
+                         "time-mean surface-wind tripole is not buried in eddy noise")
     args = ap.parse_args()
 
     atm = DinoAtmosphere()
@@ -49,19 +53,23 @@ def main_cli():
     sss_lin = np.asarray(st.ocean.salt[0])
     sst_g = lin_to_gauss(sst_lin, lat_g)
 
-    print(f"Spinning up dinosaur atmosphere {args.spinup} d (avg last {args.avg} d) on WOA SST ...")
-    state = atm.initial_state()
+    print(f"Spinning up dinosaur atmosphere {args.spinup} d "
+          f"(avg last {args.avg} d, sampling every {args.sample_every} d) on WOA SST ...")
+    state = atm.initial_state(sst_g)   # near-equilibrium init tailored to the WOA SST
+    # spin-up phase (no sampling), in 5-day chunks
+    for _ in range((args.spinup - args.avg) // 5):
+        state = atm.step(state, sst_g, n_days=5)
+    # averaging phase: sample densely so transient baroclinic eddies average out
     acc, ndone = None, 0
-    chunk = 5
-    for d in range(args.spinup // chunk):
-        state = atm.step(state, sst_g, n_days=chunk)
-        if (d + 1) * chunk > args.spinup - args.avg:
-            di = atm.diagnostics(state)
-            f = {"u_sfc": di["u_sfc"], "v_sfc": di["v_sfc"], "t2m": di["t_sfc"],
-                 "precip": di["precip"], "mslp": di["mslp"]}
-            acc = f if acc is None else {k: acc[k] + f[k] for k in acc}
-            ndone += 1
+    for _ in range(args.avg // args.sample_every):
+        state = atm.step(state, sst_g, n_days=args.sample_every)
+        di = atm.diagnostics(state)
+        f = {"u_sfc": di["u_sfc"], "v_sfc": di["v_sfc"], "t2m": di["t_sfc"],
+             "precip": di["precip"], "mslp": di["mslp"]}
+        acc = f if acc is None else {k: acc[k] + f[k] for k in acc}
+        ndone += 1
     clim = {k: v / ndone for k, v in acc.items()}   # dino-grid climatology
+    print(f"  averaged {ndone} samples")
 
     # model fields on the validation (linear 48x96) grid, model units
     mf = {

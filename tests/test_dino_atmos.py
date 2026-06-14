@@ -18,7 +18,7 @@ def test_sst_coupled_spinup():
     sst1d = 300.0 - 45.0 * np.sin(np.deg2rad(lat)) ** 2          # 300 K eq -> 255 K pole
     sst = np.broadcast_to(sst1d[None, :], (atm.nlon, atm.nlat))
 
-    state = atm.initial_state()
+    state = atm.initial_state(sst)          # near-equilibrium init tailored to this SST
     state = atm.step(state, sst, n_days=15)
     d = atm.diagnostics(state)
 

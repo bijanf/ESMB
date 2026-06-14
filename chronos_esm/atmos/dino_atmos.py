@@ -88,10 +88,10 @@ class DinoAtmosphere:
     """SST-coupled moist multi-level atmosphere (dinosaur dycore + physics)."""
 
     def __init__(self, truncation="T31", layers=24, dt_minutes=20.0,
-                 diffusion_tau_hours=2.0, diffusion_order=2,
+                 diffusion_tau_hours=6.0, diffusion_order=2,
                  sigma_b=0.7, kf_per_day=1.0, ka_per_day=1 / 40.0, ks_per_day=1 / 4.0,
                  minT=200.0, dThz=10.0, tau_cond_hours=3.0, init_rh=0.5,
-                 orography=True):
+                 orography=True, seed_wind_ms=2.0, seed=0):
         grid = getattr(spherical_harmonic.Grid, truncation)()
         self.coords = coordinate_systems.CoordinateSystem(
             horizontal=grid,
@@ -142,6 +142,18 @@ class DinoAtmosphere:
         # nondimensional constants (temperature scale is 1 K, so K == nondim T)
         self.dt = self.specs.nondimensionalize(dt_minutes * units.minute)
         self.steps_per_day = int(round(self.specs.nondimensionalize(1 * units.day) / self.dt))
+        # Horizontal hyperdiffusion. tau is the e-folding time of the TOP (grid-
+        # scale) mode; mode l is damped as (l(l+1)/L(L+1))^order, so tau still
+        # controls grid noise fast (~tau) while leaving large scales nearly free.
+        # tau=6 h (NOT the very strong tau~2 h): at coarse T31 the baroclinic
+        # eddies live at fairly high total wavenumbers (l~10-15) where tau=2 h
+        # already damps them on 1-15 days -- competitive with their ~1-3 day
+        # baroclinic growth -- which SUPPRESSES the eddies and hence the eddy
+        # momentum flux that drives the mid-latitude surface westerlies. tau=6 h
+        # lets those eddies grow (storm tracks, surface westerlies) while still
+        # killing grid-scale noise. (This is the OPPOSITE lesson from the legacy
+        # single-level model, where eddies were spurious and diffusion was kept
+        # strong to suppress them; here eddies are the physics we want.)
         self.diff = ti.horizontal_diffusion_step_filter(
             grid, self.dt,
             tau=self.specs.nondimensionalize(diffusion_tau_hours * units.hour),
@@ -174,8 +186,39 @@ class DinoAtmosphere:
         p_lvl = self.sigma[:, None, None] * nodal_sp * self.p_scale_Pa
         q0_nodal = init_rh * _qsat(self.ref_temps[:, None, None], p_lvl)
         q0_modal = self.coords.horizontal.to_modal(q0_nodal)
-        self._init_state = dataclasses.replace(
-            base_state, tracers={"specific_humidity": q0_modal})
+
+        # Seed a small random ROTATIONAL (vorticity) perturbation to BREAK ZONAL
+        # SYMMETRY. isothermal_rest_atmosphere is EXACTLY axisymmetric (vorticity
+        # == divergence == temperature_variation == 0), an unstable equilibrium the
+        # flow never leaves on its own (only floating-point roundoff breaks it,
+        # after ~100 days). Without an asymmetric seed NO baroclinic eddies form,
+        # so there is no eddy momentum-flux convergence and NO mid-latitude surface
+        # westerlies (the surface stays easterly everywhere -> u_sfc pattern corr
+        # ~0). A *velocity* seed is used, not a temperature one: a temperature
+        # perturbation is simply relaxed away by the thermal forcing (_kt) before
+        # it can grow, whereas a rotational velocity seed projects directly onto
+        # the growing baroclinic mode and reliably triggers eddies + storm tracks.
+        seed_vort = jnp.zeros_like(base_state.vorticity)
+        if seed_wind_ms > 0:
+            k1, k2 = jax.random.split(jax.random.PRNGKey(seed))
+            shp = (self.layers,) + self.coords.horizontal.nodal_shape
+            amp = seed_wind_ms / self.v_scale_ms
+            cl = jnp.asarray(self.cos_lat)[None]
+            clu = jnp.stack([cl * amp * jax.random.normal(k1, shp),
+                             cl * amp * jax.random.normal(k2, shp)])
+            seed_vort = self.coords.horizontal.curl_cos_lat(self.coords.horizontal.to_modal(clu))
+
+        # base state = isothermal rest + humidity tracer + the rotational seed.
+        # initial_state() adds the near-equilibrium temperature on top (see there).
+        self._base_state = dataclasses.replace(
+            base_state, vorticity=base_state.vorticity + seed_vort,
+            tracers={"specific_humidity": q0_modal})
+
+        # Generic Earth-like SST gradient for the default near-equilibrium init
+        # (used when initial_state() is called without a specific SST).
+        default_sst_K = 300.0 - 40.0 * self.sin_lat ** 2
+        self._default_sst_nd = self.specs.nondimensionalize(
+            jnp.asarray(default_sst_K) * units.degK)
 
         # dry-mass fixer target: the initial area-weighted global-mean surface
         # pressure. Restoring it each interval guarantees conservation of global
@@ -254,8 +297,28 @@ class DinoAtmosphere:
         return self._fix_mass(ti.repeated(step, n_steps)(state))
 
     # ---- public API ----
-    def initial_state(self):
-        return self._init_state
+    def initial_state(self, sst_nodal_K=None):
+        """Initial modal state, primed to spin up baroclinic eddies quickly.
+
+        Temperature is initialized near RADIATIVE EQUILIBRIUM (the SST-anchored
+        Held-Suarez Teq) instead of isothermal rest, so the equator-pole gradient
+        -- and hence the baroclinic jet -- exists from day 0 rather than taking
+        ~2 months to build through the slow (40-day) thermal relaxation. Combined
+        with the rotational seed baked into the base state, eddies and mid-latitude
+        surface westerlies appear within ~2-3 weeks instead of ~2-3 months.
+
+        Pass the SST (nodal, K, shape (nlon, nlat)) to tailor the equilibrium to
+        the run's SST; with no argument a generic Earth-like gradient is used and
+        the run then relaxes to whatever SST is supplied to step().
+        """
+        if sst_nodal_K is None:
+            sst_nd = self._default_sst_nd
+        else:
+            sst_nd = self.specs.nondimensionalize(jnp.asarray(sst_nodal_K) * units.degK)
+        nodal_sp = jnp.exp(self.coords.horizontal.to_nodal(self._base_state.log_surface_pressure))
+        Teq = self._equilibrium_temperature(nodal_sp, sst_nd)
+        tvar = self.coords.horizontal.to_modal(Teq - self.ref_temps[:, None, None])
+        return dataclasses.replace(self._base_state, temperature_variation=tvar)
 
     def step(self, state, sst_nodal_K, n_days=1):
         """Advance n_days with SST [K] on the dinosaur nodal grid (nlon, nlat)."""

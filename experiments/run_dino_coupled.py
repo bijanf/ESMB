@@ -93,8 +93,9 @@ def main_cli():
     state = main.init_model(ocean_ic="woa")
     ocean_mask_3d, surface_mask = main.ocean_masks(nz=state.ocean.u.shape[0])
     atm = DinoAtmosphere()
-    dino_state = atm.initial_state()
     lin_to_gauss, gauss_to_lin = make_regridders(atm.lat_deg)
+    sst0_g = lin_to_gauss(np.asarray(state.ocean.temp[0]))   # WOA SST on the dino grid
+    dino_state = atm.initial_state(sst0_g)                    # near-equilibrium init
 
     # ocean grid metrics (as in main.py)
     dy_ocn = (np.pi * EARTH_RADIUS) / OCEAN_GRID.nlat

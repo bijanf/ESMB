@@ -37,6 +37,21 @@ Decision + status (2026-06-11):
     dinosaur state is modal (vorticity/divergence/temperature_variation/
     log_surface_pressure); u,v via `pe.compute_diagnostic_state(state, coords)`
     `.cos_lat_u[0,1]/cos(lat)`; grid is Gaussian (coords.horizontal.nodal_mesh).
+*   **EDDY/SURFACE-WESTERLY FIX (2026-06-14, done):** the dino atmosphere was
+    running a perfectly AXISYMMETRIC (eddy-free) circulation -> no eddy momentum
+    flux -> no mid-latitude surface westerlies (`u_sfc` pattern corr ~0). Cause:
+    `isothermal_rest_atmosphere` is EXACTLY zonally symmetric (an unstable
+    equilibrium roundoff only breaks after ~100 d). Fix in `dino_atmos.py`:
+    (1) `initial_state(sst)` inits T near radiative equilibrium (`Teq`) not
+    isothermal rest, so the baroclinic jet exists from day 0 (skips the ~2-month
+    relaxation spin-up); (2) a small ROTATIONAL (vorticity) seed breaks symmetry
+    (a TEMPERATURE seed is just relaxed away — does NOT work); (3) `diffusion_tau_hours`
+    2 -> 6 so the T31 baroclinic eddies (l~10-15) can grow (they were damped on
+    1-15 d at tau=2 h). Eddies now fire in ~2-6 weeks and the surface tripole
+    (trade easterlies / midlat westerlies / polar easterlies) is earned dynamically.
+    NOTE the DECOUPLING from the single-level rule: there eddies were spurious and
+    diffusion was kept STRONG; in the multi-level model eddies ARE the physics, so
+    diffusion must be weak enough to let them grow. Callers pass SST to `initial_state()`.
 
 ## Current State: Atmosphere correctness overhaul (v3, 2026-06-11)
 

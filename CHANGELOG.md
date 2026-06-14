@@ -1,5 +1,71 @@
 # Changelog
 
+## [Unreleased] - 2026-06-14 — Multi-level atmosphere: eddy-driven surface westerlies
+
+The dinosaur atmosphere had a realistic ZONAL-MEAN circulation but its surface
+DYNAMIC fields (`u_sfc`/`v_sfc`/`mslp`) had ~0 pattern correlation with ERA5.
+Root cause found and fixed.
+
+### Root cause — the circulation was perfectly AXISYMMETRIC (eddy-free)
+- `isothermal_rest_atmosphere` initializes an EXACTLY zonally-symmetric state
+  (vorticity == divergence == temperature_variation == 0). That is an *unstable*
+  equilibrium the flow never leaves on its own — only floating-point roundoff
+  breaks the symmetry, after ~100 days. With no baroclinic eddies there is no eddy
+  momentum-flux convergence, hence NO mid-latitude surface westerlies: the surface
+  stayed easterly at every latitude, so the `u_sfc` pattern correlation was ~0.
+- Two things made the eddy onset slow even once seeded: (a) the slow (40-day)
+  Held-Suarez thermal relaxation means the baroclinic jet takes ~50-60 days to
+  build from isothermal rest; (b) the strong `tau=2 h` hyperdiffusion damps the
+  high-wavenumber (l~10-15) eddies that carry the momentum flux at coarse T31 on
+  1-15 days — competitive with their ~1-3 day baroclinic growth — suppressing them.
+- Diagnosed by tracking eddy kinetic energy + the surface-U latitude profile: with
+  the old setup EKE stayed *exactly* 0 and the profile was perfectly hemispherically
+  symmetric; an injected velocity perturbation decayed; the dry Held-Suarez control
+  had the SAME defect (it had only a thermal-wind jet, never an eddying state).
+
+### Fix (`chronos_esm/atmos/dino_atmos.py`)
+- **Near-equilibrium initialization**: `initial_state(sst)` sets the initial
+  temperature to the SST-anchored radiative-equilibrium `Teq` (not isothermal rest),
+  so the equator-pole gradient and the baroclinic jet exist from day 0 instead of
+  after ~2 months of relaxation.
+- **Rotational symmetry-breaking seed**: a small random VORTICITY perturbation is
+  baked into the base state. A temperature seed does NOT work (the thermal
+  relaxation just damps it); a velocity seed projects onto the growing baroclinic
+  mode and reliably triggers eddies.
+- **Weaker hyperdiffusion** (`diffusion_tau_hours` 2 -> 6): lets the T31 baroclinic
+  eddies grow while still killing grid-scale noise (the top mode still e-folds in
+  `tau`). This is the OPPOSITE of the single-level model's "keep diffusion strong"
+  rule — there eddies were spurious; here they are the physics we want.
+- Callers (`benchmark_dino.py`, `run_dino_coupled.py`, `tests/test_dino_atmos.py`)
+  pass the SST to `initial_state()`.
+
+### Result
+Eddies develop within ~2-6 weeks instead of never; the atmosphere now performs
+genuine baroclinic instability (transient storm-track eddies, EKE ~70-200 m^2/s^2,
+finite/stable). At a realistic equator-pole gradient (idealized 45 K aquaplanet) it
+EARNS the textbook eddy-driven surface tripole: easterly trades, mid-latitude SURFACE
+WESTERLIES (+3-4 m/s at ~50 deg), polar easterlies.
+
+HONEST CAVEAT — the real WOA SST gradient at T31 is only ~22.6 K equator-pole (T31
+smooths out the sharp Gulf Stream / Kuroshio / ACC SST fronts), about half the
+idealized 45 K. At this weak gradient the eddy momentum flux is too small to build a
+clean mid-latitude surface-westerly belt (a 22.6 K AQUAPLANET stays surface-easterly
+at midlat too — it is the gradient, not the orography), so the benchmark surface
+DYNAMIC-field PATTERN correlations are essentially unchanged: `u_sfc` corr -0.04 ->
+-0.01, `v_sfc` -0.13, `mslp` -0.19. Those also need realistic stationary-wave forcing
+(monsoons, land contrast) that the HS + bulk-moisture physics does not have. The fix
+DID help the THERMODYNAMICS / hydrological cycle: `precip` corr 0.16 -> **0.34**
+(std-ratio 0.80), `t2m` corr 0.67. (Benchmark: `--spinup 150 --avg 90 --sample-every 2`
+on WOA SST; the dense sampling is needed because the vigorous transient eddies
+otherwise swamp the weak time-mean in a short climatology.)
+
+Net: a real correctness improvement (the atmosphere had been running an unphysical
+eddy-free AXISYMMETRIC circulation) plus better precip/ITCZ — but the surface
+wind/pressure PATTERN skill at T31 remains forcing/physics-limited. Recovering observed
+surface westerlies would need higher resolution (to resolve SST fronts) and/or an
+explicit eddy-momentum / surface-stress parameterization (as the single-level model
+uses to reach `u_sfc` corr ~0.72).
+
 ## [Unreleased] - 2026-06-11g — Multi-level atmosphere: ETOPO orography
 
 Give the dinosaur atmosphere real topography (it was aquaplanet), for stationary
