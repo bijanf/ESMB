@@ -87,6 +87,15 @@ def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, balance_heat=T
     net_heat = np.clip(net_heat, -1500.0, 1500.0)
     evap = lat / 2.5e6
     fw = precip_atm - evap  # real P - E
+    if balance_heat and ocean_mask is not None:
+        # Freshwater-flux adjustment (same ocean-only balance as the heat flux):
+        # remove the net ocean-mean P-E so there is no net surface freshwater
+        # source. veros_driver already renormalizes the 3D VOLUME-mean salinity,
+        # but a net surface P-E imbalance still redistributes salt and drifts the
+        # SURFACE salinity; balancing P-E over ocean cells holds SSS steady too.
+        wf = np.broadcast_to(_WLAT, fw.shape)
+        mf = np.asarray(ocean_mask).astype(bool)
+        fw = fw - np.sum(fw[mf] * wf[mf]) / np.sum(wf[mf])
     wind_mag = np.maximum(np.sqrt(u_sfc ** 2 + v_sfc ** 2), 1.0)
     tau_x = np.clip(RHO_AIR * CD * wind_mag * u_sfc, -0.3, 0.3)
     tau_y = np.clip(RHO_AIR * CD * wind_mag * v_sfc, -0.3, 0.3)

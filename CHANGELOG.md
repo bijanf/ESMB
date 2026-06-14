@@ -20,7 +20,12 @@ unphysical `net_heat` from land "SST" values, so the all-cell mean left a residu
 cooling. FIX: balance the heat-flux adjustment over OCEAN cells only (new `ocean_mask` arg).
 VERIFIED by a 1.5-year re-run: the SST drift `17.29 -> 14.87 C` (-2.42, old) becomes
 `17.29 -> 17.50 C` (+0.21, flat); the polar over-cooling is also alleviated (`Tmin -4.7 -> -1.3 C`).
-Still bounded/finite. Remaining biases (deferred): no ocean freezing floor; weak/noisy AMOC;
+The SAME ocean-only balance is now applied to the FRESHWATER (P-E) flux: `veros_driver` already
+renormalizes the 3D volume-mean salinity, but a net surface P-E imbalance still drifted the SURFACE
+salinity (SSS 34.67 -> 34.50 and falling). With the P-E balance, SSS instead rises to ~34.77 and
+PLATEAUS (decelerating, flat from ~day 120) -- a stable equilibrium rather than an open-ended drift.
+Still bounded/finite. Remaining biases (deferred): no ocean freezing floor (now minor, Tmin ~-1.3 C);
+weak/noisy AMOC;
 AMOC streamfunction diagnostic artifact (spurious tropical extrema from barotropic-throughflow
 removal in the coarse open-box Atlantic).
 
