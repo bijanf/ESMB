@@ -51,7 +51,8 @@ def make_regridders(lat_gauss):
 _WLAT = np.cos(np.deg2rad(LAT_LIN))[:, None]
 
 
-def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, balance_heat=True):
+def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, balance_heat=True,
+                 ocean_mask=None):
     """Bulk surface fluxes on the linear grid, consistent with the atmosphere's
     own near-surface humidity and precipitation. Returns (net_heat W/m2,
     fw kg/m2/s, tau_x Pa, tau_y Pa)."""
@@ -69,11 +70,20 @@ def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, balance_heat=T
     sens, lat = np.asarray(sens), np.asarray(lat)
     net_heat = sw_net + lw_down - lw_up - sens - lat
     if balance_heat:
-        # Heat-flux adjustment: remove the area-weighted global mean so the control
-        # run has no net global ocean heating/cooling (prevents SST drift while
-        # preserving the spatial flux pattern). Analogous to the freshwater
-        # water-conservation already used for the single-level model.
-        net_heat = net_heat - np.sum(net_heat * _WLAT) / np.sum(np.broadcast_to(_WLAT, net_heat.shape))
+        # Heat-flux adjustment: remove the area-weighted mean so the control run has
+        # no net OCEAN heating/cooling (prevents global SST drift while preserving
+        # the spatial flux pattern). Balance over OCEAN cells ONLY: the heat is
+        # applied only to ocean cells (via step_ocean's mask), so including land
+        # cells -- which carry an unphysical net_heat from the land "SST" values --
+        # in the mean leaves a residual net ocean cooling and a spurious cold SST
+        # drift. Falling back to the all-cell mean only if no mask is supplied.
+        w = np.broadcast_to(_WLAT, net_heat.shape)
+        if ocean_mask is not None:
+            m = np.asarray(ocean_mask).astype(bool)
+            ocean_mean = np.sum(net_heat[m] * w[m]) / np.sum(w[m])
+        else:
+            ocean_mean = np.sum(net_heat * w) / np.sum(w)
+        net_heat = net_heat - ocean_mean
     net_heat = np.clip(net_heat, -1500.0, 1500.0)
     evap = lat / 2.5e6
     fw = precip_atm - evap  # real P - E
@@ -131,7 +141,8 @@ def main_cli():
             u_sfc = gauss_to_lin(diag["u_sfc"]); v_sfc = gauss_to_lin(diag["v_sfc"])
             t_air = gauss_to_lin(diag["t_sfc"]); q_air = gauss_to_lin(diag["q_sfc"])
             precip_a = gauss_to_lin(diag["precip"])
-            nh, fw, tx, ty = ocean_fluxes(sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a)
+            nh, fw, tx, ty = ocean_fluxes(sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
+                                          ocean_mask=omask)
             fluxes = (jnp.asarray(nh), jnp.asarray(fw), jnp.zeros_like(jnp.asarray(nh)))
             state = state._replace(ocean=ocean_interval(state.ocean, fluxes, (jnp.asarray(tx), jnp.asarray(ty))))
         diag = atm.diagnostics(dino_state)

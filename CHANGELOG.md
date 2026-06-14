@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased] - 2026-06-14b — Coupled stability verified + cold-SST-drift fix
+
+### Coupled stability — STABLE (3-year run, adversarially audited)
+A 3-year COUPLED run (`DinoAtmosphere` <-> ocean, daily coupling) stayed finite and bounded
+throughout — every metric-log row and all 6 snapshots `finite=True`, no NaN, no runaway, no
+clamp/clip-pinning. A 5-agent audit (ocean T/S, atmosphere, conservation, AMOC) returned
+STABLE-WITH-BIASES: volume-mean salinity conserved to ~0.4%, atmosphere winds equilibrated
+(|u| 61.7 +/- 5.3 m/s, trending mildly *down*), AMOC finite (+4.6 Sv upper / -3.3 Sv lower at
+26.5N, correct two-cell sign). The atmosphere alone is also stable (400-day SST-forced run,
+EKE equilibrates ~day 120, |u| bounded 47-83). The default coupled atmosphere is still the
+single-level model; `DinoAtmosphere` remains experimental.
+
+### Cold-SST-drift fix (`experiments/run_dino_coupled.py` `ocean_fluxes`)
+The audit found a cold-SST equilibrium bias (SST drifted 17.3 -> ~12.6 C over a few years,
+decelerating). CAUSE: the heat-flux adjustment removed the global-mean net heat over ALL grid
+cells (land+ocean), but `step_ocean` applies heat only to OCEAN cells; the land cells carry an
+unphysical `net_heat` from land "SST" values, so the all-cell mean left a residual net OCEAN
+cooling. FIX: balance the heat-flux adjustment over OCEAN cells only (new `ocean_mask` arg).
+VERIFIED by a 1.5-year re-run: the SST drift `17.29 -> 14.87 C` (-2.42, old) becomes
+`17.29 -> 17.50 C` (+0.21, flat); the polar over-cooling is also alleviated (`Tmin -4.7 -> -1.3 C`).
+Still bounded/finite. Remaining biases (deferred): no ocean freezing floor; weak/noisy AMOC;
+AMOC streamfunction diagnostic artifact (spurious tropical extrema from barotropic-throughflow
+removal in the coarse open-box Atlantic).
+
 ## [Unreleased] - 2026-06-14 — Multi-level atmosphere: eddy-driven surface westerlies
 
 The dinosaur atmosphere had a realistic ZONAL-MEAN circulation but its surface
