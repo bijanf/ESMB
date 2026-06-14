@@ -23,6 +23,15 @@ Focus has shifted from "does it run" to **"is it right"** — quantitative valid
 *   **AMOC**: The overturning **diagnostic** was corrected — the previously reported "~18–20 Sv" was an open-basin streamfunction artifact; the streamfunction now closes. The model's *actual* overturning is still weak (~0 Sv) and requires a multi-decade spin-up to develop.
 *   **Known biases / limitations** (quantified by the validation framework): the atmosphere is **single-level (barotropic)**, so it has no baroclinic eddies — synoptic systems are absent (sea-level-pressure and meridional-wind *pattern* correlations stay near zero) and the **tropical ITCZ is weak**, leaving precipitation too dry (−1.8 mm/day) and only weakly correlated. A modest warm/over-variable near-surface air-temperature bias also remains. These are the next calibration targets; closing them likely needs vertical structure (a multi-level or external dycore).
 
+## Multi-level atmosphere (experimental — `dinosaur` dycore)
+The single-level limitations above are being addressed with a **multi-level** spectral primitive-equation atmosphere built on Google's differentiable `dinosaur` dycore (the core behind NeuralGCM; `chronos_esm/atmos/dino_atmos.py`). Unlike the single level, it performs genuine **baroclinic instability** — growing transient synoptic eddies and a twin upper-tropospheric jet — and carries prognostic moisture for a real ITCZ.
+
+![multi-level dinosaur atmosphere](docs/figures/dino_circulation.png)
+
+*SST-coupled run on the WOA SST (time-mean of a 120-day spin-up): a ~27 m/s eddy-driven baroclinic jet (left), surface winds with synoptic eddy structure (centre), and an equatorial ITCZ (right). Regenerate with `python experiments/dino_circulation_figure.py`.*
+
+Benchmark vs ERA5/WOA18 (SST-forced): it **wins the thermodynamics/hydrology** — precipitation pattern correlation 0.16 → **0.34** with a real ITCZ, plus a better near-surface temperature — but the surface **wind/pressure pattern** skill is not yet improved. At T31 the regridded WOA SST has only a ~22.6 K equator–pole gradient (the sharp Gulf Stream / Kuroshio / ACC SST fronts are smoothed away), too weak for the resolved eddy momentum flux to build the observed mid-latitude surface westerlies (a 22.6 K aquaplanet stays surface-easterly at midlat too). Recovering those needs higher resolution or an explicit eddy-momentum parameterization. The single-level model still provides the **default** coupled atmosphere.
+
 ## Validation
 A built-in framework (`chronos_esm/validation/`) scores model output against **WOA18** (ocean T/S) and **ERA5** (near-surface atmosphere), producing area-weighted skill metrics (bias, RMSE, pattern correlation, Taylor statistics), bias maps, and zonal-mean comparisons.
 
