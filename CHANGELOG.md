@@ -24,10 +24,20 @@ The SAME ocean-only balance is now applied to the FRESHWATER (P-E) flux: `veros_
 renormalizes the 3D volume-mean salinity, but a net surface P-E imbalance still drifted the SURFACE
 salinity (SSS 34.67 -> 34.50 and falling). With the P-E balance, SSS instead rises to ~34.77 and
 PLATEAUS (decelerating, flat from ~day 120) -- a stable equilibrium rather than an open-ended drift.
-Still bounded/finite. Remaining biases (deferred): no ocean freezing floor (now minor, Tmin ~-1.3 C);
-weak/noisy AMOC;
-AMOC streamfunction diagnostic artifact (spurious tropical extrema from barotropic-throughflow
-removal in the coarse open-box Atlantic).
+Still bounded/finite.
+
+### Ocean freezing floor (`chronos_esm/ocean/veros_driver.py`)
+Seawater cannot cool below its ~ -1.8 C freezing point -- sea ice forms and its latent heat halts
+further cooling. With no prognostic sea ice, polar ocean cells could drift unphysically cold (the
+audit found Tmin -3.45 C; even after the flux fixes a polar cell still reached -3.1 C). Added a
+simple sea-ice-stub floor `temp = max(temp, 271.35 K)` after the stability clip. VERIFIED: in a
+coupled run Tmin now stays pinned at exactly -1.8 C (vs -3.1 C without it), SST/SSS unchanged, still
+finite; the single-level default model also steps cleanly (shared `step_ocean`; the floor is a safe
+output clamp). Shared by both models -- a physical improvement; the single-level polar SST may shift
+slightly toward the freezing point.
+
+Remaining biases (deferred): weak/noisy AMOC (~4.6 vs ~17 Sv) and an AMOC streamfunction diagnostic
+artifact (spurious tropical extrema from barotropic-throughflow removal in the coarse open-box Atlantic).
 
 ## [Unreleased] - 2026-06-14 — Multi-level atmosphere: eddy-driven surface westerlies
 

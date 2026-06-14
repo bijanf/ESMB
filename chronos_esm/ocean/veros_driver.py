@@ -238,6 +238,14 @@ def step_ocean(
     # when parameters are in reasonable ranges.
     salt_new = jnp.clip(salt_new, 30.0, 38.0)
     temp_new = jnp.clip(temp_new, 250.0, 320.0)
+    # Seawater freezing floor (simple sea-ice stub): water cannot cool below the
+    # ~ -1.8 C freezing point -- in the real ocean sea ice forms and its latent
+    # heat of fusion halts further cooling, holding the water at the freezing
+    # point. With no prognostic sea-ice model here, floor ocean temperature at
+    # the freezing point so high-latitude cells cannot drift unphysically cold
+    # (the deep ocean is well above this, so only cold polar surface cells are
+    # affected). T_f ~= -0.054*S; -1.8 C (271.35 K) is the ~35 psu value.
+    temp_new = jnp.maximum(temp_new, 271.35)
 
     # Enforce global-mean salinity conservation. Salt is exactly conserved in the
     # real ocean, but sea-ice brine rejection (as ice grows), the [30,38] clip,
