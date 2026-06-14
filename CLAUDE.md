@@ -90,7 +90,9 @@ WOA18+ERA5): `mslp` std-ratio 14.67 -> 2.07, bias -71.8 -> +2.9 hPa; `u_sfc` cor
 *   **File**: `chronos_esm/ocean/veros_driver.py` - Salinity sponge (lines 173-185)
 *   **File**: `chronos_esm/main.py` - River runoff routing (lines 237-255)
 *   Global 35 psu relaxation replaced with high-lat sponge (>70°, 6-month timescale)
-*   Salinity clamp widened: [25,45] → [20,42]
+*   Salinity sponge replaced global relaxation; the hard physics-stability clip in
+    `veros_driver.py` is `salt[30,38]` psu / `temp[250,320]` K (NOT [20,42] — older
+    notes were stale; verified 2026-06-14). Neither clip is hit in the 3-yr coupled run.
 *   Land runoff routed to adjacent coastal ocean cells
 
 ### Phase 4: Atmospheric damping - REVERTED to strong (see v3 overhaul)
