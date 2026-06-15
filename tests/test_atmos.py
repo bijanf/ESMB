@@ -89,10 +89,12 @@ class TestSpectral:
         f = jnp.sin(X) * jnp.sin(Y)
         # Laplacian should be -2 * f
 
-        lap = spectral.compute_laplacian(f, dx, dy)
+        # compute_laplacian/inverse_laplacian take the (static) grid width nlon,
+        # defaulting to the model grid (ATMOS_GRID.nlon=96); pass this test's width.
+        lap = spectral.compute_laplacian(f, dx, dy, nlon=nx)
 
         # Inverse
-        f_rec = spectral.inverse_laplacian(lap, dx, dy)
+        f_rec = spectral.inverse_laplacian(lap, dx, dy, nlon=nx)
 
         # Check correlation or error
         # Note: Inverse is unique up to constant (mean)

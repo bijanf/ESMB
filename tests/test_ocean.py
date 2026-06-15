@@ -77,7 +77,8 @@ class TestOceanDriver:
         state = veros_driver.init_ocean_state(nz, ny, nx)
 
         # Dummy fluxes
-        fluxes = (jnp.zeros((ny, nx)), jnp.zeros((ny, nx)))
+        # surface_fluxes is (heat, freshwater, DIC) — a 3-tuple in the current API.
+        fluxes = (jnp.zeros((ny, nx)), jnp.zeros((ny, nx)), jnp.zeros((ny, nx)))
 
         # Spatially varying wind stress to generate curl
         # tau_x = 0.1 * sin(2*pi*y/L)
@@ -102,7 +103,8 @@ class TestOceanDriver:
         dz = jnp.ones(nz) * 100.0
 
         state = veros_driver.init_ocean_state(nz, ny, nx)
-        fluxes = (jnp.zeros((ny, nx)), jnp.zeros((ny, nx)))
+        # surface_fluxes is (heat, freshwater, DIC) — a 3-tuple in the current API.
+        fluxes = (jnp.zeros((ny, nx)), jnp.zeros((ny, nx)), jnp.zeros((ny, nx)))
 
         def loss_fn(amp):
             # Varying wind stress: tau_x = amp * sin(y)

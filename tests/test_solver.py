@@ -98,41 +98,45 @@ class TestCGSolver:
         )
 
     def test_2d_poisson(self):
-        """Test 3: 2D Poisson problem - realistic PDE test."""
-        # Solve: ∇²ψ = sin(2πx)cos(2πy) on [0,1]²
-        # with periodic BC
+        """Test 3: 2D Poisson solve via a manufactured (discrete) solution.
 
+        ``solve_poisson_2d`` uses PERIODIC boundaries in x and DIRICHLET (psi=0)
+        boundaries in y — the correct setup for the ocean barotropic streamfunction
+        (zonally periodic, ψ pinned at meridional walls). We therefore verify the
+        solver against a manufactured solution built with the SAME discrete operator,
+        rather than a fully-periodic continuum solution (which would not satisfy the
+        Dirichlet-y boundary and leave a spurious ~7% boundary error).
+        """
         nx, ny = 32, 32
-        x = jnp.linspace(0, 1, nx, endpoint=False)
-        y = jnp.linspace(0, 1, ny, endpoint=False)
-        X, Y = jnp.meshgrid(x, y, indexing="ij")
+        dx, dy = 1.0 / nx, 1.0 / ny
 
-        # RHS
-        rhs = jnp.sin(2 * jnp.pi * X) * jnp.cos(2 * jnp.pi * Y)
-
-        # Analytical solution for this RHS:
-        # ψ = -sin(2πx)cos(2πy) / (2*(2π)²) = -sin(2πx)cos(2πy) / (8π²)
-        psi_analytical = (
-            -jnp.sin(2 * jnp.pi * X) * jnp.cos(2 * jnp.pi * Y) / (8 * jnp.pi**2)
+        # Smooth field: periodic in x, ~0 at the Dirichlet-y boundaries.
+        xx = jnp.arange(nx)
+        yy = jnp.arange(ny)
+        psi_exact = (
+            jnp.sin(2 * jnp.pi * xx / nx)[None, :]
+            * jnp.sin(jnp.pi * (yy + 0.5) / ny)[:, None]
         )
 
-        dx = 1.0 / nx
-        dy = 1.0 / ny
+        # Discrete Laplacian matching the solver: roll in x (periodic),
+        # zero-pad in y (Dirichlet). rhs = ∇²(psi_exact).
+        def disc_lap(p):
+            d2x = (jnp.roll(p, 1, axis=1) - 2 * p + jnp.roll(p, -1, axis=1)) / dx**2
+            pp = jnp.pad(p, ((1, 1), (0, 0)), mode="constant", constant_values=0)
+            d2y = (pp[:-2, :] - 2 * p + pp[2:, :]) / dy**2
+            return d2x + d2y
 
-        # Solve using our CG Poisson solver
-        psi_numerical, info = solve_poisson_2d(rhs, dx, dy, max_iter=500, tol=1e-6)
+        rhs = disc_lap(psi_exact)
 
-        # The solution is unique up to a constant, so normalize both
-        psi_numerical = psi_numerical - jnp.mean(psi_numerical)
-        psi_analytical = psi_analytical - jnp.mean(psi_analytical)
+        # The solver should recover psi_exact (the operator is SPD / non-singular
+        # under Dirichlet-y, so the solution is unique — no mean removal needed).
+        psi_numerical, info = solve_poisson_2d(rhs, dx, dy, max_iter=2000, tol=1e-10)
 
-        # Check relative error
-        rel_error = jnp.linalg.norm(psi_numerical - psi_analytical) / jnp.linalg.norm(
-            psi_analytical
+        rel_error = jnp.linalg.norm(psi_numerical - psi_exact) / jnp.linalg.norm(
+            psi_exact
         )
 
-        assert rel_error < 0.01  # 1% relative error
-        # Note: May not formally "converge" to tolerance but solution is accurate
+        assert rel_error < 1e-3  # solver recovers the manufactured solution
 
         print(
             f"✓ Test 3 passed: 2D Poisson - converged in "
