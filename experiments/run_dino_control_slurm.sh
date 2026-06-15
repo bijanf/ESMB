@@ -56,6 +56,14 @@ if [ $? -ne 0 ]; then
   echo "GPU preflight FAILED -- aborting." ; exit 1
 fi
 
+# --- data cache preflight: compute nodes have no internet, so WOA18 + ETOPO1
+# must already be staged in ~/.cache/chronos_esm. Stage them on a LOGIN node with:
+#   python experiments/prefetch_data.py
+python experiments/prefetch_data.py --check
+if [ $? -ne 0 ]; then
+  echo "Datasets not staged -- run 'python experiments/prefetch_data.py' on a login node first." ; exit 1
+fi
+
 # --- auto-resume from the latest checkpoint unless --resume was given ---------
 ARGS="$@"
 if [[ "$ARGS" != *"--resume"* ]]; then

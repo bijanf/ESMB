@@ -2,13 +2,15 @@
 Integration tests for the full coupled model.
 """
 
+import os
 import sys
 from pathlib import Path
 
 import jax  # noqa: F401
 import jax.numpy as jnp
 import numpy as np  # noqa: F401
-import pytest  # noqa: F401
+import pooch
+import pytest
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -16,6 +18,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from chronos_esm import main  # noqa: E402
 from chronos_esm.atmos import dynamics  # noqa: E402
 from chronos_esm.coupler import state as coupled_state  # noqa: E402
+
+# init_model() pulls the ~900 MB ETOPO bathymetry; skip if it isn't cached (e.g. in
+# CI). Stage it with `python experiments/prefetch_data.py` to run these tests.
+pytestmark = pytest.mark.skipif(
+    not os.path.exists(os.path.join(pooch.os_cache("chronos_esm"), "etopo1.nc")),
+    reason="ETOPO1 (~900 MB) not cached; run experiments/prefetch_data.py to enable",
+)
 
 
 class TestIntegration:

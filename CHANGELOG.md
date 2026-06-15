@@ -14,6 +14,13 @@
   3-tuple; the spectral Laplacian helpers take the grid width `nlon`; the CG Poisson test
   now uses a manufactured solution matching the solver's periodic-x / Dirichlet-y BC.
 - Removed dead `chronos_esm/atmos/jcm_adapter.py`; corrected the AMOC dashboard caption.
+- **Cluster data staging**: datasets (WOA18, ETOPO1) are not committed — they download
+  via `pooch` to `~/.cache/chronos_esm`. New `experiments/prefetch_data.py` stages them on
+  an internet-connected login node (`--check`/`--era5`/`--build`); the dino SLURM script
+  gained a cache guard; README got a "Running on a cluster" + "Data" section.
+- **CI test reliability**: the `init_model`-based tests pull the ~900 MB ETOPO and were
+  stalling CI on the cacheless runner. They now auto-skip when ETOPO isn't cached (run
+  locally or after `prefetch_data.py`), so CI stays fast and green.
 
 ### Dinosaur ↔ ocean CONTROL-RUN harness (`experiments/run_dino_coupled.py`)
 Upgraded the 30-day experiment into a checkpointing, resumable, scorable control harness:

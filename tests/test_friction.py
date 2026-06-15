@@ -5,8 +5,19 @@ import jax.numpy as jnp
 import numpy as np
 
 sys.path.append(os.getcwd())
+import pooch  # noqa: E402
+import pytest  # noqa: E402
+
 from chronos_esm import main, data
 from chronos_esm.config import DT_OCEAN
+
+# init_model() pulls the ~900 MB ETOPO bathymetry; skip if it isn't cached (e.g. in
+# CI). Stage it with `python experiments/prefetch_data.py` to run this test.
+pytestmark = pytest.mark.skipif(
+    not os.path.exists(os.path.join(pooch.os_cache("chronos_esm"), "etopo1.nc")),
+    reason="ETOPO1 (~900 MB) not cached; run experiments/prefetch_data.py to enable",
+)
+
 
 def test_friction():
     print("Running Friction Test...")

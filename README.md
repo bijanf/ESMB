@@ -159,6 +159,36 @@ tail -f logs/century_v2_*.log
 ```
 Checkpoints are written yearly to `outputs/century_physics/`; resume with `--resume year_NNN`.
 
+## Data
+The model's input datasets are **not** committed to the repo — they download
+automatically on first use (via `pooch`) and cache to **`~/.cache/chronos_esm/`**:
+
+| Dataset | Used for | Size | Source |
+|---|---|---:|---|
+| WOA18 T+S (5°) | ocean initial conditions + validation | ~8 MB | NOAA NCEI |
+| ETOPO1 bathymetry | ocean land mask + atmosphere orography | ~900 MB | SOCIB THREDDS |
+| ERA5 monthly means | *validation only* (`--era5`) | ~MBs | Copernicus CDS (needs `~/.cdsapirc`) |
+
+## Running on a cluster (HPC / SLURM)
+Compute nodes usually have **no internet**, so stage the data **once on a login
+node** (which does), then submit — the job reads from the shared `~/.cache`:
+```bash
+git clone https://github.com/bijanf/ESMB.git && cd ESMB
+python -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+
+# 1) stage datasets on the LOGIN node (downloads WOA18 + ETOPO1 to ~/.cache/chronos_esm):
+python experiments/prefetch_data.py            # add --era5 to also stage validation data
+#    optional full preflight (build the model from cached data before queuing):
+python experiments/prefetch_data.py --build
+
+# 2) submit the dinosaur control run (GPU; auto-resumes across back-to-back 23 h jobs):
+sbatch experiments/run_dino_control_slurm.sh --years 100
+```
+The SLURM script runs a JAX-GPU preflight and a `prefetch_data.py --check` cache
+guard, so a job started without staged data fails fast with instructions rather
+than hanging on a blocked download. Edit the `#SBATCH` account/partition lines for
+your site (defaults: `--account=poem --partition=gpu`).
+
 ## Citing
 If you use Chronos-ESM in academic work, please cite it via [`CITATION.cff`](CITATION.cff)
 (GitHub renders a "Cite this repository" button from it).
