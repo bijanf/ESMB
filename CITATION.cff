@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use Chronos-ESM in your research, please cite it as below."
+title: "Chronos-ESM: a differentiable, GPU-ready Earth System Model"
+abstract: >-
+  Chronos-ESM is a fully differentiable, coupled Earth System Model
+  (ocean, atmosphere, land, sea ice) implemented in JAX at T31 (~3.75°)
+  resolution, designed for high-performance climate simulation and
+  gradient-based tuning on GPU/TPU.
+type: software
+authors:
+  - family-names: Fallah
+    given-names: Bijan
+    email: bijan.fallah@gmail.com
+version: "0.1.0"
+date-released: "2026-06-15"
+license: Apache-2.0
+repository-code: "https://github.com/bijanf/ESMB"
+url: "https://github.com/bijanf/ESMB"
+keywords:
+  - earth system model
+  - climate model
+  - JAX
+  - differentiable programming
+  - ocean
+  - atmosphere
+  - spectral dynamics

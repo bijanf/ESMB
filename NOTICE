@@ -1,0 +1,12 @@
+Chronos-ESM
+Copyright 2026 Bijan Fallah
+
+This product includes software developed by Bijan Fallah.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This software builds on the following third-party open-source projects
+(each under its own license):
+  - dinosaur-dycore (Google Research) — Apache License 2.0
+  - JAX (Google) — Apache License 2.0
+  - NumPy, SciPy, xarray, netCDF4 — BSD-3-Clause / permissive

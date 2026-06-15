@@ -1,7 +1,23 @@
-# Chronos-ESM
+<p align="center">
+  <img src="docs/figures/logo.svg" alt="Chronos-ESM" width="440">
+</p>
 
-**Proprietary Earth System Model**
-*Copyright (c) 2026 Bijan Fallah. All Rights Reserved.*
+<p align="center">
+  <b>A differentiable, GPU-ready Earth System Model</b> — research preview (v0.1.0)<br>
+  <i>Copyright &copy; 2026 Bijan Fallah · Licensed under <a href="LICENSE">Apache&nbsp;2.0</a></i>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-3b82f6.svg"></a>
+  <img alt="status: research preview" src="https://img.shields.io/badge/status-research%20preview-f59e0b.svg">
+  <img alt="resolution: T31" src="https://img.shields.io/badge/resolution-T31%20(~3.75%C2%B0)-06b6d4.svg">
+  <img alt="built with JAX" src="https://img.shields.io/badge/built%20with-JAX-22d3ee.svg">
+</p>
+
+> ⚠️ **Research preview.** This is an early, actively-developed model. Several
+> components are validated against observations while others are explicitly
+> experimental or carry known biases (see **Project Status** and **Validation**
+> below). Read the documented limitations before using results scientifically.
 
 ## Overview
 Chronos-ESM is a fully differentiable, coupled Earth System Model (Ocean, Atmosphere, Land, Ice) implemented in **JAX**. It is designed for high-performance climate simulation and data assimilation on consumer hardware (GPU/TPU).
@@ -101,7 +117,10 @@ _(Time series appears once a multi-year run writes yearly checkpoints.)_
 <!-- VALIDATION:END -->
 
 ## Installation
-1.  Clone the repository (Private Access Only).
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/bijanf/ESMB.git && cd ESMB
+    ```
 2.  Install dependencies:
     ```bash
     python -m venv venv && source venv/bin/activate
@@ -119,5 +138,15 @@ tail -f logs/century_v2_*.log
 ```
 Checkpoints are written yearly to `outputs/century_physics/`; resume with `--resume year_NNN`.
 
+## Citing
+If you use Chronos-ESM in academic work, please cite it via [`CITATION.cff`](CITATION.cff)
+(GitHub renders a "Cite this repository" button from it).
+
+## Contributing
+Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev setup,
+tests, and linters, and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for community norms.
+
 ## License
-**Strictly Proprietary**. No redistribution or use without explicit written permission from Bijan Fallah.
+Licensed under the **Apache License 2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+You may use, modify, and redistribute it under those terms; it is provided "as is",
+without warranty.
