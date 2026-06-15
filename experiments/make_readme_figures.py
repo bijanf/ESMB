@@ -189,7 +189,11 @@ def main():
     if amoc_max is not None:
         lines.append("### AMOC (Atlantic overturning)")
         lines.append(f"Model max {amoc_max:.1f} Sv vs RAPID ~{obs.AMOC_RAPID['value']:.0f} Sv "
-                     "at 26.5N. (A multi-decade spin-up is needed for a realistic AMOC.)")
+                     "at 26.5N. The AMOC is weak/noisy and **not** spin-up-limited; the "
+                     "root cause is a spurious net meridional transport in the ocean "
+                     "velocity field (mass not conserved at basin scale), so a clean "
+                     "overturning streamfunction is unattainable until that ocean-dynamics "
+                     "issue is fixed (see Project Status).")
         lines.append("![AMOC streamfunction](docs/figures/amoc_streamfunction.png)")
         if amoc_ts:
             lines.append("![AMOC time series](docs/figures/amoc_timeseries.png)")
