@@ -1,19 +1,34 @@
-"""Coupled run: dinosaur multi-level atmosphere <-> Chronos ocean (Phase 2b).
+"""Coupled control run: dinosaur multi-level atmosphere <-> Chronos ocean.
 
 Sequential (lagged) coupling at a fixed interval:
   ocean SST  --regrid lin->Gauss-->  DinoAtmosphere.step(SST)  -->  surface winds/T
   surface fields --regrid Gauss->lin--> bulk fluxes (wind stress, SW/LW/sensible/
   latent, net heat) --> step_ocean for the interval.
 
-The atmosphere is the SST-coupled dinosaur dycore (chronos_esm/atmos/dino_atmos).
-Moisture is a fixed-RH boundary-layer closure for the surface latent heat (the
-prognostic moisture cycle / precip-ITCZ is Phase 3), so the ocean heat budget is
-complete enough to be stable while the dynamics are fully baroclinic.
+The atmosphere is the SST-coupled dinosaur dycore (chronos_esm/atmos/dino_atmos),
+which performs genuine baroclinic instability and carries prognostic moisture.
 
-    python experiments/run_dino_coupled.py --days 30
+This script is the CONTROL-RUN harness: it checkpoints (ocean state + dinosaur modal
+state) every `--ckpt-every-days`, resumes cleanly from any checkpoint, and writes a
+TIME-MEAN of the atmosphere's surface fields (u_sfc/v_sfc/t2m/precip/mslp) into the
+saved state so the existing validation dashboard
+(experiments/make_readme_figures.py / validate_control.py) scores the *dinosaur*
+atmosphere rather than the unused single-level fields.
+
+    # fresh 100-year control run, checkpoint yearly:
+    python experiments/run_dino_coupled.py --years 100
+    # resume from year 42 (day 15330) and continue:
+    python experiments/run_dino_coupled.py --years 100 --resume 15330
+    # quick smoke test (20 days, checkpoint every 7):
+    python experiments/run_dino_coupled.py --days 20 --ckpt-every-days 7
+
+    # score a finished run against WOA18 + ERA5:
+    python experiments/make_readme_figures.py "outputs/dino_control/state_d*.nc" \
+        --label "dino control"
 """
 import argparse
 import os
+import re
 import sys
 
 import jax
@@ -25,12 +40,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from chronos_esm import main, io  # noqa: E402
 from chronos_esm.ocean import veros_driver  # noqa: E402
 from chronos_esm.atmos import physics as aphys  # noqa: E402
-from chronos_esm.atmos.dino_atmos import DinoAtmosphere  # noqa: E402
+from chronos_esm.atmos.dino_atmos import (  # noqa: E402
+    DinoAtmosphere, save_state as dino_save, load_state as dino_load)
 from chronos_esm.config import (OCEAN_GRID, OCEAN_DZ, EARTH_RADIUS, DT_OCEAN,  # noqa: E402
                                 ALBEDO_OCEAN)
 
 RHO_AIR, CD = 1.2, 1.3e-3
 LAT_LIN = np.linspace(-90, 90, OCEAN_GRID.nlat)
+DAYS_PER_YEAR = 365
 
 
 def make_regridders(lat_gauss):
@@ -102,26 +119,73 @@ def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, balance_heat=T
     return net_heat, fw, tau_x, tau_y
 
 
+def _ckpt_paths(outdir, day):
+    """(netcdf, dino-npz) checkpoint paths for an absolute simulation day."""
+    base = os.path.join(outdir, f"state_d{day:06d}")
+    return base + ".nc", base + "_dino.npz"
+
+
+def _resume_day(resume_arg, outdir):
+    """Resolve a --resume value (an integer day, or a .nc path) to an absolute day."""
+    if resume_arg is None:
+        return None
+    if os.path.exists(resume_arg) and resume_arg.endswith(".nc"):
+        m = re.search(r"state_d(\d+)\.nc$", os.path.basename(resume_arg))
+        if not m:
+            raise ValueError(f"cannot parse day from {resume_arg}")
+        return int(m.group(1))
+    return int(resume_arg)  # treat as a day number
+
+
 def main_cli():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--years", type=float, default=5.0, help="total simulated years")
+    ap.add_argument("--days", type=int, default=0,
+                    help="total simulated days (overrides --years if > 0; for smoke tests)")
     ap.add_argument("--interval", type=int, default=1, help="coupling interval [days]")
-    ap.add_argument("--save", default="outputs/dino_coupled/final_state.nc")
+    ap.add_argument("--ckpt-every-days", type=int, default=DAYS_PER_YEAR,
+                    help="checkpoint cadence [days] (default 365 = yearly)")
+    ap.add_argument("--outdir", default="outputs/dino_control")
+    ap.add_argument("--resume", default=None,
+                    help="resume from an absolute day number or a state_d*.nc path")
     args = ap.parse_args()
 
+    os.makedirs(args.outdir, exist_ok=True)
+    interval = args.interval
+    # absolute TOTAL length of the run (a resumed job continues *toward* this, as in
+    # run_century_physics: `--years 200 --resume <day>` runs to year 200, not +200).
+    end_day = args.days if args.days > 0 else int(round(args.years * DAYS_PER_YEAR))
+
+    # --- build the model + dinosaur atmosphere -----------------------------------
     state = main.init_model(ocean_ic="woa")
     ocean_mask_3d, surface_mask = main.ocean_masks(nz=state.ocean.u.shape[0])
     atm = DinoAtmosphere()
     lin_to_gauss, gauss_to_lin = make_regridders(atm.lat_deg)
-    sst0_g = lin_to_gauss(np.asarray(state.ocean.temp[0]))   # WOA SST on the dino grid
-    dino_state = atm.initial_state(sst0_g)                    # near-equilibrium init
 
-    # ocean grid metrics (as in main.py)
+    start_day = _resume_day(args.resume, args.outdir)
+    if start_day is not None:
+        nc, npz = _ckpt_paths(args.outdir, start_day)
+        if not (os.path.exists(nc) and os.path.exists(npz)):
+            raise FileNotFoundError(f"resume checkpoint missing: {nc} / {npz}")
+        resumed = io.load_state_from_netcdf(nc)
+        state = state._replace(ocean=resumed.ocean)   # real ocean from the checkpoint
+        dino_state = dino_load(npz)                    # dinosaur modal state
+        print(f"Resumed from day {start_day} ({start_day / DAYS_PER_YEAR:.2f} yr): {nc}")
+    else:
+        start_day = 0
+        sst0_g = lin_to_gauss(np.asarray(state.ocean.temp[0]))   # WOA SST on the dino grid
+        dino_state = atm.initial_state(sst0_g)                    # near-equilibrium init
+
+    if start_day >= end_day:
+        print(f"start day {start_day} >= target {end_day}; nothing to do.")
+        return
+
+    # --- ocean grid metrics (as in main.py) --------------------------------------
     dy_ocn = (np.pi * EARTH_RADIUS) / OCEAN_GRID.nlat
     cos_lat_ocn = np.maximum(np.cos(np.deg2rad(LAT_LIN)), 0.05)
     dx_ocn = jnp.asarray((2 * np.pi * EARTH_RADIUS * cos_lat_ocn[:, None]) / OCEAN_GRID.nlon)
     dz_ocn = jnp.asarray(OCEAN_DZ)
-    subs = int(round(86400.0 * args.interval / DT_OCEAN))  # ocean substeps per interval
+    subs = int(round(86400.0 * interval / DT_OCEAN))  # ocean substeps per interval
 
     @jax.jit
     def ocean_interval(ocean, fluxes, wind):
@@ -133,39 +197,95 @@ def main_cli():
         oc, _ = jax.lax.scan(body, ocean, None, length=subs)
         return oc
 
+    omask = np.asarray(surface_mask).astype(bool)
     wlat = np.cos(np.deg2rad(LAT_LIN))[:, None]
+
     def gmean(f):
         f = np.asarray(f); w = np.broadcast_to(wlat, f.shape)
-        m = np.isfinite(f)  # area-weight only over valid (e.g. ocean) cells
-        return float(np.sum(f[m] * w[m]) / np.sum(w[m]))
+        ok = np.isfinite(f)  # area-weight only over valid (e.g. ocean) cells
+        return float(np.sum(f[ok] * w[ok]) / np.sum(w[ok]))
 
-    print(f"Coupled dinosaur<->ocean: {args.days} days, interval {args.interval}d ({subs} ocean substeps)")
-    omask = np.asarray(surface_mask).astype(bool)
-    for d in range(args.days // args.interval + 1):
+    # --- running TIME-MEAN accumulator of surface fields (for scoring) -----------
+    acc_keys = ("u_sfc", "v_sfc", "t2m", "q", "precip", "mslp")
+
+    def new_acc():
+        return {k: np.zeros((OCEAN_GRID.nlat, OCEAN_GRID.nlon)) for k in acc_keys}, 0
+
+    acc, nacc = new_acc()
+
+    def save_checkpoint(day):
+        """Persist ocean+modal state and inject the windowed time-mean atmosphere
+        surface fields so the validation dashboard scores the dinosaur atmosphere."""
+        nc, npz = _ckpt_paths(args.outdir, day)
+        n = max(nacc, 1)
+        mslp = np.maximum(acc["mslp"] / n, 1.0)
+        atmos_score = state.atmos._replace(
+            temp=jnp.asarray(acc["t2m"] / n),
+            u=jnp.asarray(acc["u_sfc"] / n),
+            v=jnp.asarray(acc["v_sfc"] / n),
+            q=jnp.asarray(acc["q"] / n),
+            ln_ps=jnp.log(jnp.asarray(mslp)),            # mslp = exp(ln_ps) with phi_s=0
+            phi_s=jnp.zeros_like(jnp.asarray(mslp)),
+        )
+        fluxes_score = state.fluxes._replace(precip=jnp.asarray(acc["precip"] / n))
+        score_state = state._replace(atmos=atmos_score, fluxes=fluxes_score,
+                                     time=float(day * 86400))
+        io.save_state_to_netcdf(score_state, nc)
+        dino_save(dino_state, npz)
+        print(f"  [checkpoint] day {day} ({day / DAYS_PER_YEAR:.2f} yr) "
+              f"-> {nc} (+{npz}); time-mean of {n} samples", flush=True)
+
+    print(f"Coupled dinosaur<->ocean control run: days {start_day}->{end_day} "
+          f"(interval {interval}d, {subs} ocean substeps/interval, "
+          f"checkpoint every {args.ckpt_every_days}d)", flush=True)
+
+    day = start_day
+    n_intervals = (end_day - start_day) // interval
+    for it in range(1, n_intervals + 1):
         sst_lin = np.asarray(state.ocean.temp[0])                       # K
-        if d > 0:
-            sst_g = lin_to_gauss(sst_lin)
-            dino_state = atm.step(dino_state, sst_g, n_days=args.interval)
-            diag = atm.diagnostics(dino_state)
-            u_sfc = gauss_to_lin(diag["u_sfc"]); v_sfc = gauss_to_lin(diag["v_sfc"])
-            t_air = gauss_to_lin(diag["t_sfc"]); q_air = gauss_to_lin(diag["q_sfc"])
-            precip_a = gauss_to_lin(diag["precip"])
-            nh, fw, tx, ty = ocean_fluxes(sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
-                                          ocean_mask=omask)
-            fluxes = (jnp.asarray(nh), jnp.asarray(fw), jnp.zeros_like(jnp.asarray(nh)))
-            state = state._replace(ocean=ocean_interval(state.ocean, fluxes, (jnp.asarray(tx), jnp.asarray(ty))))
+        sst_g = lin_to_gauss(sst_lin)
+        dino_state = atm.step(dino_state, sst_g, n_days=interval)
         diag = atm.diagnostics(dino_state)
-        uup = diag["u"][atm.layers // 4].mean(axis=0); lat = atm.lat_deg
-        sst_oc = np.where(omask, sst_lin, np.nan)
-        jet = float(uup[(np.abs(lat) > 30) & (np.abs(lat) < 60)].mean())
-        finite = np.isfinite(diag["u"]).all() and np.isfinite(np.asarray(state.ocean.temp)).all()
-        print(f"  day {d*args.interval:3d}: SST {gmean(sst_oc)-273.15:5.2f}C  |u|max {np.abs(diag['u']).max():5.1f}  "
-              f"midlat-jet {jet:+5.1f}  |curr|max {float(np.abs(np.asarray(state.ocean.u)).max()):.3f}  "
-              f"finite {finite}", flush=True)
+        u_sfc = gauss_to_lin(diag["u_sfc"]); v_sfc = gauss_to_lin(diag["v_sfc"])
+        t_air = gauss_to_lin(diag["t_sfc"]); q_air = gauss_to_lin(diag["q_sfc"])
+        precip_a = gauss_to_lin(diag["precip"]); mslp_a = gauss_to_lin(diag["mslp"])
+        nh, fw, tx, ty = ocean_fluxes(sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
+                                      ocean_mask=omask)
+        fluxes = (jnp.asarray(nh), jnp.asarray(fw), jnp.zeros_like(jnp.asarray(nh)))
+        state = state._replace(ocean=ocean_interval(state.ocean,
+                                                    fluxes, (jnp.asarray(tx), jnp.asarray(ty))))
+        day += interval
 
-    os.makedirs(os.path.dirname(args.save), exist_ok=True)
-    io.save_state_to_netcdf(state, args.save)
-    print(f"saved ocean state -> {args.save}")
+        # accumulate the windowed time-mean (linear grid) for scoring
+        for k, val in (("u_sfc", u_sfc), ("v_sfc", v_sfc), ("t2m", t_air),
+                       ("q", q_air), ("precip", precip_a), ("mslp", mslp_a)):
+            acc[k] += np.asarray(val)
+        nacc += 1
+
+        finite = bool(np.isfinite(diag["u"]).all()
+                      and np.isfinite(np.asarray(state.ocean.temp)).all())
+        if (day % 30 == 0) or (it == n_intervals) or (not finite):
+            sst_oc = np.where(omask, sst_lin, np.nan)
+            uup = diag["u"][atm.layers // 4].mean(axis=0); lat = atm.lat_deg
+            jet = float(uup[(np.abs(lat) > 30) & (np.abs(lat) < 60)].mean())
+            sss_oc = np.where(omask, np.asarray(state.ocean.salt[0]), np.nan)
+            print(f"  day {day:6d} ({day / DAYS_PER_YEAR:6.2f} yr): "
+                  f"SST {gmean(sst_oc) - 273.15:5.2f}C  SSS {gmean(sss_oc):5.2f}  "
+                  f"|u|max {np.abs(diag['u']).max():5.1f}  midlat-jet {jet:+5.1f}  "
+                  f"|curr|max {float(np.abs(np.asarray(state.ocean.u)).max()):.3f}  "
+                  f"finite {finite}", flush=True)
+        if not finite:
+            nc, _ = _ckpt_paths(args.outdir, day)
+            io.save_state_to_netcdf(state, nc.replace(".nc", "_NAN.nc"))
+            raise FloatingPointError(f"non-finite state at day {day}; emergency dump written")
+
+        if (day % args.ckpt_every_days == 0) or (it == n_intervals):
+            save_checkpoint(day)
+            acc, nacc = new_acc()
+
+    print(f"done: ran to day {day} ({day / DAYS_PER_YEAR:.2f} yr). "
+          f"Score with:\n  python experiments/make_readme_figures.py "
+          f"'{args.outdir}/state_d*.nc' --label 'dino control'")
 
 
 if __name__ == "__main__":
