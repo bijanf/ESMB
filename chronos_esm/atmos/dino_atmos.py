@@ -66,7 +66,15 @@ def save_state(state, path):
 
 
 def load_state(path):
-    """Load a dinosaur modal State saved by `save_state`."""
+    """Load a dinosaur modal State saved by `save_state`.
+
+    NOTE: ``sim_time`` is restored as None (the dycore's convention for an unset
+    clock), NOT as the saved scalar. The ImEx integrator forms tendencies with
+    sim_time=None and adds them to the state via tree_map; a *scalar* sim_time on
+    the state would mismatch (array + None) and break the step. Absolute run time
+    is tracked by the caller (the run harness counts days), so nothing is lost.
+    The saved sim_time remains in the .npz for reference.
+    """
     d = np.load(path, allow_pickle=True)
     return pe.State(
         vorticity=jnp.asarray(d["vorticity"]),
@@ -74,7 +82,7 @@ def load_state(path):
         temperature_variation=jnp.asarray(d["temperature_variation"]),
         log_surface_pressure=jnp.asarray(d["log_surface_pressure"]),
         tracers={"specific_humidity": jnp.asarray(d["specific_humidity"])},
-        sim_time=jnp.asarray(d["sim_time"]))
+        sim_time=None)
 
 
 def _qsat(temp_K, p_Pa):
