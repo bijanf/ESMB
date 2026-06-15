@@ -41,8 +41,11 @@ export JAX_ENABLE_X64=True
 # NVIDIA Libs
 export LD_LIBRARY_PATH=$(python -c "import os; import nvidia; print(':'.join([os.path.join(nvidia.__path__[0], d, 'lib') for d in os.listdir(nvidia.__path__[0]) if os.path.isdir(os.path.join(nvidia.__path__[0], d, 'lib'))]))"):$LD_LIBRARY_PATH
 
-OUTDIR=outputs/dino_control
+# Model output (checkpoints) go to SCRATCH, never home. PIK default is /p/tmp/$USER;
+# override with CHRONOS_OUTDIR for another site/path.
+OUTDIR="${CHRONOS_OUTDIR:-/p/tmp/$USER/dino_control}"
 mkdir -p "$OUTDIR" logs
+echo "Output dir (scratch): $OUTDIR"
 
 echo "Starting Chronos-ESM dinosaur<->ocean control run at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
@@ -80,6 +83,11 @@ if [[ "$ARGS" != *"--resume"* ]]; then
   fi
 fi
 
+# write checkpoints to scratch (unless the caller already set --outdir)
+if [[ "$ARGS" != *"--outdir"* ]]; then
+  ARGS="$ARGS --outdir $OUTDIR"
+fi
+
 stdbuf -o0 -e0 python experiments/run_dino_coupled.py $ARGS
 
-echo "Run finished at $(date)"
+echo "Run finished at $(date). Checkpoints in: $OUTDIR"

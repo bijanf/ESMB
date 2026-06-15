@@ -189,10 +189,14 @@ python experiments/prefetch_data.py --build
 
 # 2) submit the dinosaur control run (GPU; auto-resumes across back-to-back 23 h jobs):
 sbatch experiments/run_dino_control_slurm.sh --years 100
+# checkpoints are written to SCRATCH, not home (PIK default /p/tmp/$USER/dino_control;
+# override with CHRONOS_OUTDIR=/your/scratch/path). Score them with:
+python experiments/make_readme_figures.py "/p/tmp/$USER/dino_control/state_d*.nc" --label "dino control"
 ```
 The SLURM script runs a JAX-GPU preflight and a `prefetch_data.py --check` cache
 guard, so a job started without staged data fails fast with instructions rather
-than hanging on a blocked download. **Adjust for your site:** the `#SBATCH`
+than hanging on a blocked download. It writes model output to **scratch**
+(`$CHRONOS_OUTDIR`, default `/p/tmp/$USER/dino_control`) — never home. **Adjust for your site:** the `#SBATCH`
 account/partition/qos lines (defaults `--account=poem --partition=gpu
 --qos=gpumedium`) and the `module load` names. If your `$HOME` quota is small, set
 `export XDG_CACHE_HOME=/path/on/shared/scratch` **before both** `prefetch_data.py`
