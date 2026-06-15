@@ -22,9 +22,10 @@
 #   # explicit resume (overrides auto):
 #   sbatch experiments/run_dino_control_slurm.sh --years 200 --resume 36500
 
-# Load necessary modules
-module load anaconda
-module load cuda/12.3.1
+# Load necessary modules (PIK names; adjust for your site -- `module avail`).
+# python/3.12.3 must match the Python the venv was created with; cuda matches jax[cuda12].
+module load python/3.12.3
+module load cuda/12.6.0
 
 # Activate Virtual Environment
 # NOTE: this needs a GPU JAX build (requirements.txt installs CPU JAX). One-time setup:
