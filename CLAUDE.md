@@ -29,14 +29,25 @@ Decision + status (2026-06-11):
     and reproduces the textbook baroclinic jet (twin ~22 m/s upper-trop midlat
     westerlies + surface trades) from isothermal rest. See
     `docs/figures/dino_held_suarez_jet.png`. `build_held_suarez_model()` is reusable.
-*   **TODO (Phases 2-4):** wrap dinosaur as a chronos atmosphere module; couple to
-    the ocean with SST-aware forcing + bulk surface fluxes (reuse
-    `atmos/physics.compute_surface_fluxes`); add moisture + large-scale
-    condensation for the ITCZ; persist the modal state in `io.py`; extract surface
-    fields (u10/t2m/mslp/precip) for the validation dashboard; benchmark vs ERA5.
-    dinosaur state is modal (vorticity/divergence/temperature_variation/
-    log_surface_pressure); u,v via `pe.compute_diagnostic_state(state, coords)`
-    `.cos_lat_u[0,1]/cos(lat)`; grid is Gaussian (coords.horizontal.nodal_mesh).
+*   **CONTROL-RUN HARNESS (2026-06-15, done):** `experiments/run_dino_coupled.py` is now a
+    checkpointing/resumable control harness: `--years/--days` (absolute total), `--resume <day>`,
+    `--ckpt-every-days`; each checkpoint writes `outputs/dino_control/state_d<DAY>.nc` (ocean via
+    `io`) + `state_d<DAY>_dino.npz` (modal via `dino_atmos.save_state`). It injects a TIME-MEAN of
+    the atmosphere surface fields into `state.atmos`/`state.fluxes` (mslp→`ln_ps=log(mslp)`,
+    `phi_s=0`) so the existing dashboard (`make_readme_figures.py`/`validate_control.canonical_fields`
+    reads `atmos.temp/u/v/ln_ps/phi_s`, `fluxes.precip`) scores the DINOSAUR atmosphere, not the
+    stale single-level fields. SLURM: `experiments/run_dino_control_slurm.sh` (GPU, account `poem`,
+    JAX-GPU preflight, auto-resume across 23h jobs). **GOTCHA fixed:** `dino_atmos.load_state` must
+    restore `sim_time=None` (the dycore convention) — a scalar sim_time breaks the ImEx tendency add
+    (`array + None`) on the FIRST resumed step. Resume restores prognostic state exactly; diagnostic
+    fields (ocean psi warm-start, rho, w, DIC) are recomputed/reset -> state-complete but not
+    bit-reproducible (~0.03 K/week, negligible). NOTE the dino atmos is still NOT wired into
+    `main.py:step_coupled`; the standalone harness IS the dino control-run path.
+*   **REMAINING TODO:** benchmark a long dino control run vs ERA5 (precip ITCZ wins; surface
+    wind/pressure pattern limited by the weak T31 SST gradient -- see EDDY note + README).
+    dinosaur state is modal (vorticity/divergence/temperature_variation/log_surface_pressure);
+    u,v via `pe.compute_diagnostic_state(state, coords)` `.cos_lat_u[0,1]/cos(lat)`; grid is
+    Gaussian (coords.horizontal.nodal_mesh).
 *   **EDDY/SURFACE-WESTERLY FIX (2026-06-14, done):** the dino atmosphere was
     running a perfectly AXISYMMETRIC (eddy-free) circulation -> no eddy momentum
     flux -> no mid-latitude surface westerlies (`u_sfc` pattern corr ~0). Cause:

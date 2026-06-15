@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased] - 2026-06-15 — Public research preview + dinosaur control-run harness
+
+### Research-preview publication prep
+- **Relicensed to Apache-2.0** (the previous `LICENSE` was a placeholder "MIT — Just
+  Kidding / All Rights Reserved"); added `NOTICE`, `CITATION.cff`, `CONTRIBUTING.md`,
+  `CODE_OF_CONDUCT.md`. README reframed from "proprietary / private access only" to a
+  public research preview with a minimalist SVG logo (`docs/figures/logo.svg`) + badges.
+- **CI** now runs on push/PR: the `pytest` suite is the hard gate (34 tests green); the
+  black/isort/flake8 style checks are advisory (non-blocking) and scoped to `chronos_esm`
+  + `tests` until a dedicated formatting pass clears the large historical lint debt.
+- **Fixed 4 stale tests** (not code regressions): `step_ocean`'s `surface_fluxes` is a
+  3-tuple; the spectral Laplacian helpers take the grid width `nlon`; the CG Poisson test
+  now uses a manufactured solution matching the solver's periodic-x / Dirichlet-y BC.
+- Removed dead `chronos_esm/atmos/jcm_adapter.py`; corrected the AMOC dashboard caption.
+
+### Dinosaur ↔ ocean CONTROL-RUN harness (`experiments/run_dino_coupled.py`)
+Upgraded the 30-day experiment into a checkpointing, resumable, scorable control harness:
+- `--years` / `--days` (absolute total), `--resume <day>`, `--ckpt-every-days`. Each
+  checkpoint saves the ocean state (`io`) **and** the dinosaur modal state
+  (`dino_atmos.save_state`) as `outputs/dino_control/state_d<DAY>.nc` + `_dino.npz`.
+- Writes a **time-mean** of the atmosphere surface fields (u_sfc/v_sfc/t2m/precip/mslp,
+  regridded to the model grid) into the saved `atmos`/`fluxes` so the existing dashboard
+  scores the *dinosaur* atmosphere instead of the unused single-level fields.
+- New `experiments/run_dino_control_slurm.sh` (GPU, account `poem`) with a JAX-GPU
+  preflight and auto-resume from the latest checkpoint across back-to-back 23 h jobs.
+- **Fixed** `dino_atmos.load_state`: it restored `sim_time` as a scalar, which broke the
+  ImEx integrator's tendency add on resume (`array + None`); it now restores `sim_time=None`
+  (the dycore's convention). Verified by a smoke test: 14-day run checkpoints at day 7/14,
+  resumes state-complete (prognostic fields exact; ≈0.03 K/week from recomputed diagnostic
+  fields), SST/SSS flat, no NaN; the injected fields carry a real ITCZ (precip max ~43 mm/day).
+
 ## [Unreleased] - 2026-06-14b — Coupled stability verified + cold-SST-drift fix
 
 ### Coupled stability — STABLE (3-year run, adversarially audited)

@@ -48,6 +48,27 @@ The single-level limitations above are being addressed with a **multi-level** sp
 
 Benchmark vs ERA5/WOA18 (SST-forced): it **wins the thermodynamics/hydrology** — precipitation pattern correlation 0.16 → **0.34** with a real ITCZ, plus a better near-surface temperature — but the surface **wind/pressure pattern** skill is not yet improved. At T31 the regridded WOA SST has only a ~22.6 K equator–pole gradient (the sharp Gulf Stream / Kuroshio / ACC SST fronts are smoothed away), too weak for the resolved eddy momentum flux to build the observed mid-latitude surface westerlies (a 22.6 K aquaplanet stays surface-easterly at midlat too). Recovering those needs higher resolution or an explicit eddy-momentum parameterization. The single-level model still provides the **default** coupled atmosphere.
 
+### Running a coupled (dinosaur ↔ ocean) control run
+`experiments/run_dino_coupled.py` is a **checkpointing, resumable control-run harness**: it
+steps the multi-level atmosphere against the ocean, checkpoints both the ocean state and the
+dinosaur modal state every `--ckpt-every-days` (yearly by default), resumes cleanly from any
+checkpoint, and writes a **time-mean** of the atmosphere's surface fields into the saved state
+so the validation dashboard scores the *dinosaur* atmosphere.
+```bash
+# fresh 100-year control run (checkpoints to outputs/dino_control/state_d*.nc):
+python experiments/run_dino_coupled.py --years 100
+# resume toward year 200 from day 36500:
+python experiments/run_dino_coupled.py --years 200 --resume 36500
+# on the GPU cluster (auto-resumes across back-to-back 23 h jobs):
+sbatch experiments/run_dino_control_slurm.sh --years 100
+# score the run against WOA18 + ERA5 / refresh the dashboard:
+python experiments/make_readme_figures.py "outputs/dino_control/state_d*.nc" --label "dino control"
+```
+The coupled run holds SST/SSS drift-free via an ocean-only heat & P−E flux balance. Restarts
+restore the prognostic state (ocean T/S, modal dynamics) exactly; diagnostic fields (ocean
+streamfunction warm-start, density, `w`, and DIC) are recomputed/reset, so a restart is
+state-complete but not bit-reproducible (≈0.03 K/week divergence — far below any climate signal).
+
 ## Validation
 A built-in framework (`chronos_esm/validation/`) scores model output against **WOA18** (ocean T/S) and **ERA5** (near-surface atmosphere), producing area-weighted skill metrics (bias, RMSE, pattern correlation, Taylor statistics), bias maps, and zonal-mean comparisons.
 
