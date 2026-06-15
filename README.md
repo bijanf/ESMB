@@ -173,8 +173,14 @@ automatically on first use (via `pooch`) and cache to **`~/.cache/chronos_esm/`*
 Compute nodes usually have **no internet**, so stage the data **once on a login
 node** (which does), then submit — the job reads from the shared `~/.cache`:
 ```bash
-git clone https://github.com/bijanf/ESMB.git && cd ESMB
-python -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+git clone https://github.com/bijanf/ESMB.git && cd ESMB     # add auth if the repo is private
+module load anaconda cuda/12.3.1                              # site-specific module names
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+# GPU JAX (REQUIRED on the cluster): requirements.txt installs CPU JAX, but the
+# SLURM script runs on GPU and aborts if no GPU is visible. Install the CUDA build
+# matching the installed jax version (uses the bundled nvidia-* wheels):
+pip install "jax[cuda12]==$(python -c 'import jax; print(jax.__version__)')"
 
 # 1) stage datasets on the LOGIN node (downloads WOA18 + ETOPO1 to ~/.cache/chronos_esm):
 python experiments/prefetch_data.py            # add --era5 to also stage validation data
@@ -186,8 +192,11 @@ sbatch experiments/run_dino_control_slurm.sh --years 100
 ```
 The SLURM script runs a JAX-GPU preflight and a `prefetch_data.py --check` cache
 guard, so a job started without staged data fails fast with instructions rather
-than hanging on a blocked download. Edit the `#SBATCH` account/partition lines for
-your site (defaults: `--account=poem --partition=gpu`).
+than hanging on a blocked download. **Adjust for your site:** the `#SBATCH`
+account/partition/qos lines (defaults `--account=poem --partition=gpu
+--qos=gpumedium`) and the `module load` names. If your `$HOME` quota is small, set
+`export XDG_CACHE_HOME=/path/on/shared/scratch` **before both** `prefetch_data.py`
+and `sbatch` (the cache must be the same path, visible from login and compute nodes).
 
 ## Citing
 If you use Chronos-ESM in academic work, please cite it via [`CITATION.cff`](CITATION.cff)

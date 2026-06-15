@@ -27,6 +27,9 @@ module load anaconda
 module load cuda/12.3.1
 
 # Activate Virtual Environment
+# NOTE: this needs a GPU JAX build (requirements.txt installs CPU JAX). One-time setup:
+#   pip install "jax[cuda12]==$(python -c 'import jax; print(jax.__version__)')"
+# Otherwise the LD_LIBRARY_PATH (nvidia wheels) line and the GPU preflight below fail.
 source venv/bin/activate
 
 # Resolution / JAX platform
