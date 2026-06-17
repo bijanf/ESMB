@@ -89,37 +89,40 @@ ERA5 requires a Copernicus CDS account (`~/.cdsapirc`); WOA18 is fetched/cached 
 Two complementary, auto-scored assessments against **WOA18** (ocean T/S) and **ERA5**
 (near-surface atmosphere) — a perfect model has bias 0, corr 1, std ratio 1:
 
-1. **Coupled control** — the model's *actual* climate: a 100-year free-running
-   `dinosaur`↔ocean run (no fields nudged to observations), scored over the
-   equilibrated years 82–100.
+1. **Coupled control** — a 100-year coupled `dinosaur`↔ocean run, **flux-corrected**
+   (surface SST restored toward WOA), scored over the equilibrated years 82–100.
 2. **Atmosphere-only (forced)** — isolates the atmosphere physics: a 30-day spin-up
    with SST held to WOA18, so coupled-ocean bias can't mask atmospheric skill.
 
 Regenerate either from saved checkpoints with `experiments/make_readme_figures.py`.
 
-### Coupled control — 100-yr free-running (dinosaur ↔ ocean)
-A fully coupled, free-running century: the multi-level `dinosaur` spectral atmosphere
-and the z-level ocean evolve together with no relaxation to observations, so the maps
-below are the model's own emergent climate. The run is stable over 100 years (SST
-≈16.5 °C and SSS ≈34.7 essentially flat; baroclinic eddies stay under the wind clamp),
-scored over the equilibrated years 82–100.
+### Coupled control — 100-yr flux-corrected (dinosaur ↔ ocean)
+A fully coupled century (multi-level `dinosaur` spectral atmosphere ↔ z-level ocean),
+**flux-corrected**: the surface heat flux restores SST toward WOA (Haney, τ=30 d) to
+remove a structural cold bias, while the atmosphere, land surface and precipitation
+evolve freely. This run also closes the sub-grid Central-American isthmus (Panama) and
+adds an interactive slab land surface. Stable over 100 years (SST ≈18.1 °C and SSS ≈34.7
+flat; baroclinic eddies under the wind clamp), scored over the equilibrated years 82–100.
 <!-- CONTROL:START -->
-_Free-running 100-yr coupled control (`dinosaur` ↔ ocean), years 82–100, vs WOA18 + ERA5._
+_Flux-corrected 100-yr coupled control (`dinosaur` ↔ ocean; SST restored to WOA), years 82–100, vs WOA18 + ERA5._
 
 | field | units | bias | RMSE | corr | std ratio | n |
 |---|---|---:|---:|---:|---:|---:|
-| sst | degC | -1.37 | 6.01 | 0.79 | 0.85 | 2686 |
-| sss | psu | 0.04 | 1.59 | -0.02 | 0.31 | 2686 |
-| t2m | K | -0.96 | 12.24 | 0.50 | 0.57 | 4608 |
-| u_sfc | m/s | -0.07 | 5.35 | -0.10 | 1.04 | 4608 |
-| v_sfc | m/s | -0.68 | 3.55 | -0.14 | 1.60 | 4608 |
-| precip | mm/day | -2.25 | 3.27 | 0.08 | 0.55 | 4608 |
-| mslp | hPa | -11.68 | 15.57 | -0.09 | 0.71 | 4608 |
+| sst | degC | 0.44 | 0.89 | 1.00 | 1.00 | 2686 |
+| sss | psu | 0.07 | 1.57 | 0.10 | 0.41 | 2686 |
+| t2m | K | 3.52 | 8.63 | 0.88 | 0.57 | 4608 |
+| u_sfc | m/s | -0.99 | 4.05 | 0.10 | 0.59 | 4608 |
+| v_sfc | m/s | -0.12 | 2.24 | 0.15 | 0.98 | 4608 |
+| precip | mm/day | -2.32 | 3.07 | 0.37 | 0.45 | 4608 |
+| mslp | hPa | -11.70 | 15.87 | -0.35 | 0.60 | 4608 |
 
-Honest read: the SST pattern is good (corr **0.79**) and salinity is drift-free, but a
-cool SST bias (−1.4 °C) starves the ITCZ (precip corr 0.08) and the T31 single-SST-
-gradient atmosphere has little synoptic skill (u/v/mslp pattern ≈ 0). These are the
-documented multi-level-at-T31 limits, not a numerical instability.
+Honest read: the headline gains over the earlier free-running control are a **revived
+ITCZ** (precip pattern corr **0.08 → 0.37**, now raining on the equator) and **land air
+temperature** (t2m corr **0.50 → 0.88**, once continents stopped acting as a 1 °C cold
+ocean). Note SST corr is **1.00 by construction** — it is *restored* toward WOA — so SST
+and the SST-driven part of t2m are imposed, not predicted; the genuinely emergent skill is
+in precipitation and the land/ocean contrast. Mean sea-level pressure stays the weakest
+field (corr −0.35): the T31 single-gradient atmosphere has little synoptic skill.
 
 #### Ocean (vs WOA18)
 **Sea-surface temperature**
@@ -152,11 +155,11 @@ documented multi-level-at-T31 limits, not a numerical instability.
 ![mslp zonal mean](docs/figures/control/zonal_mslp.png)
 
 #### AMOC (Atlantic overturning)
-Model max 54.1 Sv vs RAPID ~17 Sv at 26.5°N. The AMOC is weak/noisy and **not**
-spin-up-limited; the root cause is a spurious net meridional transport in the ocean
-velocity field (mass not conserved at basin scale), so a clean overturning
-streamfunction is unattainable until that ocean-dynamics issue is fixed (see
-**Project Status**).
+Model max 34.2 Sv vs RAPID ~17 Sv at 26.5°N — closer than the pre-Panama 54 Sv, but still
+high. The AMOC is weak/noisy and **not** spin-up-limited; the root cause is a spurious net
+meridional transport in the ocean velocity field (mass not conserved at basin scale), so a
+clean overturning streamfunction is unattainable until that ocean-dynamics issue is fixed
+(see **Project Status**).
 ![AMOC streamfunction](docs/figures/control/amoc_streamfunction.png)
 <!-- CONTROL:END -->
 
