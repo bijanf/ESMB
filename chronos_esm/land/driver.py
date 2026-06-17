@@ -74,7 +74,8 @@ def step_land(
     # New Inputs
     wind_speed: jnp.ndarray, # [m/s]
     drag_coeff: jnp.ndarray, # [-]
-    
+
+    dt: float = DT_ATMOS,  # land timestep [s]; pass the coupling interval for daily coupling
     ny: int = ATMOS_GRID.nlat,
     nx: int = ATMOS_GRID.nlon,
 ) -> Tuple[LandState, Tuple[jnp.ndarray, jnp.ndarray]]:
@@ -163,7 +164,7 @@ def step_land(
     heat_capacity_snow = 300.0 * 2000.0 * state.snow_depth
     total_hc = heat_capacity_soil + heat_capacity_snow
 
-    denominator = (total_hc / DT_ATMOS) - d_g_dt
+    denominator = (total_hc / dt) - d_g_dt
     delta_temp = g_flux / denominator
     
     # Apply update on land
@@ -191,7 +192,7 @@ def step_land(
     actual_melt_depth = jnp.minimum(potential_melt_depth, state.snow_depth)
     
     # Update Snow Depth
-    snow_depth_new = state.snow_depth + DT_ATMOS * snow_fall - actual_melt_depth
+    snow_depth_new = state.snow_depth + dt * snow_fall - actual_melt_depth
     snow_depth_new = jnp.maximum(snow_depth_new, 0.0)
     
     # Update Temp: If melting occurred, T stays at 0C (273.15)
@@ -214,12 +215,12 @@ def step_land(
     # 4. Soil Moisture Update
     # Inflow = Rain + SnowMelt
     evap_rate = evap / RHO_WATER
-    water_in = rain_fall + (actual_melt_depth / DT_ATMOS) # melt is already per step amount, convert to rate? No wait.
+    water_in = rain_fall + (actual_melt_depth / dt) # melt is already per step amount, convert to rate? No wait.
     # actual_melt_depth is total meters in this step.
     # So rate = actual_melt_depth / DT
     
-    dw_dt = (rain_fall + actual_melt_depth/DT_ATMOS) - evap_rate
-    moisture_new = state.soil_moisture + DT_ATMOS * dw_dt * mask
+    dw_dt = (rain_fall + actual_melt_depth/dt) - evap_rate
+    moisture_new = state.soil_moisture + dt * dw_dt * mask
     
     runoff = jnp.maximum(moisture_new - BUCKET_DEPTH, 0.0)
     moisture_new = jnp.minimum(moisture_new, BUCKET_DEPTH)
@@ -240,7 +241,7 @@ def step_land(
     nee = r_auto + r_hetero - gpp
     litter = gpp - r_auto
     d_soil_c_dt = litter - r_hetero
-    soil_carbon_new = state.soil_carbon + DT_ATMOS * d_soil_c_dt * mask
+    soil_carbon_new = state.soil_carbon + dt * d_soil_c_dt * mask
     soil_carbon_new = jnp.maximum(soil_carbon_new, 0.0)
     soil_carbon_new = jnp.where(mask > 0.5, soil_carbon_new, state.soil_carbon)
 

@@ -85,6 +85,18 @@ def init_model(
     return state
 
 
+# (j, i) ocean cells forced to land to close the sub-grid Central-American isthmus and
+# the S. American Pacific coast at T31 (48x96). These fall through the ~3.75 deg grid,
+# leaving a spurious open Pacific<->Atlantic seaway at low latitudes (wrecks tropical SSS
+# and overturning). The list is a continuous NW->SE land wall from N. to S. America;
+# flood-fill verified to seal the tropical Pacific from the Atlantic locally.
+_AMERICAS_LAND_CLOSURE = [
+    (27, 76), (26, 76), (26, 77), (25, 77), (25, 78), (24, 78), (23, 78),
+    (23, 79), (22, 79), (22, 80), (21, 80), (21, 81), (20, 81), (20, 82),
+    (19, 80), (19, 81),
+]
+
+
 def ocean_masks(nz: int = 15):
     """Build the static ocean masks from ETOPO bathymetry (computed once at setup).
 
@@ -99,6 +111,14 @@ def ocean_masks(nz: int = 15):
     from chronos_esm.ocean import bathymetry
     depth = data.load_ocean_depth(ny=OCEAN_GRID.nlat, nx=OCEAN_GRID.nlon)
     mask3d = bathymetry.build_wet_mask(depth, OCEAN_DZ)
+    # Close sub-grid seaways (Central America / S. American Pacific coast) -- only at the
+    # T31 48x96 grid the index list was drawn for; other resolutions keep the raw mask.
+    if mask3d.shape[1:] == (OCEAN_GRID.nlat, OCEAN_GRID.nlon) == (48, 96):
+        import numpy as _np
+        m = _np.array(mask3d)   # writable copy (np.asarray of a jax array is read-only)
+        for j, i in _AMERICAS_LAND_CLOSURE:
+            m[:, j, i] = 0.0
+        mask3d = jnp.asarray(m)
     surface = mask3d[0] > 0.5
     return mask3d, surface
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased] - 2026-06-17 — Coupled climate bias fixes (next control run)
+
+Diagnosed why the 100-yr coupled control had a dead ITCZ and odd maps, and fixed three
+root causes (validated locally; bundled for the next cluster control run).
+
+- **Tropical cold tongue → SST flux-correction.** The control SST was −1.7 °C globally but
+  **−5.6 °C in the tropics** (21.7 vs 27.4 °C WOA) — too cold to drive deep convection, so
+  precip pattern corr was only 0.08. Cause: the old `balance_heat` removed the *global-mean*
+  surface heat flux (drift-free mean) but did nothing for the spatial pattern, and the ocean
+  over-exported tropical heat. Replaced it in `experiments/run_dino_coupled.py:ocean_fluxes`
+  with a Haney **SST restoring toward WOA** (τ=30 d, λ≈79 W/m²/K). Local test (resume yr100):
+  tropical SST 21.7 → 26.4 °C, global → 17.8 °C, deep-tropical precip ×1.65 with rain moving
+  onto the equator. NOTE: this makes the run **flux-corrected**, not free-running at the
+  surface — the dashboard will be re-labelled accordingly.
+- **Open Pacific↔Atlantic seaway → Panama closure.** At T31 (~3.75°) Central America and the
+  S. American Pacific coast fall through the grid, leaving an unphysical low-latitude seaway
+  that wrecked tropical SSS and overturning. `main.ocean_masks` now forces a flood-fill-
+  verified NW→SE land wall (`_AMERICAS_LAND_CLOSURE`, 16 cells, T31 only) that seals the
+  tropical basins.
+- **Cold-land t2m → land surface coupling.** The dino atmosphere was forced by `ocean.temp[0]`
+  over the whole globe, so every continent acted as a ~1.3 °C cold ocean (land t2m 5.5 vs
+  ocean 16.1 °C). The harness now advances the existing slab+bucket land model (`step_land`,
+  given a `dt` arg for daily stepping) and feeds the atmosphere a blended surface temperature
+  (ocean SST over sea, land skin temp over land). Land t2m now realistic; no NaN.
+
 ## [Unreleased] - 2026-06-15 — Public research preview + dinosaur control-run harness
 
 ### Research-preview publication prep

@@ -42,10 +42,12 @@ from chronos_esm.ocean import veros_driver  # noqa: E402
 from chronos_esm.atmos import physics as aphys  # noqa: E402
 from chronos_esm.atmos.dino_atmos import (  # noqa: E402
     DinoAtmosphere, save_state as dino_save, load_state as dino_load)
+from chronos_esm.land.driver import step_land, init_land_state  # noqa: E402
 from chronos_esm.config import (OCEAN_GRID, OCEAN_DZ, EARTH_RADIUS, DT_OCEAN,  # noqa: E402
-                                ALBEDO_OCEAN)
+                                ALBEDO_OCEAN, RHO_WATER, CP_WATER, DRAG_COEFF_LAND)
 
 RHO_AIR, CD = 1.2, 1.3e-3
+RESTORE_TAU_DAYS = 30.0  # SST flux-correction (Haney restoring) timescale toward WOA
 LAT_LIN = np.linspace(-90, 90, OCEAN_GRID.nlat)
 DAYS_PER_YEAR = 365
 
@@ -69,7 +71,7 @@ _WLAT = np.cos(np.deg2rad(LAT_LIN))[:, None]
 
 
 def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, balance_heat=True,
-                 ocean_mask=None):
+                 ocean_mask=None, sst_target=None, restore_tau_days=RESTORE_TAU_DAYS):
     """Bulk surface fluxes on the linear grid, consistent with the atmosphere's
     own near-surface humidity and precipitation. Returns (net_heat W/m2,
     fw kg/m2/s, tau_x Pa, tau_y Pa)."""
@@ -86,14 +88,18 @@ def ocean_fluxes(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, balance_heat=T
                                              jnp.asarray(sst_K))
     sens, lat = np.asarray(sens), np.asarray(lat)
     net_heat = sw_net + lw_down - lw_up - sens - lat
-    if balance_heat:
-        # Heat-flux adjustment: remove the area-weighted mean so the control run has
-        # no net OCEAN heating/cooling (prevents global SST drift while preserving
-        # the spatial flux pattern). Balance over OCEAN cells ONLY: the heat is
-        # applied only to ocean cells (via step_ocean's mask), so including land
-        # cells -- which carry an unphysical net_heat from the land "SST" values --
-        # in the mean leaves a residual net ocean cooling and a spurious cold SST
-        # drift. Falling back to the all-cell mean only if no mask is supplied.
+    if sst_target is not None:
+        # SST flux-correction (Haney restoring) toward observed (WOA) SST. Unlike the
+        # ocean-mean removal below this corrects the spatial SST BIAS as well -- in
+        # particular the ~-5.6 C tropical cold tongue that was starving the ITCZ -- while
+        # still pinning the global mean (drift-free). lambda = rho*cp*dz_surf / tau.
+        lam = RHO_WATER * CP_WATER * float(OCEAN_DZ[0]) / (restore_tau_days * 86400.0)
+        net_heat = net_heat + lam * (np.asarray(sst_target) - sst_K)
+    elif balance_heat:
+        # (legacy fallback) remove the area-weighted ocean-mean so there is no net OCEAN
+        # heating/cooling -> drift-free GLOBAL mean, but it does NOTHING about the spatial
+        # pattern, which left a large tropical cold bias. Balance over OCEAN cells ONLY
+        # (land "SST" carries unphysical net_heat); fall back to all-cell mean if no mask.
         w = np.broadcast_to(_WLAT, net_heat.shape)
         if ocean_mask is not None:
             m = np.asarray(ocean_mask).astype(bool)
@@ -158,6 +164,11 @@ def main_cli():
 
     # --- build the model + dinosaur atmosphere -----------------------------------
     state = main.init_model(ocean_ic="woa")
+    # WOA SST on the ocean grid (K): the flux-correction / restoring target. Captured
+    # from the WOA init BEFORE any --resume overwrites the ocean state.
+    sst_target = np.asarray(state.ocean.temp[0]).copy()
+    if getattr(state, "land", None) is None:   # land surface (slab soil + bucket)
+        state = state._replace(land=init_land_state(OCEAN_GRID.nlat, OCEAN_GRID.nlon))
     ocean_mask_3d, surface_mask = main.ocean_masks(nz=state.ocean.u.shape[0])
     atm = DinoAtmosphere()
     lin_to_gauss, gauss_to_lin = make_regridders(atm.lat_deg)
@@ -168,7 +179,7 @@ def main_cli():
         if not (os.path.exists(nc) and os.path.exists(npz)):
             raise FileNotFoundError(f"resume checkpoint missing: {nc} / {npz}")
         resumed = io.load_state_from_netcdf(nc)
-        state = state._replace(ocean=resumed.ocean)   # real ocean from the checkpoint
+        state = state._replace(ocean=resumed.ocean, land=resumed.land)  # ocean+land from ckpt
         dino_state = dino_load(npz)                    # dinosaur modal state
         print(f"Resumed from day {start_day} ({start_day / DAYS_PER_YEAR:.2f} yr): {nc}")
     else:
@@ -199,6 +210,11 @@ def main_cli():
 
     omask = np.asarray(surface_mask).astype(bool)
     wlat = np.cos(np.deg2rad(LAT_LIN))[:, None]
+    # land forcing (precomputed): land mask + annual-ish downward shortwave for step_land
+    land_mask_f = (~omask).astype(float)
+    _insol = np.maximum(np.asarray(aphys.compute_solar_insolation(
+        jnp.asarray(LAT_LIN) * np.pi / 180.0, day_of_year=80.0)), 0.0)[:, None]
+    SW_DOWN = np.broadcast_to(_insol, (OCEAN_GRID.nlat, OCEAN_GRID.nlon))
 
     def gmean(f):
         f = np.asarray(f); w = np.broadcast_to(wlat, f.shape)
@@ -235,6 +251,9 @@ def main_cli():
         print(f"  [checkpoint] day {day} ({day / DAYS_PER_YEAR:.2f} yr) "
               f"-> {nc} (+{npz}); time-mean of {n} samples", flush=True)
 
+    _lam = RHO_WATER * CP_WATER * float(OCEAN_DZ[0]) / (RESTORE_TAU_DAYS * 86400.0)
+    print(f"SST flux-correction: restoring to WOA, tau={RESTORE_TAU_DAYS:.0f}d "
+          f"(lambda={_lam:.1f} W/m2/K, dz_surf={float(OCEAN_DZ[0]):.0f}m)", flush=True)
     print(f"Coupled dinosaur<->ocean control run: days {start_day}->{end_day} "
           f"(interval {interval}d, {subs} ocean substeps/interval, "
           f"checkpoint every {args.ckpt_every_days}d)", flush=True)
@@ -242,15 +261,28 @@ def main_cli():
     day = start_day
     n_intervals = (end_day - start_day) // interval
     for it in range(1, n_intervals + 1):
-        sst_lin = np.asarray(state.ocean.temp[0])                       # K
-        sst_g = lin_to_gauss(sst_lin)
+        sst_lin = np.asarray(state.ocean.temp[0])                       # K (ocean SST)
+        # atmosphere lower boundary = ocean SST over sea, land SKIN temp over land, so
+        # continents are not a spurious ~1 C cold ocean. Lagged (uses last step's land T).
+        surf_T = np.where(omask, sst_lin, np.asarray(state.land.temp))
+        sst_g = lin_to_gauss(surf_T)
         dino_state = atm.step(dino_state, sst_g, n_days=interval)
         diag = atm.diagnostics(dino_state)
         u_sfc = gauss_to_lin(diag["u_sfc"]); v_sfc = gauss_to_lin(diag["v_sfc"])
         t_air = gauss_to_lin(diag["t_sfc"]); q_air = gauss_to_lin(diag["q_sfc"])
         precip_a = gauss_to_lin(diag["precip"]); mslp_a = gauss_to_lin(diag["mslp"])
+        # advance the land surface (slab soil + bucket) with this interval's atmos forcing
+        lw_down_l = 0.8 * 5.67e-8 * np.maximum(t_air - 10.0, 150.0) ** 4
+        wind_sp = np.sqrt(u_sfc ** 2 + v_sfc ** 2) + 1.0
+        new_land, _ = step_land(
+            state.land, t_air=jnp.asarray(t_air), q_air=jnp.asarray(q_air),
+            sw_down=jnp.asarray(SW_DOWN), lw_down=jnp.asarray(lw_down_l),
+            precip=jnp.asarray(np.maximum(precip_a, 0.0) * 1e-3),
+            mask=jnp.asarray(land_mask_f), wind_speed=jnp.asarray(wind_sp),
+            drag_coeff=DRAG_COEFF_LAND, dt=86400.0 * interval)
+        state = state._replace(land=new_land)
         nh, fw, tx, ty = ocean_fluxes(sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
-                                      ocean_mask=omask)
+                                      ocean_mask=omask, sst_target=sst_target)
         fluxes = (jnp.asarray(nh), jnp.asarray(fw), jnp.zeros_like(jnp.asarray(nh)))
         state = state._replace(ocean=ocean_interval(state.ocean,
                                                     fluxes, (jnp.asarray(tx), jnp.asarray(ty))))
