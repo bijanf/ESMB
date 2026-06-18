@@ -176,6 +176,36 @@ def step_ocean(
     u_eff = u_eff * maskC
     v_eff = v_eff * maskC
 
+    # --- Vertical velocity for tracer advection (continuity, rigid lid) -----------
+    # An overturning circulation only transports heat/salt if w ADVECTS tracers; a
+    # diffusion-only column cannot sustain a deep cell (dense high-lat water never
+    # fills the abyss and the interior diffusive-upwelling return branch is dead ->
+    # no coherent AMOC). Diagnose w from the divergence of the SAME horizontal flow
+    # that advects tracers (u_eff, v_eff, incl. the GM bolus) so the 3-D velocity is
+    # nondivergent and vertical advection conserves the tracer integral. w_if[k] =
+    # vertical velocity (z up) at the TOP interface of layer k: integrate continuity
+    # (dw/dz = -div_h) UP from the rigid floor (w=0); the surface interface is closed
+    # (rigid lid: no tracer advected through the ocean surface).
+    dudx_e = (jnp.roll(u_eff, -1, axis=2) - jnp.roll(u_eff, 1, axis=2)) / (2 * dx)
+    v_eff_pad = jnp.pad(v_eff, ((0, 0), (1, 1), (0, 0)), mode="edge")
+    dvdy_e = (v_eff_pad[:, 2:, :] - v_eff_pad[:, :-2, :]) / (2 * dy)
+    div_e = (dudx_e + dvdy_e) * maskC
+    # Rigid-lid projection: remove the depth-MEAN horizontal divergence so the
+    # depth-INTEGRATED flow is nondivergent (=> w = 0 at BOTH the surface and the
+    # floor). This makes the discrete 3-D advecting flow (u_eff, v_eff, w) exactly
+    # nondivergent, so the advective-form vertical advection CONSERVES the tracer
+    # mean. Without it the leftover column-divergence residual sits entirely in the
+    # surface cell and leaks the global mean (~+0.25 K/yr spurious heating) since the
+    # advective form (unlike flux form) has no compensating compression term there.
+    col_div = jnp.sum(div_e * dz_3d, axis=0)                          # (ny,nx) integrated
+    div_e = (div_e - (col_div / H_col)[None, :, :]) * maskC
+    w_col = -jnp.cumsum((div_e * dz_3d)[::-1], axis=0)[::-1]          # (nz,) top-of-layer
+    # interior interface open only where both adjacent centres are wet; surface/floor closed
+    iface_open = jnp.concatenate(
+        [jnp.zeros((1, ny, nx)), maskC[:-1] * maskC[1:], jnp.zeros((1, ny, nx))], axis=0)
+    w_if = jnp.concatenate(
+        [jnp.zeros((1, ny, nx)), w_col[1:], jnp.zeros((1, ny, nx))], axis=0) * iface_open
+
     # 5. Tracers (RK4) with flux-masked advection/diffusion (no-flux at coast/floor)
     heat_flux, fw_flux, dic_flux = surface_fluxes
     # Surface fluxes enter only the top WET cell.
@@ -209,10 +239,25 @@ def step_ocean(
         flux = jnp.concatenate([jnp.zeros((1, ny, nx)), flux, jnp.zeros((1, ny, nx))], axis=0)
         return (flux[:-1] - flux[1:]) / dz_3d
 
+    def _vadv(F):
+        # Upwind vertical advection in ADVECTIVE form (-w dF/dz, z up), CONSISTENT with
+        # the horizontal advective form so there is NO spurious -F*dw/dz compression
+        # source (flux form mixed with advective horizontal blows T up exponentially).
+        # CFL = |w|*dt/dz ~ 1e-3 (w ~ 1e-5 m/s), so explicit upwind is comfortably stable.
+        dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])         # (nz-1,) centre-centre distance
+        open_int = maskC[:-1] * maskC[1:]             # interior interface wet on both sides
+        grad_int = (F[:-1] - F[1:]) / dist * open_int  # z-up gradient across interface k|k+1
+        z = jnp.zeros((1, ny, nx))
+        grad_below = jnp.concatenate([grad_int, z], axis=0)   # cell k looks DOWN to k+1
+        grad_above = jnp.concatenate([z, grad_int], axis=0)   # cell k looks UP to k-1
+        w_c = 0.5 * (w_if[:-1] + w_if[1:])            # (nz,) cell-centred vertical velocity
+        grad_up = jnp.where(w_c > 0, grad_below, grad_above)  # upwind on w sign
+        return -w_c * grad_up
+
     def tendencies(T, S, D):
-        res_T = (_horiz(T) + _vdiff(T)).at[0].add(fT_s)
-        res_S = (_horiz(S) + _vdiff(S)).at[0].add(fS_s)
-        res_D = (_horiz(D) + _vdiff(D)).at[0].add(fD_s)
+        res_T = (_horiz(T) + _vadv(T) + _vdiff(T)).at[0].add(fT_s)
+        res_S = (_horiz(S) + _vadv(S) + _vdiff(S)).at[0].add(fS_s)
+        res_D = (_horiz(D) + _vadv(D) + _vdiff(D)).at[0].add(fD_s)
         return res_T * maskC, res_S * maskC, res_D * maskC  # freeze dry cells
 
     k1_T, k1_S, k1_D = tendencies(state.temp, state.salt, state.dic)

@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased] - 2026-06-18b — Vertical tracer advection (AMOC overturning branch)
+
+- **Tracers are now advected vertically by w.** `step_ocean` previously did horizontal
+  advection + vertical DIFFUSION only; `w` was diagnosed but never advected T/S/DIC, so
+  the overturning could not transport heat/salt vertically — dense high-latitude water
+  never filled the abyss and the interior diffusive-upwelling return branch was dead, so
+  a coherent AMOC was impossible. Added `_vadv`: upwind, **advective form** (`-w·∂F/∂z`),
+  deliberately consistent with the existing horizontal advective form so there is no
+  spurious `-F·∂w/∂z` compression source (an earlier flux-form attempt drove T to the
+  clip via that term). `w` is diagnosed from continuity of the tracer-advecting flow
+  (`u_eff, v_eff`, incl. the GM bolus) with a **rigid-lid projection** — remove the
+  depth-mean horizontal divergence so the depth-integrated flow is non-divergent (w=0 at
+  both surface and floor) and the advection conserves the tracer mean. Validated: stable
+  (200-step standalone + 2-yr coupled, finite/bounded), 34/34 tests pass; the spurious
+  3-D-mean heat drift is cut **+0.25 → +0.041 K/yr** (now ≈ the model's pre-existing
+  drift). Exact zeroing needs a Poisson barotropic projection (follow-up). Equilibrated
+  AMOC impact pending a 100-yr cluster run.
+
 ## [Unreleased] - 2026-06-18 — Ocean barotropic mass-conservation corrector
 
 - **Spurious ±330 Sv net meridional transport → first-order corrector.** A flat-bottom
