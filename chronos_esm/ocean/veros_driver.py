@@ -158,6 +158,21 @@ def step_ocean(
 
     u_new = (u_bt[None, :, :] + u_bc) * maskC
     v_new = (v_bt[None, :, :] + v_bc) * maskC
+
+    # --- Barotropic mass-conservation corrector ------------------------------------
+    # A flat-bottom velocity streamfunction (Stommel) applied over VARIABLE bathymetry
+    # leaves a large spurious NET meridional transport: the depth-integrated transport
+    # is v_bt*H_col, and d(psi*H)/dx != H*d(psi)/dx, so sum_x,z v*dx*dz is ~+-350 Sv
+    # where a closed ocean requires ~0 -> a clean AMOC overturning is impossible. As a
+    # first correction (roadmap step 1) remove the per-latitude net: subtract a
+    # latitude-uniform meridional velocity so the zonally+vertically integrated
+    # transport vanishes at every latitude. dx is uniform in x, so it cancels in the
+    # ratio. (A per-basin / C-grid transport streamfunction is the fuller fix.)
+    col_dz = dz_3d * maskC
+    net_v = jnp.sum(v_new * col_dz, axis=(0, 2))          # (ny,)  ~ net transport / dx
+    area_v = jnp.sum(col_dz, axis=(0, 2)) + 1e-20         # (ny,)  wet x-z area / dx
+    v_new = (v_new - (net_v / area_v)[None, :, None]) * maskC
+
     u_eff = u_eff * maskC
     v_eff = v_eff * maskC
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased] - 2026-06-18 — Ocean barotropic mass-conservation corrector
+
+- **Spurious ±330 Sv net meridional transport → first-order corrector.** A flat-bottom
+  (Stommel) velocity streamfunction applied over *variable* bathymetry is not
+  divergence-free once depth-integrated (`d(ψ·H)/dx ≠ H·d(ψ)/dx`), so the model carried a
+  huge zonally+vertically integrated NET meridional transport — making a closed AMOC
+  impossible. `chronos_esm/ocean/veros_driver.py:step_ocean` now subtracts a
+  latitude-uniform meridional velocity (`v_new -= net_v/area_v`) so the net transport
+  vanishes at every latitude. **Validated** by a fresh 1-yr coupled run
+  (`experiments/analyze_massfix.py`): max |net transport| **332.8 → 0.000 Sv** at all
+  checkpoints, fully stable (finite throughout, SST/SSS drift flat, currents and T/S clips
+  bounded). This is roadmap **step 1** — a first-order patch, *not* the full fix: the root
+  cause (flat-bottom ψ over variable H) remains, and the fuller fix is a per-basin / C-grid
+  transport streamfunction. AMOC *realism* still requires an equilibrated long run on the
+  cluster *with* this corrector. Because the correction is a per-latitude renormalization it
+  makes `d[AMOC]/d[forcing]` non-local — re-validate gradients before trusting sensitivity maps.
+
 ## [Unreleased] - 2026-06-17 — Coupled climate bias fixes (next control run)
 
 Diagnosed why the 100-yr coupled control had a dead ITCZ and odd maps, and fixed three
