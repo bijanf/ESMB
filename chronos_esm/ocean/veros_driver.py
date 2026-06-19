@@ -18,7 +18,7 @@ from chronos_esm.config import (  # noqa: F401
     OMEGA,
     RHO_WATER,
 )
-from chronos_esm.ocean import mixing, solver
+from chronos_esm.ocean import mixing, solver, overturning
 
 
 class OceanState(NamedTuple):
@@ -68,6 +68,7 @@ def step_ocean(
     shapiro_strength: float = 0.0,
     smag_constant: float = 0.1,
     ocean_mask_3d: Optional[jnp.ndarray] = None,
+    thc_k_vel: float = 1.0e-4,
 ) -> OceanState:
 
     # Helpers
@@ -173,8 +174,19 @@ def step_ocean(
     area_v = jnp.sum(col_dz, axis=(0, 2)) + 1e-20         # (ny,)  wet x-z area / dx
     v_new = (v_new - (net_v / area_v)[None, :, None]) * maskC
 
+    # --- Thermohaline overturning closure (P3/S1): density-driven Atlantic cell ----
+    # A depth-integral-zero meridional overturning whose strength scales with the
+    # subpolar-minus-subtropical upper-ocean density contrast (denser subpolar ->
+    # stronger AMOC). Depth-integral-zero => it carries no net transport (survives the
+    # corrector above) and only drives the overturning + its w/tracer transport. This
+    # gives DENSITY a pathway to the 26.5N cell, so d(AMOC)/d(density) is nonzero and
+    # sign-correct (the diagnostic thermal wind alone gave ~0). Interim box-model-style
+    # closure; the prognostic-momentum/JEBAR core is P3 S2-S5. Disable with thc_k_vel=0.
+    v_thc, _, _ = overturning.thc_overturning_velocity(rho, dz, maskC, k_vel=thc_k_vel)
+    v_new = (v_new + v_thc) * maskC
+
     u_eff = u_eff * maskC
-    v_eff = v_eff * maskC
+    v_eff = (v_eff + v_thc) * maskC
 
     # --- Vertical velocity for tracer advection (continuity, rigid lid) -----------
     # An overturning circulation only transports heat/salt if w ADVECTS tracers; a

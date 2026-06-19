@@ -152,23 +152,23 @@ def _ocean_interval_fn(n_sub=6):
 def test_grad_through_ocean_interval(ocean_interval_f):
     """value_and_grad through a (checkpointed) ocean interval returns finite,
     non-NaN gradients on CPU — i.e. the ocean half of the coupled model is
-    end-to-end differentiable. (The gradient is expected to be ~0; see the
-    density-baseline test — that is a physics blocker, not a graph break.)"""
+    end-to-end differentiable."""
     val, grad = jax.value_and_grad(ocean_interval_f)(0.0)
     assert np.isfinite(float(val)), f"AMOC value non-finite: {val}"
     assert np.isfinite(float(grad)), f"gradient non-finite (graph broken): {grad}"
 
 
-def test_amoc_density_gradient_baseline(ocean_interval_f):
-    """REGRESSION BASELINE: on the present diagnostic-velocity ocean, density has
-    no pathway to net overturning, so d(AMOC@26.5N)/d(subpolar salinity) ~= 0.
-    P3 (prognostic momentum) MUST break this to a non-zero, sign-correct gradient;
-    when it does, this assertion will fail and should be flipped to assert>0."""
+def test_amoc_density_responsive(ocean_interval_f):
+    """P3/S1: the thermohaline overturning closure makes the AMOC DENSITY-RESPONSIVE.
+    d(AMOC@26.5N)/d(subpolar salinity) is now nonzero and sign-correct (saltier
+    subpolar -> denser -> stronger AMOC), AD matching finite-difference. (Pre-S1 it
+    was ~0: the diagnostic thermal wind carried no overturning to 26.5N -- this test
+    was the regression baseline that asserted abs(grad) < 1e-3.)"""
     grad = float(jax.grad(ocean_interval_f)(0.0))
-    assert abs(grad) < 1e-3, (
-        f"d(AMOC)/d(density) = {grad:.3e} is no longer ~0 -- the P3 prognostic-"
-        "momentum core may have landed; update this baseline to assert a real "
-        "non-zero, sign-correct sensitivity.")
+    eps = 0.1
+    fd = (float(ocean_interval_f(eps)) - float(ocean_interval_f(-eps))) / (2 * eps)
+    assert grad > 1e-3, f"AMOC should be density-responsive (grad>0), got {grad:.3e}"
+    assert abs(grad - fd) <= 0.05 * abs(fd) + 1e-6, f"AD {grad:.3e} != FD {fd:.3e}"
 
 
 if __name__ == "__main__":
