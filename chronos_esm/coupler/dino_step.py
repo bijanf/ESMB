@@ -109,8 +109,8 @@ class DinoCoupledModel:
         self._n_atm_f = int(round(self.atm.steps_per_day * interval))
         self._n_sub_f = int(round(86400.0 * interval / DT_OCEAN))
         self._step_fast = jax.jit(
-            lambda cs, co2: self._advance(cs, co2, self.interval,
-                                          self._n_atm_f, self._n_sub_f, remat=False))
+            lambda cs, co2, hose: self._advance(cs, co2, self.interval, self._n_atm_f,
+                                                self._n_sub_f, remat=False, hosing_sv=hose))
 
     # ---- state ----
     def init_state(self):
@@ -121,7 +121,7 @@ class DinoCoupledModel:
                                 land=self._land0, ice=ice0, day=0.0)
 
     # ---- one coupling interval (shared body; jit-friendly) ----
-    def _advance(self, cstate, co2_ppm, interval, n_atm, n_sub, remat):
+    def _advance(self, cstate, co2_ppm, interval, n_atm, n_sub, remat, hosing_sv=0.0):
         atm = self.atm
         sst_lin = cstate.ocean.temp[0]
         # ice-modified ocean surface temp seen by the atmosphere (lagged ice):
@@ -175,23 +175,26 @@ class DinoCoupledModel:
             return veros_driver.step_ocean(
                 oc, surface_fluxes=fluxes, wind_stress=wind, dx=self.dx, dy=self.dy,
                 dz=self.dz, nz=self.nz, mask=self.surface_mask,
-                ocean_mask_3d=self.ocean_mask_3d), None
+                ocean_mask_3d=self.ocean_mask_3d, hosing_sv=hosing_sv), None
         body = jax.checkpoint(_ocean) if remat else _ocean
         new_ocean, _ = jax.lax.scan(body, cstate.ocean, None, length=n_sub)
         return DinoCoupledState(ocean=new_ocean, atmos=dino_state, land=new_land,
                                 ice=new_ice, day=cstate.day + interval)
 
     # ---- differentiable, variable-interval step (eager; for gradients / DA) ----
-    def step(self, cstate, interval=1.0, co2_ppm=None):
+    def step(self, cstate, interval=1.0, co2_ppm=None, hosing_sv=0.0):
         n_atm = int(round(self.atm.steps_per_day * interval))
         n_sub = int(round(86400.0 * interval / DT_OCEAN))
-        return self._advance(cstate, co2_ppm, interval, n_atm, n_sub, remat=True)
+        return self._advance(cstate, co2_ppm, interval, n_atm, n_sub, remat=True,
+                             hosing_sv=hosing_sv)
 
     # ---- fast, fully-jitted forward step (fixed interval; control / forced runs) ----
-    def step_fast(self, cstate, co2_ppm=280.0):
+    def step_fast(self, cstate, co2_ppm=280.0, hosing_sv=0.0):
         """One coupling interval as a single fused jitted program (no remat). ~10x
-        faster than step() for forward integration. co2_ppm=280 -> zero forcing."""
-        return self._step_fast(cstate, jnp.asarray(float(co2_ppm)))
+        faster than step() for forward integration. co2_ppm=280 -> zero forcing;
+        hosing_sv freshens the subpolar N. Atlantic (AMOC tipping forcing)."""
+        return self._step_fast(cstate, jnp.asarray(float(co2_ppm)),
+                               jnp.asarray(float(hosing_sv)))
 
     # ---- surface diagnostics on the linear grid (for scoring / inspection) ----
     def diagnostics_lin(self, cstate):

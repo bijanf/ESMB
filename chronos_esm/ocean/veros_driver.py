@@ -69,6 +69,7 @@ def step_ocean(
     smag_constant: float = 0.1,
     ocean_mask_3d: Optional[jnp.ndarray] = None,
     thc_k_vel: float = 1.0e-4,
+    hosing_sv: float = 0.0,
 ) -> OceanState:
 
     # Helpers
@@ -223,6 +224,11 @@ def step_ocean(
     # Surface fluxes enter only the top WET cell.
     fT_s = heat_flux / (RHO_WATER * 3985. * dz[0]) * surf2d
     fS_s = -fw_flux * 35. / (RHO_WATER * dz[0]) * surf2d
+    # AMOC hosing: extra subpolar-N-Atlantic freshwater forcing (Sv), added directly
+    # so it bypasses the surface-flux ocean-mean balancing in the coupler (which would
+    # otherwise cancel the net input). The volume-mean salt renorm later only shifts
+    # the absolute mean, preserving the subpolar-subtropical gradient the THC reads.
+    fS_s = fS_s + overturning.subpolar_hosing_salt_tendency(hosing_sv, dx, dy, dz[0], surf2d)
     fD_s = dic_flux / dz[0] * surf2d
     k_z = mixing.compute_vertical_diffusivity(rho, dz, dt=dt)
     diff_coef = 20000. * pole_mask_3d + kappa_h * interior_mask_3d

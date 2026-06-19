@@ -62,4 +62,26 @@ def thc_overturning_velocity(rho, dz, maskC, *, k_vel, drho_scale=0.1,
     return v_thc, drho, amp
 
 
-__all__ = ["thc_overturning_velocity"]
+def subpolar_hosing_salt_tendency(hosing_sv, dx, dy, dz0, surf2d, *,
+                                  band=(45.0, 65.0), s_ref=35.0):
+    """Surface-salinity tendency [psu/s] from a freshwater HOSING of ``hosing_sv``
+    Sverdrups spread over the subpolar (45-65N) N. Atlantic surface -- the classic
+    AMOC bifurcation forcing. Freshens (negative dS) -> lighter subpolar water ->
+    weaker AMOC via the thermohaline closure (the salt-advection feedback then either
+    damps or amplifies it). Differentiable in hosing_sv. ``hosing_sv=0`` is a no-op.
+
+    dx: (ny,1) zonal grid spacing [m]; dy: scalar [m]; dz0: surface layer thickness [m];
+    surf2d: (ny,nx) surface wet mask.
+    """
+    ny, nx = surf2d.shape
+    atl = _atlantic_mask(ny, nx).astype(surf2d.dtype)
+    lat = jnp.linspace(-90.0, 90.0, ny)
+    bandm = ((lat >= band[0]) & (lat <= band[1])).astype(surf2d.dtype)[:, None]
+    region = atl * bandm * surf2d                          # (ny,nx) subpolar Atl surface
+    area = jnp.sum(region * dx * dy) + 1e-20               # [m^2]
+    # freshwater volume rate hosing_sv*1e6 m^3/s over `area`, depth dz0 -> virtual
+    # salt removal rate; dS/dt = -(Q_fw * S_ref) / (area * dz0).
+    return -(hosing_sv * 1.0e6 * s_ref) / (area * dz0) * region
+
+
+__all__ = ["thc_overturning_velocity", "subpolar_hosing_salt_tendency"]
