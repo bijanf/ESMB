@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from chronos_esm.coupler.dino_step import (DinoCoupledModel, save_state,  # noqa: E402
                                            load_state)
 from chronos_esm.ocean import flux_correction  # noqa: E402
+from chronos_esm.ocean.diagnostics import compute_amoc  # noqa: E402
 from chronos_esm.config import OCEAN_GRID  # noqa: E402
 
 DAYS_PER_YEAR = 365
@@ -90,8 +91,10 @@ def main_cli():
                       and np.isfinite(np.asarray(cstate.atmos.vorticity)).all())
         if (day % 30 == 0) or (it == n_intervals) or (not finite):
             ice_area = float(jnp.sum(jnp.where(omask, cstate.ice.concentration, 0.0)))
+            amoc = float(compute_amoc(cstate.ocean, ocean_mask=omask)["upper_cell_26N"])
             print(f"  day {day:6d} ({day / DAYS_PER_YEAR:6.2f} yr): "
-                  f"SST {sst_mean_C(cstate):5.2f}C  ice-area {ice_area:8.0f}  "
+                  f"SST {sst_mean_C(cstate):5.2f}C  AMOC {amoc:5.1f}Sv  "
+                  f"ice-area {ice_area:8.0f}  "
                   f"|curr|max {float(jnp.abs(cstate.ocean.u).max()):.3f}  finite {finite}",
                   flush=True)
         if not finite:
