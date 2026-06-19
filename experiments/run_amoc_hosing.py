@@ -33,7 +33,11 @@ DAYS_PER_YEAR = 365
 
 def main_cli():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True, help="steady control checkpoint base (no ext)")
+    ap.add_argument("--ckpt", default=None,
+                    help="steady control checkpoint base (no ext); if omitted, init fresh "
+                         "from WOA and spin up --spinup-years (self-contained, no dependency)")
+    ap.add_argument("--spinup-years", type=float, default=30.0,
+                    help="THC spin-up years when no --ckpt is given")
     ap.add_argument("--fmax", type=float, default=1.0, help="max hosing [Sv]")
     ap.add_argument("--nsteps", type=int, default=6, help="levels per leg (up and down)")
     ap.add_argument("--hold-years", type=float, default=15.0, help="years held per level")
@@ -43,17 +47,31 @@ def main_cli():
     os.makedirs(args.outdir, exist_ok=True)
 
     model = DinoCoupledModel(ocean_ic="woa")
-    cstate = load_state(args.ckpt)
     omask = model.omask
 
     def amoc_now(cs):
         return float(compute_amoc(cs.ocean, ocean_mask=omask)["upper_cell_26N"])
 
+    # Start state: a saved control checkpoint, OR (self-contained, queue-robust) a
+    # fresh WOA init spun up --spinup-years with the density-responsive THC ocean.
+    if args.ckpt:
+        cstate = load_state(args.ckpt)
+        print(f"loaded control {args.ckpt}; AMOC = {amoc_now(cstate):+.2f} Sv", flush=True)
+    else:
+        cstate = model.init_state()
+        n_spin = int(round(args.spinup_years * DAYS_PER_YEAR))
+        for d in range(n_spin):
+            cstate = model.step_fast(cstate, co2_ppm=args.co2, hosing_sv=0.0)
+            if (d + 1) % DAYS_PER_YEAR == 0:
+                print(f"  spinup yr {(d+1)//DAYS_PER_YEAR:3d}/{int(args.spinup_years)}: "
+                      f"AMOC {amoc_now(cstate):+.2f} Sv", flush=True)
+        print(f"spun up {args.spinup_years:.0f} yr; AMOC = {amoc_now(cstate):+.2f} Sv", flush=True)
+
     up = np.linspace(0.0, args.fmax, args.nsteps)
     legs = [("up", f) for f in up] + [("down", f) for f in up[::-1]]
     n_hold = int(round(args.hold_years * DAYS_PER_YEAR))
 
-    print(f"AMOC hosing sweep from {args.ckpt}: 0->{args.fmax}->0 Sv, {args.nsteps} levels/leg, "
+    print(f"AMOC hosing sweep: 0->{args.fmax}->0 Sv, {args.nsteps} levels/leg, "
           f"{args.hold_years:.0f} yr/level. Start AMOC = {amoc_now(cstate):+.2f} Sv", flush=True)
 
     rec_leg, rec_f, rec_amoc = [], [], []
