@@ -101,7 +101,7 @@ class DinoCoupledModel:
                                 land=self._land0, ice=ice0, day=0.0)
 
     # ---- one differentiable coupling interval ----
-    def step(self, cstate, interval=1.0):
+    def step(self, cstate, interval=1.0, co2_ppm=None):
         atm = self.atm
         n_atm = int(round(atm.steps_per_day * interval))
         n_sub = int(round(86400.0 * interval / DT_OCEAN))
@@ -144,7 +144,7 @@ class DinoCoupledModel:
         # bulk surface fluxes (jnp), blended with the ice fluxes by concentration.
         nh, fw, tx, ty = dc.ocean_fluxes_jax(
             sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
-            ocean_mask=self.omask, sst_target=self.sst_target)
+            ocean_mask=self.omask, sst_target=self.sst_target, co2_ppm=co2_ppm)
         A = new_ice.concentration
         nh = (1.0 - A) * nh + A * ice_heat
         fw = (1.0 - A) * fw + A * ice_fw

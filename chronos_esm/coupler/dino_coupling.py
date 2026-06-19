@@ -121,13 +121,25 @@ def run_atmos_interval(atm, state, sst_K_gauss, n_days=1):
 # --------------------------------------------------------------------------- #
 # Differentiable bulk surface fluxes (jnp port of run_dino_coupled.ocean_fluxes).
 # --------------------------------------------------------------------------- #
+def co2_forcing_wm2(co2_ppm, co2_ref=280.0):
+    """Myhre (1998) CO2 radiative forcing F = 5.35*ln(C/C0) [W/m^2] (0 at C0).
+    This is the SINGLE forcing channel: it is added to the ocean surface heat
+    budget as extra downwelling longwave, NOT as an offset to the SST-slaved
+    atmospheric Teq (which would be nearly inert and would double-count). Under the
+    WOA flux-correction (~50 W/m2/K) the response is suppressed; freeing the ocean
+    (q-flux, the next P2 step) lets F drive a real warming. Differentiable in C, so
+    d(climate)/d(CO2) is available for sensitivity/calibration."""
+    return 5.35 * jnp.log(jnp.asarray(co2_ppm) / co2_ref)
+
+
 def ocean_fluxes_jax(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, *,
                      balance_heat=True, ocean_mask=None, sst_target=None,
-                     restore_tau_days=RESTORE_TAU_DAYS, lat_lin=LAT_LIN):
+                     restore_tau_days=RESTORE_TAU_DAYS, lat_lin=LAT_LIN, co2_ppm=None):
     """Bulk surface fluxes on the linear grid. Returns
-    ``(net_heat W/m2, fw kg/m2/s, tau_x Pa, tau_y Pa)``. Numerically identical to
-    ``run_dino_coupled.ocean_fluxes`` but pure-jnp (differentiable + jittable):
-    the boolean-indexed ocean-mean removals are written as masked weighted sums.
+    ``(net_heat W/m2, fw kg/m2/s, tau_x Pa, tau_y Pa)``. With ``co2_ppm=None`` this is
+    numerically identical to ``run_dino_coupled.ocean_fluxes`` (pure-jnp: the
+    boolean-indexed ocean-mean removals are masked weighted sums). With ``co2_ppm``
+    set, the Myhre CO2 forcing is added to the surface heat budget (single channel).
     """
     wlat = jnp.cos(jnp.deg2rad(lat_lin))[:, None]
 
@@ -138,6 +150,11 @@ def ocean_fluxes_jax(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, *,
     lw_up = 0.98 * 5.67e-8 * sst_K ** 4
     sens, lat = aphys.compute_surface_fluxes(t_air_K, q_air, u_sfc, v_sfc, sst_K)
     net_heat = sw_net + lw_down - lw_up - sens - lat
+
+    if co2_ppm is not None:
+        # single-channel CO2 forcing into the surface heat budget (before the
+        # flux-correction, which is the artifact that suppresses it).
+        net_heat = net_heat + co2_forcing_wm2(co2_ppm)
 
     if sst_target is not None:
         lam = RHO_WATER * CP_WATER * float(OCEAN_DZ[0]) / (restore_tau_days * 86400.0)
@@ -183,5 +200,5 @@ def amoc_strength(ocean_state, ocean_mask=None, atlantic_mask=None):
 
 __all__ = [
     "make_regridders_jax", "dino_diagnostics_jax", "run_atmos_interval",
-    "ocean_fluxes_jax", "amoc_strength", "LAT_LIN",
+    "ocean_fluxes_jax", "co2_forcing_wm2", "amoc_strength", "LAT_LIN",
 ]
