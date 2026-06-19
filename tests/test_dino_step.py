@@ -68,6 +68,33 @@ def test_grad_sst_seed_through_interval(model):
     assert abs(float(grad)) > 1e-4, f"gradient unexpectedly ~0 (graph severed?): {grad}"
 
 
+def test_checkpoint_resume_bit_exact(model, tmp_path):
+    """save_state -> load_state is bit-exact (all prognostic + diagnostic fields),
+    and stepping from the reloaded state reproduces continuous stepping exactly --
+    i.e. resume is prognostically continuous, not just state-complete."""
+    from chronos_esm.coupler.dino_step import save_state, load_state
+
+    s = model.step(model.init_state(), interval=0.25)
+    base = str(tmp_path / "ckpt_d000")
+    save_state(s, base)
+    s2 = load_state(base)
+
+    for comp, field in (("ocean", "temp"), ("ocean", "salt"), ("ocean", "psi"),
+                        ("ice", "thickness"), ("land", "temp")):
+        a = np.asarray(getattr(getattr(s, comp), field))
+        b = np.asarray(getattr(getattr(s2, comp), field))
+        assert np.array_equal(a, b), f"{comp}.{field} not bit-exact after roundtrip"
+    assert np.array_equal(np.asarray(s.atmos.vorticity), np.asarray(s2.atmos.vorticity)), \
+        "modal vorticity not bit-exact"
+    assert s2.day == s.day
+
+    # prognostic continuity: one step from the reloaded state == from the original.
+    a = model.step(s, interval=0.25)
+    b = model.step(s2, interval=0.25)
+    assert np.array_equal(np.asarray(a.ocean.temp), np.asarray(b.ocean.temp)), \
+        "resume diverges from continuous stepping (ocean temp)"
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v", "-s"]))

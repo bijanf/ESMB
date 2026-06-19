@@ -30,12 +30,14 @@ from dinosaur import primitive_equations as pe
 
 from chronos_esm import main
 from chronos_esm.atmos import physics as aphys
-from chronos_esm.atmos.dino_atmos import DinoAtmosphere
+from chronos_esm.atmos.dino_atmos import (DinoAtmosphere, save_state as dino_save,
+                                          load_state as dino_load)
 from chronos_esm.config import (OCEAN_DZ, OCEAN_GRID, EARTH_RADIUS, DT_OCEAN,
                                 DRAG_COEFF_LAND)
-from chronos_esm.land.driver import step_land
+from chronos_esm.land.driver import LandState, step_land
 from chronos_esm.ice.driver import IceState, init_ice_state, step_ice
 from chronos_esm.ocean import veros_driver
+from chronos_esm.ocean.veros_driver import OceanState
 from chronos_esm.coupler import dino_coupling as dc
 
 
@@ -167,4 +169,43 @@ class DinoCoupledModel:
                 for k in ("u_sfc", "v_sfc", "t_sfc", "q_sfc", "precip", "mslp")}
 
 
-__all__ = ["DinoCoupledState", "DinoCoupledModel"]
+# --------------------------------------------------------------------------- #
+# Checkpoint / resume (state-complete, bit-exact).
+# --------------------------------------------------------------------------- #
+def _save_nt(blob, prefix, nt):
+    for f in nt._fields:
+        blob[f"{prefix}__{f}"] = np.asarray(getattr(nt, f))
+
+
+def _load_nt(d, prefix, cls):
+    return cls(**{f: jnp.asarray(d[f"{prefix}__{f}"]) for f in cls._fields})
+
+
+def save_state(cstate, path_base):
+    """Checkpoint a DinoCoupledState to ``<path_base>.npz`` (ocean/land/ice arrays
+    + day) plus ``<path_base>_dino.npz`` (the dinosaur modal state, via the dycore's
+    own save). Saves ALL ocean fields (incl. the diagnostic psi/rho/w warm-starts),
+    so a reload is bit-exact -- resume is prognostically continuous, not just
+    state-complete (unlike the legacy nc harness, which recomputes diagnostics)."""
+    blob = {}
+    _save_nt(blob, "ocean", cstate.ocean)
+    _save_nt(blob, "land", cstate.land)
+    _save_nt(blob, "ice", cstate.ice)
+    blob["day"] = np.asarray(float(cstate.day))
+    np.savez(path_base + ".npz", **blob)
+    dino_save(cstate.atmos, path_base + "_dino.npz")
+
+
+def load_state(path_base):
+    """Inverse of :func:`save_state`. The dino modal state restores ``sim_time=None``
+    (the dycore convention; a scalar would break the first resumed ImEx step)."""
+    d = np.load(path_base + ".npz", allow_pickle=False)
+    return DinoCoupledState(
+        ocean=_load_nt(d, "ocean", OceanState),
+        atmos=dino_load(path_base + "_dino.npz"),
+        land=_load_nt(d, "land", LandState),
+        ice=_load_nt(d, "ice", IceState),
+        day=float(d["day"]))
+
+
+__all__ = ["DinoCoupledState", "DinoCoupledModel", "save_state", "load_state"]
