@@ -36,6 +36,9 @@ def test_short_run_finite(model):
     assert np.isfinite(np.asarray(s.ocean.salt)).all(), "ocean salt non-finite"
     # vorticity is complex spectral coefficients; np.isfinite handles complex.
     assert np.isfinite(np.asarray(s.atmos.vorticity)).all(), "modal vorticity non-finite"
+    assert np.isfinite(np.asarray(s.ice.thickness)).all(), "ice thickness non-finite"
+    assert (np.asarray(s.ice.thickness) >= 0.0).all(), "negative ice thickness"
+    assert np.isfinite(np.asarray(s.ice.concentration)).all(), "ice concentration non-finite"
     diag = model.diagnostics_lin(s)
     for k, v in diag.items():
         assert np.isfinite(np.asarray(v)).all(), f"diagnostic {k} non-finite"

@@ -34,6 +34,7 @@ from chronos_esm.atmos.dino_atmos import DinoAtmosphere
 from chronos_esm.config import (OCEAN_DZ, OCEAN_GRID, EARTH_RADIUS, DT_OCEAN,
                                 DRAG_COEFF_LAND)
 from chronos_esm.land.driver import step_land
+from chronos_esm.ice.driver import IceState, init_ice_state, step_ice
 from chronos_esm.ocean import veros_driver
 from chronos_esm.coupler import dino_coupling as dc
 
@@ -45,6 +46,7 @@ class DinoCoupledState(NamedTuple):
     ocean: object        # chronos_esm.ocean.veros_driver.OceanState
     atmos: pe.State      # dinosaur modal state
     land: object         # chronos_esm.land.driver.LandState
+    ice: IceState        # Semtner 0-layer thermodynamic sea ice
     day: float
 
 
@@ -80,6 +82,7 @@ class DinoCoupledModel:
 
         # land forcing (annual-ish downward shortwave; perpetual day=80 as in harness)
         self.land_mask_f = (~np.asarray(self.omask)).astype(np.float32)
+        self.ocean_mask_f = jnp.asarray(np.asarray(self.omask).astype(np.float32))
         insol = np.maximum(np.asarray(aphys.compute_solar_insolation(
             jnp.asarray(lat) * np.pi / 180.0, day_of_year=80.0)), 0.0)[:, None]
         self.sw_down = jnp.asarray(np.broadcast_to(insol, (OCEAN_GRID.nlat, OCEAN_GRID.nlon)))
@@ -90,9 +93,10 @@ class DinoCoupledModel:
     # ---- state ----
     def init_state(self):
         sst0_g = self.lin_to_gauss(jnp.asarray(self._ocean0.temp[0]))
+        ice0 = init_ice_state(OCEAN_GRID.nlat, OCEAN_GRID.nlon)
         return DinoCoupledState(ocean=self._ocean0,
                                 atmos=self.atm.initial_state(sst0_g),
-                                land=self._land0, day=0.0)
+                                land=self._land0, ice=ice0, day=0.0)
 
     # ---- one differentiable coupling interval ----
     def step(self, cstate, interval=1.0):
@@ -101,8 +105,12 @@ class DinoCoupledModel:
         n_sub = int(round(86400.0 * interval / DT_OCEAN))
 
         sst_lin = cstate.ocean.temp[0]
-        # lower boundary: ocean SST over sea, land skin T over land (lagged).
-        surf_T = jnp.where(self.omask, sst_lin, cstate.land.temp)
+        # ice-modified ocean surface temp seen by the atmosphere (lagged ice):
+        # concentration-weighted blend of open-water SST and the ice skin temp.
+        A_prev = cstate.ice.concentration
+        sst_ocean_ice = (1.0 - A_prev) * sst_lin + A_prev * (cstate.ice.surface_temp + 273.15)
+        # lower boundary: ice-modified SST over sea, land skin T over land (lagged).
+        surf_T = jnp.where(self.omask, sst_ocean_ice, cstate.land.temp)
         sst_g = self.lin_to_gauss(surf_T)
 
         # atmosphere interval (nondim T == K, so SST passes through directly), remat'd.
@@ -124,10 +132,20 @@ class DinoCoupledModel:
             mask=jnp.asarray(self.land_mask_f), wind_speed=wind_sp,
             drag_coeff=DRAG_COEFF_LAND, dt=86400.0 * interval)
 
-        # bulk surface fluxes (jnp), then the ocean interval (remat'd scan)
+        # sea ice (Semtner thermodynamic): forced by this interval's atmosphere,
+        # returns heat + freshwater fluxes to the ocean. Units: t_air/SST in degC.
+        new_ice, (ice_heat, ice_fw) = step_ice(
+            cstate.ice, t_air=t_air - 273.15, sw_down=self.sw_down,
+            lw_down=lw_down_l, ocean_temp=sst_lin - 273.15,
+            ny=OCEAN_GRID.nlat, nx=OCEAN_GRID.nlon, mask=self.ocean_mask_f)
+
+        # bulk surface fluxes (jnp), blended with the ice fluxes by concentration.
         nh, fw, tx, ty = dc.ocean_fluxes_jax(
             sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
             ocean_mask=self.omask, sst_target=self.sst_target)
+        A = new_ice.concentration
+        nh = (1.0 - A) * nh + A * ice_heat
+        fw = (1.0 - A) * fw + A * ice_fw
         fluxes = (nh, fw, jnp.zeros_like(nh))
         wind = (tx, ty)
 
@@ -140,7 +158,7 @@ class DinoCoupledModel:
 
         new_ocean, _ = jax.lax.scan(body, cstate.ocean, None, length=n_sub)
         return DinoCoupledState(ocean=new_ocean, atmos=dino_state, land=new_land,
-                                day=cstate.day + interval)
+                                ice=new_ice, day=cstate.day + interval)
 
     # ---- surface diagnostics on the linear grid (for scoring / inspection) ----
     def diagnostics_lin(self, cstate):
