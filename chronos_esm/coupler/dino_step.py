@@ -60,12 +60,19 @@ class DinoCoupledModel:
     ``DinoCoupledState`` pytree.
     """
 
-    def __init__(self, ocean_ic="woa", restore_to_woa=True):
+    def __init__(self, ocean_ic="woa", restore_to_woa=True, restore_tau_days=30.0,
+                 q_flux=None):
+        """restore_tau_days/q_flux select the SST flux-correction mode:
+          - q_flux=None, tau~30  -> strong Haney restoring to WOA (CONTROL mode);
+          - q_flux=<field>, tau long (e.g. 3650) -> frozen q-flux + weak anomaly
+            restoring (FREE / forcing-responsive mode; see ocean.flux_correction)."""
         base = main.init_model(ocean_ic=ocean_ic)
         self._ocean0 = base.ocean
         self._land0 = base.land
         # WOA SST target for the flux-correction (captured from the WOA init).
         self.sst_target = jnp.asarray(base.ocean.temp[0]) if restore_to_woa else None
+        self.restore_tau_days = restore_tau_days
+        self.q_flux = None if q_flux is None else jnp.asarray(q_flux)
 
         nz = base.ocean.u.shape[0]
         self.nz = nz
@@ -144,7 +151,8 @@ class DinoCoupledModel:
         # bulk surface fluxes (jnp), blended with the ice fluxes by concentration.
         nh, fw, tx, ty = dc.ocean_fluxes_jax(
             sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
-            ocean_mask=self.omask, sst_target=self.sst_target, co2_ppm=co2_ppm)
+            ocean_mask=self.omask, sst_target=self.sst_target,
+            restore_tau_days=self.restore_tau_days, q_flux=self.q_flux, co2_ppm=co2_ppm)
         A = new_ice.concentration
         nh = (1.0 - A) * nh + A * ice_heat
         fw = (1.0 - A) * fw + A * ice_fw

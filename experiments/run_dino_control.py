@@ -27,6 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from chronos_esm.coupler.dino_step import (DinoCoupledModel, save_state,  # noqa: E402
                                            load_state)
+from chronos_esm.ocean import flux_correction  # noqa: E402
+from chronos_esm.config import OCEAN_GRID  # noqa: E402
 
 DAYS_PER_YEAR = 365
 
@@ -70,10 +72,20 @@ def main_cli():
     print(f"Library dino control run: days {day}->{end_day} (interval {args.interval}d, "
           f"checkpoint every {args.ckpt_every_days}d)", flush=True)
 
+    # windowed q-flux accumulator: the time-mean restoring heat flux over each
+    # checkpoint window IS the implied flux correction. Saved per checkpoint so the
+    # converged window gives the q-flux for the FREE (forcing-responsive) run.
+    qf_sum = np.zeros((OCEAN_GRID.nlat, OCEAN_GRID.nlon))
+    qf_n = 0
+
     n_intervals = int(round((end_day - day) / args.interval))
     for it in range(1, n_intervals + 1):
         cstate = model.step(cstate, interval=args.interval)
         day = int(round(cstate.day))
+        if model.sst_target is not None:
+            qf_sum += np.asarray(flux_correction.restoring_flux(
+                cstate.ocean.temp[0], model.sst_target, model.restore_tau_days))
+            qf_n += 1
         finite = bool(np.isfinite(np.asarray(cstate.ocean.temp)).all()
                       and np.isfinite(np.asarray(cstate.atmos.vorticity)).all())
         if (day % 30 == 0) or (it == n_intervals) or (not finite):
@@ -87,7 +99,13 @@ def main_cli():
             raise FloatingPointError(f"non-finite state at day {day}; dump written")
         if (day % args.ckpt_every_days == 0) or (it == n_intervals):
             save_state(cstate, _ckpt_base(args.outdir, day))
-            print(f"  [checkpoint] day {day} -> {_ckpt_base(args.outdir, day)}.npz", flush=True)
+            msg = f"  [checkpoint] day {day} -> {_ckpt_base(args.outdir, day)}.npz"
+            if qf_n > 0:
+                np.save(_ckpt_base(args.outdir, day) + "_qflux.npy", qf_sum / qf_n)
+                msg += f" (+_qflux.npy, mean of {qf_n})"
+                qf_sum[:] = 0.0
+                qf_n = 0
+            print(msg, flush=True)
 
     print(f"done: ran to day {day} ({day / DAYS_PER_YEAR:.2f} yr).", flush=True)
 

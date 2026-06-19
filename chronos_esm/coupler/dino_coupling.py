@@ -31,9 +31,9 @@ from dinosaur import primitive_equations as pe
 
 from chronos_esm.atmos import physics as aphys
 from chronos_esm.atmos.dino_atmos import _qsat, G
-from chronos_esm.config import (ALBEDO_OCEAN, OCEAN_DZ, OCEAN_GRID, RHO_WATER,
-                                CP_WATER)
+from chronos_esm.config import ALBEDO_OCEAN, OCEAN_GRID
 from chronos_esm.ocean.diagnostics import compute_amoc
+from chronos_esm.ocean import flux_correction
 
 # Surface bulk-flux constants (match experiments/run_dino_coupled.py).
 RHO_AIR = 1.2
@@ -134,12 +134,15 @@ def co2_forcing_wm2(co2_ppm, co2_ref=280.0):
 
 def ocean_fluxes_jax(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, *,
                      balance_heat=True, ocean_mask=None, sst_target=None,
-                     restore_tau_days=RESTORE_TAU_DAYS, lat_lin=LAT_LIN, co2_ppm=None):
+                     restore_tau_days=RESTORE_TAU_DAYS, lat_lin=LAT_LIN, co2_ppm=None,
+                     q_flux=None):
     """Bulk surface fluxes on the linear grid. Returns
-    ``(net_heat W/m2, fw kg/m2/s, tau_x Pa, tau_y Pa)``. With ``co2_ppm=None`` this is
-    numerically identical to ``run_dino_coupled.ocean_fluxes`` (pure-jnp: the
-    boolean-indexed ocean-mean removals are masked weighted sums). With ``co2_ppm``
-    set, the Myhre CO2 forcing is added to the surface heat budget (single channel).
+    ``(net_heat W/m2, fw kg/m2/s, tau_x Pa, tau_y Pa)``. With ``co2_ppm=None`` and
+    ``q_flux=None`` this is numerically identical to ``run_dino_coupled.ocean_fluxes``
+    (pure-jnp: the boolean-indexed ocean-mean removals are masked weighted sums).
+    ``co2_ppm`` adds the Myhre CO2 forcing (single channel). ``q_flux`` (with a long
+    ``restore_tau_days``) switches the SST flux-correction from strong Haney restoring
+    to the frozen-q-flux + weak-anomaly-restoring FREE mode (see ocean.flux_correction).
     """
     wlat = jnp.cos(jnp.deg2rad(lat_lin))[:, None]
 
@@ -157,8 +160,8 @@ def ocean_fluxes_jax(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, *,
         net_heat = net_heat + co2_forcing_wm2(co2_ppm)
 
     if sst_target is not None:
-        lam = RHO_WATER * CP_WATER * float(OCEAN_DZ[0]) / (restore_tau_days * 86400.0)
-        net_heat = net_heat + lam * (jnp.asarray(sst_target) - sst_K)
+        net_heat = net_heat + flux_correction.heat_correction(
+            sst_K, sst_target, restore_tau_days, q_flux=q_flux)
     elif balance_heat:
         w = jnp.broadcast_to(wlat, net_heat.shape)
         if ocean_mask is not None:
