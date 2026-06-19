@@ -50,7 +50,7 @@ def main_cli():
     os.makedirs(args.outdir, exist_ok=True)
     end_day = args.days if args.days > 0 else int(round(args.years * DAYS_PER_YEAR))
 
-    model = DinoCoupledModel(ocean_ic="woa")
+    model = DinoCoupledModel(ocean_ic="woa", interval=args.interval)
     omask = model.omask
 
     def sst_mean_C(cstate):
@@ -80,7 +80,7 @@ def main_cli():
 
     n_intervals = int(round((end_day - day) / args.interval))
     for it in range(1, n_intervals + 1):
-        cstate = model.step(cstate, interval=args.interval)
+        cstate = model.step_fast(cstate, co2_ppm=280.0)  # control: zero forcing
         day = int(round(cstate.day))
         if model.sst_target is not None:
             qf_sum += np.asarray(flux_correction.restoring_flux(

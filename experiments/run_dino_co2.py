@@ -47,7 +47,7 @@ def _run_branch(model, cstate, co2_ppm, end_day, interval, label):
     curve.append((day / DAYS_PER_YEAR, sst_mean_C(cstate)))
     n = int(round((end_day - day) / interval))
     for it in range(1, n + 1):
-        cstate = model.step(cstate, interval=interval, co2_ppm=co2_ppm)
+        cstate = model.step_fast(cstate, co2_ppm=co2_ppm)
         day = int(round(cstate.day))
         if (day - start) % 365 == 0 or it == n:
             t, s = day / DAYS_PER_YEAR, sst_mean_C(cstate)
@@ -79,7 +79,8 @@ def main_cli():
     q_flux = jnp.asarray(np.load(qpath))
     print(f"q-flux from {qpath}: mean {float(jnp.mean(q_flux)):.2f} W/m2", flush=True)
 
-    model = DinoCoupledModel(q_flux=q_flux, restore_tau_days=args.restore_tau_days)
+    model = DinoCoupledModel(q_flux=q_flux, restore_tau_days=args.restore_tau_days,
+                             interval=args.interval)
     cstate0 = load_state(args.ckpt)
     start_day = int(round(cstate0.day))
     end_day = (start_day + args.days) if args.days > 0 else start_day + int(round(args.years * DAYS_PER_YEAR))

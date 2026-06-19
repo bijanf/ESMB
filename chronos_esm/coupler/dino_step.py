@@ -61,7 +61,7 @@ class DinoCoupledModel:
     """
 
     def __init__(self, ocean_ic="woa", restore_to_woa=True, restore_tau_days=30.0,
-                 q_flux=None):
+                 q_flux=None, interval=1.0):
         """restore_tau_days/q_flux select the SST flux-correction mode:
           - q_flux=None, tau~30  -> strong Haney restoring to WOA (CONTROL mode);
           - q_flux=<field>, tau long (e.g. 3650) -> frozen q-flux + weak anomaly
@@ -96,8 +96,21 @@ class DinoCoupledModel:
             jnp.asarray(lat) * np.pi / 180.0, day_of_year=80.0)), 0.0)[:, None]
         self.sw_down = jnp.asarray(np.broadcast_to(insol, (OCEAN_GRID.nlat, OCEAN_GRID.nlon)))
 
-        # remat'd atmosphere interval (n_steps static) so the adjoint fits in memory.
+        # remat'd atmosphere interval (n_steps static) so the adjoint fits in memory
+        # (used ONLY by the differentiable step(); the forward step_fast does not remat).
         self._atmos_remat = jax.checkpoint(self.atm._run_interval, static_argnums=(2,))
+
+        # FAST forward step: the WHOLE coupling interval jitted as one fused program
+        # (no remat), at a fixed interval. This is ~10x faster than the eager step()
+        # for control/forced runs -- eager dispatch of the spectral transforms, regrid
+        # and the 96-step ocean scan per interval was the slowdown. Differentiable
+        # step() (remat, variable interval) is kept for gradients / DA.
+        self.interval = interval
+        self._n_atm_f = int(round(self.atm.steps_per_day * interval))
+        self._n_sub_f = int(round(86400.0 * interval / DT_OCEAN))
+        self._step_fast = jax.jit(
+            lambda cs, co2: self._advance(cs, co2, self.interval,
+                                          self._n_atm_f, self._n_sub_f, remat=False))
 
     # ---- state ----
     def init_state(self):
@@ -107,12 +120,9 @@ class DinoCoupledModel:
                                 atmos=self.atm.initial_state(sst0_g),
                                 land=self._land0, ice=ice0, day=0.0)
 
-    # ---- one differentiable coupling interval ----
-    def step(self, cstate, interval=1.0, co2_ppm=None):
+    # ---- one coupling interval (shared body; jit-friendly) ----
+    def _advance(self, cstate, co2_ppm, interval, n_atm, n_sub, remat):
         atm = self.atm
-        n_atm = int(round(atm.steps_per_day * interval))
-        n_sub = int(round(86400.0 * interval / DT_OCEAN))
-
         sst_lin = cstate.ocean.temp[0]
         # ice-modified ocean surface temp seen by the atmosphere (lagged ice):
         # concentration-weighted blend of open-water SST and the ice skin temp.
@@ -122,8 +132,10 @@ class DinoCoupledModel:
         surf_T = jnp.where(self.omask, sst_ocean_ice, cstate.land.temp)
         sst_g = self.lin_to_gauss(surf_T)
 
-        # atmosphere interval (nondim T == K, so SST passes through directly), remat'd.
-        dino_state = self._atmos_remat(cstate.atmos, sst_g, n_atm)
+        # atmosphere interval (nondim T == K, so SST passes through directly).
+        # remat ONLY when differentiating; forward runs skip it (it blocks fusion).
+        atmos_fn = self._atmos_remat if remat else atm._run
+        dino_state = atmos_fn(cstate.atmos, sst_g, n_atm)
 
         diag = dc.dino_diagnostics_jax(atm, dino_state)
         u_sfc = self.gauss_to_lin(diag["u_sfc"])
@@ -159,16 +171,27 @@ class DinoCoupledModel:
         fluxes = (nh, fw, jnp.zeros_like(nh))
         wind = (tx, ty)
 
-        @jax.checkpoint
-        def body(oc, _):
+        def _ocean(oc, _):
             return veros_driver.step_ocean(
                 oc, surface_fluxes=fluxes, wind_stress=wind, dx=self.dx, dy=self.dy,
                 dz=self.dz, nz=self.nz, mask=self.surface_mask,
                 ocean_mask_3d=self.ocean_mask_3d), None
-
+        body = jax.checkpoint(_ocean) if remat else _ocean
         new_ocean, _ = jax.lax.scan(body, cstate.ocean, None, length=n_sub)
         return DinoCoupledState(ocean=new_ocean, atmos=dino_state, land=new_land,
                                 ice=new_ice, day=cstate.day + interval)
+
+    # ---- differentiable, variable-interval step (eager; for gradients / DA) ----
+    def step(self, cstate, interval=1.0, co2_ppm=None):
+        n_atm = int(round(self.atm.steps_per_day * interval))
+        n_sub = int(round(86400.0 * interval / DT_OCEAN))
+        return self._advance(cstate, co2_ppm, interval, n_atm, n_sub, remat=True)
+
+    # ---- fast, fully-jitted forward step (fixed interval; control / forced runs) ----
+    def step_fast(self, cstate, co2_ppm=280.0):
+        """One coupling interval as a single fused jitted program (no remat). ~10x
+        faster than step() for forward integration. co2_ppm=280 -> zero forcing."""
+        return self._step_fast(cstate, jnp.asarray(float(co2_ppm)))
 
     # ---- surface diagnostics on the linear grid (for scoring / inspection) ----
     def diagnostics_lin(self, cstate):
