@@ -188,15 +188,22 @@ def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
         barotropic = jnp.sum(v_zonal * dz_col, axis=0, keepdims=True) / H  # (1, ny)
         v_zonal = v_zonal - barotropic
 
-    # Integrate from top down: Psi(k) = -Sum_{i=0}^{k} v_i * dz_i
-    amoc_sv = -jnp.cumsum(v_zonal * dz_col, axis=0) / 1.0e6
+    # Overturning streamfunction, sign convention POSITIVE = AMOC (northward NADW
+    # upper limb / equatorward deep return), per the RAPID convention.
+    # NOTE (metric-sign fix): the previous form negated this (Psi = -cumsum), which
+    # made a physically-correct overturning cell ENTIRELY NON-POSITIVE, so the old
+    # upper_cell = max(Psi) scored a real ~15 Sv AMOC as ~0 Sv (and an anti-AMOC as
+    # large positive). Verified by injecting a clean 15 Sv cell: max(-cumsum) = 0.0,
+    # max(+cumsum) = +15.0. This sign error -- not only the diagnostic-velocity ocean
+    # -- is why the AMOC read ~0 / "incoherent". See tests/test_amoc_metric.py.
+    amoc_sv = jnp.cumsum(v_zonal * dz_col, axis=0) / 1.0e6
 
     # Extract metrics at 26.5N (RAPID array latitude)
     lat_26n_idx = jnp.argmin(jnp.abs(lat - 26.5))
     profile_26n = amoc_sv[:, lat_26n_idx]
 
-    upper_cell = jnp.max(profile_26n)  # Max positive (northward upper)
-    lower_cell = jnp.min(profile_26n)  # Min negative (AABW)
+    upper_cell = jnp.max(profile_26n)  # AMOC upper cell [Sv] (positive, northward NADW)
+    lower_cell = jnp.min(profile_26n)  # AABW lower cell [Sv] (negative)
 
     return {
         "streamfunction": amoc_sv,
