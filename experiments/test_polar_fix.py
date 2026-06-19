@@ -4,12 +4,8 @@ import shutil
 import jax
 import jax.numpy as jnp
 import sys
-sys.path.append(os.getcwd())
-try:
-    from chronos_esm.config import OCEAN_GRID, DT_OCEAN
-except ImportError:
-    sys.path.append("/home/fallah/scripts/ESMB")
-    from chronos_esm.config import OCEAN_GRID, DT_OCEAN
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from chronos_esm.config import OCEAN_GRID, DT_OCEAN
 from chronos_esm.ocean.veros_driver import step_ocean, init_ocean_state, OceanState
 from chronos_esm.ocean import solver
 

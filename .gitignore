@@ -22,3 +22,7 @@ experiments/generated/
 .venv/
 env/
 *.egg-info/
+
+# generated validation scorecards (regenerable run products)
+scorecard.txt
+docs/figures/scorecard.txt

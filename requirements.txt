@@ -1,8 +1,10 @@
 # Chronos-ESM Dependencies
 
-# Core JAX stack
-jax>=0.4.0
-jaxlib>=0.4.0
+# Core JAX stack. PINNED to the validated version: dinosaur-dycore 1.2.1 uses
+# fast-moving private jax APIs and breaks on newer jax (do NOT bump). For GPU,
+# install the matching CUDA build: pip install "jax[cuda12]==0.8.1".
+jax==0.8.1
+jaxlib==0.8.1
 
 # Multi-level atmospheric dynamical core (Google Research's differentiable JAX
 # spectral primitive-equation dycore, the engine behind NeuralGCM). Used to

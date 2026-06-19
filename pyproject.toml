@@ -5,8 +5,30 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chronos_esm"
 version = "0.1.0"
-description = "Chronos Earth System Model"
-requires-python = ">=3.9"
+description = "Chronos Earth System Model -- a JAX-based, fully-differentiable coupled ESM"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Bijan Fallah" }]
+# Validated stack: jax/jaxlib 0.8.1 + dinosaur-dycore 1.2.1 (do NOT bump jax -- newer
+# releases break the dinosaur dycore's private API usage). Mirror requirements.txt.
+dependencies = [
+    "jax==0.8.1",
+    "jaxlib==0.8.1",
+    "dinosaur-dycore==1.2.1",
+    "numpy",
+    "scipy",
+    "netCDF4",
+    "xarray",
+    "pooch",
+    "matplotlib",
+]
+
+[project.urls]
+Repository = "https://github.com/bijanf/ESMB"
+
+[tool.setuptools.packages.find]
+include = ["chronos_esm*"]
 
 # Tools Configuration
 
