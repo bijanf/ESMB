@@ -89,14 +89,20 @@ def main_cli():
         np.savez(os.path.join(args.outdir, "hysteresis.npz"),
                  leg=np.array(rec_leg), hosing_sv=np.array(rec_f), amoc_sv=np.array(rec_amoc))
 
-    a = np.array(rec_amoc); f = np.array(rec_f); lg = np.array(rec_leg)
-    up_a = a[lg == "up"]; dn_a = a[lg == "down"][::-1]
-    gap = float(np.max(np.abs(up_a - dn_a))) if len(up_a) == len(dn_a) else float("nan")
+    a = np.array(rec_amoc); lg = np.array(rec_leg)
+    up_a = a[lg == "up"]; dn_a = a[lg == "down"][::-1]   # align down-leg to ascending F
+    weakening = float(up_a[0] - up_a[-1])                 # AMOC drop over the up-leg (signal)
+    signed = dn_a - up_a if len(up_a) == len(dn_a) else np.array([np.nan])  # <0 = down weaker
+    # GENUINE hysteresis = the down-leg sits SYSTEMATICALLY BELOW the up-leg (the AMOC
+    # stays collapsed on the way back down), by more than interannual noise -- NOT just a
+    # large |gap| (which is dominated by ~3-6 Sv year-to-year AMOC variability here).
+    hyst = bool(len(up_a) == len(dn_a) and np.all(signed < -1.0) and float(np.mean(signed)) < -2.0)
     print("=" * 60)
-    print(f"  AMOC: {a[0]:+.2f} Sv (F=0) -> {a[args.nsteps-1]:+.2f} Sv (F={args.fmax}) "
-          f"-> {a[-1]:+.2f} Sv (F=0 back)")
-    print(f"  max up-vs-down gap = {gap:.2f} Sv  "
-          f"({'HYSTERESIS (tipping)' if gap > 1.0 else 'reversible (mono-stable so far)'})")
+    print(f"  AMOC: {a[0]:+.2f} (F=0) -> {up_a[-1]:+.2f} (F={args.fmax}) "
+          f"-> {a[-1]:+.2f} Sv (F=0 back);  up-leg weakening {weakening:+.2f} Sv")
+    print(f"  down-minus-up per level: {np.round(signed, 1)} Sv (mean {float(np.mean(signed)):+.2f})")
+    print(f"  VERDICT: {'HYSTERESIS / bistable (tipping)' if hyst else 'reversible / mono-stable '
+          '(any gap ~ interannual noise; down-leg not systematically below up-leg)'}")
     print("=" * 60)
 
 
