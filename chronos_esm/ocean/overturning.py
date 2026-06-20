@@ -33,13 +33,25 @@ BETA_S = 0.78  # haline contraction d(rho)/d(salt) [kg/m^3/psu], for the EOS nea
 
 def thc_overturning_velocity(rho, salt, dz, maskC, *, k_vel, drho_scale=0.1,
                              upper_depth_m=1100.0, haline_gain=1.0,
+                             contrast_depth_m=None,
                              subpolar=(45.0, 65.0), subtropical=(10.0, 30.0)):
     """Depth-integral-zero Atlantic overturning velocity v_thc [m/s] (nz,ny,nx).
 
     strength ~ k_vel * softplus(contrast / drho_scale), where
         contrast = drho + (haline_gain - 1) * BETA_S * dS,
-    drho = <rho>_subpolar,upper - <rho>_subtropical,upper (in-situ density [kg/m^3]) and
+    drho = <rho>_subpolar,conv - <rho>_subtropical,conv (in-situ density [kg/m^3]) and
     dS likewise for salinity. ``haline_gain=1`` recovers the pure density contrast.
+
+    Two depth scales, DECOUPLED:
+    * ``upper_depth_m`` sets the OVERTURNING SHAPE G(z) (the limb thickness that the
+      cell's transport flows through) -- a circulation property.
+    * ``contrast_depth_m`` (default = upper_depth_m) sets the layer over which the
+      subpolar-minus-subtropical density/salt CONTRAST is read -- i.e. the convection-
+      region density that gates deep-water formation. Deep-water formation responds to
+      the UPPER few hundred metres, so a shallow contrast_depth (~300 m) is the physical
+      choice; it also gives a surface freshwater HOSING far more leverage on the contrast
+      (a 0-1100 m mean dilutes a surface-trapped anomaly ~20x and barely equilibrates in
+      a decadal hold; a 0-300 m mean dilutes it ~6x and flushes in a few years).
 
     The SALT-ADVECTION FEEDBACK (P4 tipping): v_thc advects salt poleward in the upper
     limb, so a stronger AMOC -> saltier/denser subpolar -> stronger AMOC. With
@@ -51,19 +63,22 @@ def thc_overturning_velocity(rho, salt, dz, maskC, *, k_vel, drho_scale=0.1,
     dz = jnp.asarray(dz)
     atl = _atlantic_mask(ny, nx).astype(rho.dtype)            # (ny,nx)
     lat = jnp.linspace(-90.0, 90.0, ny)
+    if contrast_depth_m is None:
+        contrast_depth_m = upper_depth_m
 
     depth_mid = jnp.cumsum(dz) - 0.5 * dz                     # (nz,) cell-centre depth
-    upper = (depth_mid <= upper_depth_m).astype(rho.dtype)    # (nz,)
+    upper = (depth_mid <= upper_depth_m).astype(rho.dtype)    # (nz,) overturning limb
+    conv = (depth_mid <= contrast_depth_m).astype(rho.dtype)  # (nz,) convection layer
     H = jnp.sum(dz)
     up_d = jnp.sum(upper * dz)
     dn_d = H - up_d + 1e-20
     # vertical shape: +1 in the upper limb, negative below, depth-integral (dz-wtd) = 0.
     G = upper - (1.0 - upper) * (up_d / dn_d)                 # (nz,)
 
-    upper_atl = atl[None, :, :] * maskC * upper[:, None, None]   # (nz,ny,nx)
+    conv_atl = atl[None, :, :] * maskC * conv[:, None, None]     # (nz,ny,nx) contrast layer
 
     def band(field, lohi):
-        bm = ((lat >= lohi[0]) & (lat <= lohi[1])).astype(rho.dtype)[None, :, None] * upper_atl
+        bm = ((lat >= lohi[0]) & (lat <= lohi[1])).astype(rho.dtype)[None, :, None] * conv_atl
         return jnp.sum(field * bm) / (jnp.sum(bm) + 1e-20)
 
     drho = band(rho, subpolar) - band(rho, subtropical)      # [kg/m^3]

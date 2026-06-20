@@ -61,7 +61,8 @@ class DinoCoupledModel:
     """
 
     def __init__(self, ocean_ic="woa", restore_to_woa=True, restore_tau_days=30.0,
-                 q_flux=None, interval=1.0, thc_haline_gain=1.0):
+                 q_flux=None, interval=1.0, thc_haline_gain=1.0,
+                 thc_contrast_depth_m=None):
         """restore_tau_days/q_flux select the SST flux-correction mode:
           - q_flux=None, tau~30  -> strong Haney restoring to WOA (CONTROL mode);
           - q_flux=<field>, tau long (e.g. 3650) -> frozen q-flux + weak anomaly
@@ -74,6 +75,9 @@ class DinoCoupledModel:
         self.restore_tau_days = restore_tau_days
         self.q_flux = None if q_flux is None else jnp.asarray(q_flux)
         self.thc_haline_gain = thc_haline_gain   # >1 -> salt-advection feedback for tipping
+        # convection-layer depth for the density contrast; shallow (~300 m) gives a
+        # surface hosing leverage on deep-water formation (None -> use overturning depth).
+        self.thc_contrast_depth_m = thc_contrast_depth_m
 
         nz = base.ocean.u.shape[0]
         self.nz = nz
@@ -177,6 +181,7 @@ class DinoCoupledModel:
                 oc, surface_fluxes=fluxes, wind_stress=wind, dx=self.dx, dy=self.dy,
                 dz=self.dz, nz=self.nz, mask=self.surface_mask,
                 ocean_mask_3d=self.ocean_mask_3d, thc_haline_gain=self.thc_haline_gain,
+                thc_contrast_depth_m=self.thc_contrast_depth_m,
                 hosing_sv=hosing_sv), None
         body = jax.checkpoint(_ocean) if remat else _ocean
         new_ocean, _ = jax.lax.scan(body, cstate.ocean, None, length=n_sub)

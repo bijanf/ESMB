@@ -45,14 +45,20 @@ def main_cli():
                     help="years averaged at the end of each hold (beats interannual noise)")
     ap.add_argument("--haline-gain", type=float, default=1.0,
                     help=">1 amplifies the salt-advection feedback (bistability/tipping)")
+    ap.add_argument("--contrast-depth", type=float, default=None,
+                    help="convection-layer depth [m] for the density contrast (default = "
+                         "overturning depth ~1100 m). Shallow (~300 m) gives a surface "
+                         "hosing more leverage on deep-water formation -> lower F_crit.")
     ap.add_argument("--co2", type=float, default=280.0)
     ap.add_argument("--outdir", default="outputs/amoc_hosing")
     args = ap.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
-    model = DinoCoupledModel(ocean_ic="woa", thc_haline_gain=args.haline_gain)
+    model = DinoCoupledModel(ocean_ic="woa", thc_haline_gain=args.haline_gain,
+                             thc_contrast_depth_m=args.contrast_depth)
     omask = model.omask
-    print(f"haline_gain = {args.haline_gain} (>1 = stronger salt-advection feedback)", flush=True)
+    print(f"haline_gain = {args.haline_gain} (>1 = stronger salt-advection feedback); "
+          f"contrast_depth = {args.contrast_depth} m (None = overturning depth)", flush=True)
 
     def amoc_now(cs):
         return float(compute_amoc(cs.ocean, ocean_mask=omask)["upper_cell_26N"])
