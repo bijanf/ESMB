@@ -28,13 +28,24 @@ def _atlantic_mask(ny, nx):
     return jnp.asarray((lat_m[:, None] & lon_m[None, :]).astype(np.float64))
 
 
-def thc_overturning_velocity(rho, dz, maskC, *, k_vel, drho_scale=0.1,
-                             upper_depth_m=1100.0, subpolar=(45.0, 65.0),
-                             subtropical=(10.0, 30.0)):
+BETA_S = 0.78  # haline contraction d(rho)/d(salt) [kg/m^3/psu], for the EOS near 35 psu
+
+
+def thc_overturning_velocity(rho, salt, dz, maskC, *, k_vel, drho_scale=0.1,
+                             upper_depth_m=1100.0, haline_gain=1.0,
+                             subpolar=(45.0, 65.0), subtropical=(10.0, 30.0)):
     """Depth-integral-zero Atlantic overturning velocity v_thc [m/s] (nz,ny,nx).
 
-    strength ~ k_vel * softplus(drho / drho_scale), with drho = <rho>_subpolar,upper
-    - <rho>_subtropical,upper (in-situ density [kg/m^3]). Returns (v_thc, drho, amp).
+    strength ~ k_vel * softplus(contrast / drho_scale), where
+        contrast = drho + (haline_gain - 1) * BETA_S * dS,
+    drho = <rho>_subpolar,upper - <rho>_subtropical,upper (in-situ density [kg/m^3]) and
+    dS likewise for salinity. ``haline_gain=1`` recovers the pure density contrast.
+
+    The SALT-ADVECTION FEEDBACK (P4 tipping): v_thc advects salt poleward in the upper
+    limb, so a stronger AMOC -> saltier/denser subpolar -> stronger AMOC. With
+    haline_gain>1 the overturning's sensitivity to the subpolar SALINITY contrast is
+    amplified, raising the feedback loop gain above 1 -> a bistable (tip-capable) AMOC.
+    Returns (v_thc, contrast, amp).
     """
     nz, ny, nx = rho.shape
     dz = jnp.asarray(dz)
@@ -49,17 +60,18 @@ def thc_overturning_velocity(rho, dz, maskC, *, k_vel, drho_scale=0.1,
     # vertical shape: +1 in the upper limb, negative below, depth-integral (dz-wtd) = 0.
     G = upper - (1.0 - upper) * (up_d / dn_d)                 # (nz,)
 
-    # subpolar-minus-subtropical upper-ocean Atlantic density contrast
     upper_atl = atl[None, :, :] * maskC * upper[:, None, None]   # (nz,ny,nx)
 
-    def band_rho(lo, hi):
-        bm = ((lat >= lo) & (lat <= hi)).astype(rho.dtype)[None, :, None] * upper_atl
-        return jnp.sum(rho * bm) / (jnp.sum(bm) + 1e-20)
+    def band(field, lohi):
+        bm = ((lat >= lohi[0]) & (lat <= lohi[1])).astype(rho.dtype)[None, :, None] * upper_atl
+        return jnp.sum(field * bm) / (jnp.sum(bm) + 1e-20)
 
-    drho = band_rho(*subpolar) - band_rho(*subtropical)      # scalar [kg/m^3]
-    amp = k_vel * jax.nn.softplus(drho / drho_scale)         # scalar [m/s], >= 0
+    drho = band(rho, subpolar) - band(rho, subtropical)      # [kg/m^3]
+    dS = band(salt, subpolar) - band(salt, subtropical)      # [psu]
+    contrast = drho + (haline_gain - 1.0) * BETA_S * dS      # haline-amplified contrast
+    amp = k_vel * jax.nn.softplus(contrast / drho_scale)     # scalar [m/s], >= 0
     v_thc = amp * G[:, None, None] * atl[None, :, :] * maskC
-    return v_thc, drho, amp
+    return v_thc, contrast, amp
 
 
 def subpolar_hosing_salt_tendency(hosing_sv, dx, dy, dz0, surf2d, *,

@@ -41,13 +41,18 @@ def main_cli():
     ap.add_argument("--fmax", type=float, default=1.0, help="max hosing [Sv]")
     ap.add_argument("--nsteps", type=int, default=6, help="levels per leg (up and down)")
     ap.add_argument("--hold-years", type=float, default=15.0, help="years held per level")
+    ap.add_argument("--avg-years", type=float, default=5.0,
+                    help="years averaged at the end of each hold (beats interannual noise)")
+    ap.add_argument("--haline-gain", type=float, default=1.0,
+                    help=">1 amplifies the salt-advection feedback (bistability/tipping)")
     ap.add_argument("--co2", type=float, default=280.0)
     ap.add_argument("--outdir", default="outputs/amoc_hosing")
     args = ap.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
-    model = DinoCoupledModel(ocean_ic="woa")
+    model = DinoCoupledModel(ocean_ic="woa", thc_haline_gain=args.haline_gain)
     omask = model.omask
+    print(f"haline_gain = {args.haline_gain} (>1 = stronger salt-advection feedback)", flush=True)
 
     def amoc_now(cs):
         return float(compute_amoc(cs.ocean, ocean_mask=omask)["upper_cell_26N"])
@@ -77,9 +82,10 @@ def main_cli():
     rec_leg, rec_f, rec_amoc = [], [], []
     for i, (leg, f) in enumerate(legs):
         amoc_acc, nacc = 0.0, 0
+        avg_window = int(round(args.avg_years * DAYS_PER_YEAR))
         for d in range(n_hold):
             cstate = model.step_fast(cstate, co2_ppm=args.co2, hosing_sv=float(f))
-            if d >= n_hold - DAYS_PER_YEAR:          # average AMOC over the final year
+            if d >= n_hold - avg_window:             # average over the final --avg-years
                 amoc_acc += amoc_now(cstate); nacc += 1
         amoc = amoc_acc / max(nacc, 1)
         rec_leg.append(leg); rec_f.append(float(f)); rec_amoc.append(amoc)

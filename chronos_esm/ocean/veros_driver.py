@@ -69,6 +69,7 @@ def step_ocean(
     smag_constant: float = 0.1,
     ocean_mask_3d: Optional[jnp.ndarray] = None,
     thc_k_vel: float = 1.0e-4,
+    thc_haline_gain: float = 1.0,
     hosing_sv: float = 0.0,
 ) -> OceanState:
 
@@ -183,7 +184,8 @@ def step_ocean(
     # gives DENSITY a pathway to the 26.5N cell, so d(AMOC)/d(density) is nonzero and
     # sign-correct (the diagnostic thermal wind alone gave ~0). Interim box-model-style
     # closure; the prognostic-momentum/JEBAR core is P3 S2-S5. Disable with thc_k_vel=0.
-    v_thc, _, _ = overturning.thc_overturning_velocity(rho, dz, maskC, k_vel=thc_k_vel)
+    v_thc, _, _ = overturning.thc_overturning_velocity(
+        rho, state.salt, dz, maskC, k_vel=thc_k_vel, haline_gain=thc_haline_gain)
     v_new = (v_new + v_thc) * maskC
 
     u_eff = u_eff * maskC
