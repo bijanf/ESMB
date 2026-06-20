@@ -44,36 +44,52 @@ def _stats(year, amoc, eq_year=40):
     return a.mean(), a.std()
 
 
+def _scan(root, br):
+    """All F (sorted) for which a series exists for branch br, with (mean,std)."""
+    out = {}
+    for p in sorted(glob.glob(os.path.join(root, f"F*_{br}.npz"))):
+        F = float(os.path.basename(p).split("_")[0][1:])
+        d = np.load(p)
+        out[F] = _stats(d["year"], d["amoc_sv"])
+    return dict(sorted(out.items()))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="/tmp/amoc_bist")
-    ap.add_argument("--pairs", nargs="+", default=["0.46", "0.57", "0.69"])
     ap.add_argument("--traj", default="0.57", help="F for the trajectory panel")
     ap.add_argument("--eq-year", type=float, default=40.0)
+    ap.add_argument("--collapsed-below", type=float, default=11.0,
+                    help="branch AMOC below this = OFF/collapsed state (for window edges)")
     ap.add_argument("--config", default="k_vel=6e-5, haline_gain=6, contrast_depth=300 m")
     ap.add_argument("--out", default="docs/figures/amoc_bistability.pdf")
     args = ap.parse_args()
 
-    Fs = [float(f) for f in args.pairs]
-    on_m, on_s, off_m, off_s = [], [], [], []
-    for f in args.pairs:
-        ym, am = _load(args.root, f, "on"); m, s = _stats(ym, am, args.eq_year)
-        on_m.append(m); on_s.append(s)
-        yf, af = _load(args.root, f, "off"); m, s = _stats(yf, af, args.eq_year)
-        off_m.append(m); off_s.append(s)
+    on = _scan(args.root, "on")     # {F: (mean,std,neff)} -- on-IC integrations
+    off = _scan(args.root, "off")   # off-IC integrations
+
+    # window edges: F_lower = highest off-IC F that RECOVERED (mean high); F_upper =
+    # lowest on-IC F that COLLAPSED (mean low). Bistable F have both branches separated.
+    thr = args.collapsed_below
+    off_low = [F for F, v in off.items() if v[0] < thr + 4]    # off stays low -> in window
+    on_hi = [F for F, v in on.items() if v[0] > thr]           # on stays up -> in window
+    f_lower = min(off_low) if off_low else min(on)             # window opens
+    f_upper = max(on_hi) if on_hi else max(off)                # window closes (on collapses)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(3.46, 1.8))
 
-    # (a) bifurcation diagram
-    ax1.errorbar(Fs, on_m, yerr=on_s, fmt="o-", color="#1f77b4", capsize=2, lw=1,
-                 ms=3, label="from ON state")
-    ax1.errorbar(Fs, off_m, yerr=off_s, fmt="s--", color="#d62728", capsize=2, lw=1,
-                 ms=3, label="from OFF state")
-    ax1.fill_between(Fs, off_m, on_m, color="0.85", zorder=0)
+    # (a) bifurcation diagram -- full window
+    Fon = list(on); Foff = list(off)
+    ax1.axvspan(f_lower, f_upper, color="0.88", zorder=0, label="bistable window")
+    ax1.errorbar(Fon, [on[f][0] for f in Fon], yerr=[on[f][1] for f in Fon],
+                 fmt="o-", color="#1f77b4", capsize=2, lw=1, ms=3, label="from ON state")
+    ax1.errorbar(Foff, [off[f][0] for f in Foff], yerr=[off[f][1] for f in Foff],
+                 fmt="s--", color="#d62728", capsize=2, lw=1, ms=3, label="from OFF state")
     ax1.set_xlabel("subpolar hosing $F$ (Sv)")
     ax1.set_ylabel("AMOC @ 26.5°N (Sv)")
-    ax1.set_title("(a) bistable window", loc="left")
-    ax1.legend(frameon=False, loc="upper right")
+    ax1.set_title(f"(a) hysteresis window ≈ [{f_lower:.2f}, {f_upper:.2f}] Sv", loc="left",
+                  fontsize=6)
+    ax1.legend(frameon=False, loc="upper right", fontsize=5)
     ax1.set_ylim(0, None)
 
     # (b) IC-dependent trajectories at one F
@@ -96,9 +112,11 @@ def main():
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     fig.savefig(args.out, bbox_inches="tight")
     print(f"wrote {args.out}")
-    print("branch means (Sv):")
-    for f, om, os_, fm, fs in zip(args.pairs, on_m, on_s, off_m, off_s):
-        print(f"  F={f}: ON {om:5.1f}±{os_:4.1f}   OFF {fm:5.1f}±{fs:4.1f}   gap {om-fm:+.1f}")
+    print(f"window ~ [{f_lower:.2f}, {f_upper:.2f}] Sv")
+    for f in sorted(set(on) | set(off)):
+        os_ = f"{on[f][0]:5.1f}±{on[f][1]:4.1f}" if f in on else "    -     "
+        fs_ = f"{off[f][0]:5.1f}±{off[f][1]:4.1f}" if f in off else "    -     "
+        print(f"  F={f:.2f}: ON {os_}   OFF {fs_}")
 
 
 if __name__ == "__main__":
