@@ -248,3 +248,17 @@ def compute_amoc_diagnostics(state: OceanState, atlantic_mask: jnp.ndarray = Non
         "north_atlantic_sst": float(na_sst_mean),
         "global_mean_salinity": float(global_mean_salt),
     }
+
+
+def compute_barotropic_streamfunction(u, dz, dy, mask=None):
+    """Horizontal barotropic streamfunction psi_bt (ny, nx) from the depth-integrated
+    zonal velocity. With U = sum_z u*dz and the convention U = -d(psi)/dy, integrating
+    northward gives psi(y) = -cumsum_y(U)*dy. Units m^3/s (divide by 1e6 for Sv). This is
+    the x-y transport streamfunction used to validate the prognostic barotropic core
+    (P3/S2: gyre / Sverdrup balance), distinct from the depth-latitude AMOC/MOC above.
+    """
+    dz = jnp.asarray(dz)
+    U = jnp.sum(u * dz[:, None, None], axis=0)            # (ny, nx) zonal transport/length
+    if mask is not None:
+        U = U * mask
+    return -jnp.cumsum(U, axis=0) * dy

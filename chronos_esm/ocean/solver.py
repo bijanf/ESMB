@@ -313,3 +313,81 @@ def solve_poisson_2d(
     )
 
     return x_flat.reshape((ny, nx)), info
+
+
+# ---------------------------------------------------------------------------
+# Variable-coefficient elliptic solver (P3 / S2): div(coef * grad psi) = rhs.
+# The load-bearing invert for a prognostic barotropic-vorticity / JEBAR ocean core.
+# coef = 1/H (cell-centred) gives the topographic/JEBAR operator over real bathymetry;
+# coef = const reproduces the Poisson solve. Periodic in x, Dirichlet psi=0 in y and on
+# land (the identity-row trick from solve_poisson_2d). Wraps the AD-safe scan-CG, so it
+# is differentiable. Face coefficients are the arithmetic mean of adjacent cells, zeroed
+# on closed (land) faces so no flux crosses coastlines.
+# ---------------------------------------------------------------------------
+def _varcoef_faces(coef):
+    """East/West/North/South face coefficients = arithmetic mean of adjacent cells.
+
+    Faces are NOT masked: ocean cells couple to neighbouring land cells, which are pinned
+    to psi=0 by the identity rows in the operator -> a Dirichlet (psi=0) coast/boundary,
+    which is the correct streamfunction BC. (Masking the faces would impose a no-flux /
+    Neumann condition -> a singular operator and a divergent CG.) coef must be finite
+    everywhere (regularise 1/H on land before calling)."""
+    cE = 0.5 * (coef + jnp.roll(coef, -1, axis=1))
+    cW = 0.5 * (coef + jnp.roll(coef, 1, axis=1))
+    coef_n = jnp.concatenate([coef[1:, :], coef[-1:, :]], axis=0)
+    coef_s = jnp.concatenate([coef[:1, :], coef[:-1, :]], axis=0)
+    cN = 0.5 * (coef + coef_n)
+    cS = 0.5 * (coef + coef_s)
+    return cE, cW, cN, cS
+
+
+def _elliptic_op(psi, cE, cW, cN, cS, dx2, dy2):
+    """Discrete div(coef * grad psi) on the periodic-x / Dirichlet-y grid."""
+    pe = jnp.roll(psi, -1, axis=1)
+    pw = jnp.roll(psi, 1, axis=1)
+    pn = jnp.concatenate([psi[1:, :], jnp.zeros_like(psi[:1, :])], axis=0)
+    ps = jnp.concatenate([jnp.zeros_like(psi[:1, :]), psi[:-1, :]], axis=0)
+    flux_x = (cE * (pe - psi) - cW * (psi - pw)) / dx2
+    flux_y = (cN * (pn - psi) - cS * (psi - ps)) / dy2
+    return flux_x + flux_y
+
+
+def apply_elliptic_varcoef(psi, coef, dx, dy, mask=None):
+    """Apply L psi = div(coef * grad psi) (ocean cells only). Useful for manufactured
+    solutions and for a Laplacian-of-vorticity viscous term."""
+    ny, nx = psi.shape
+    coef = jnp.broadcast_to(jnp.asarray(coef, psi.dtype), (ny, nx))
+    mask = jnp.ones((ny, nx), psi.dtype) if mask is None else mask.astype(psi.dtype)
+    cE, cW, cN, cS = _varcoef_faces(coef)
+    return _elliptic_op(psi, cE, cW, cN, cS,
+                        jnp.asarray(dx) ** 2, jnp.asarray(dy) ** 2) * mask
+
+
+def solve_elliptic_varcoef(coef, rhs, dx, dy, mask=None, x0=None,
+                           max_iter=400, tol=1e-7):
+    """Solve div(coef * grad psi) = rhs for psi. Returns (psi, info).
+
+    coef, rhs: (ny, nx). dx, dy: scalar or broadcastable. mask: 1=ocean, 0=land
+    (psi=0 enforced on land). x0: warm-start. Differentiable in coef, rhs (and x0).
+    """
+    ny, nx = rhs.shape
+    coef = jnp.broadcast_to(jnp.asarray(coef, rhs.dtype), (ny, nx))
+    mask = jnp.ones((ny, nx), rhs.dtype) if mask is None else mask.astype(rhs.dtype)
+    cE, cW, cN, cS = _varcoef_faces(coef)
+    dx2, dy2 = jnp.asarray(dx) ** 2, jnp.asarray(dy) ** 2
+
+    def operator(psi_flat):
+        psi = psi_flat.reshape(ny, nx)
+        lap = _elliptic_op(psi, cE, cW, cN, cS, dx2, dy2)
+        # A = -L on ocean (SPD), identity on land -> psi=0 where rhs=0
+        return (-lap * mask + psi * (1.0 - mask)).flatten()
+
+    diag = (cE + cW) / dx2 + (cN + cS) / dy2          # diag of -L (positive)
+    diag = diag * mask + (1.0 - mask)                 # identity on land
+    precond = jacobi_preconditioner(diag.flatten())
+
+    b = (-rhs * mask).flatten()
+    x0_flat = x0.flatten() if x0 is not None else jnp.zeros_like(b)
+    x, info = solve_cg(operator, b, x0_flat, max_iter=max_iter, tol=tol,
+                       preconditioner=precond)
+    return x.reshape(ny, nx), info
