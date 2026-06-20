@@ -10,7 +10,9 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
-#SBATCH --time=04:00:00
+#SBATCH --time=12:00:00   # gpupreempt MaxWall is 30 d; a full sweep is ~4.4 h, +margin.
+                         # run_amoc_hosing.py auto-resumes from per-level ckpts, so a
+                         # --requeue (preemption) continues instead of re-spinning up.
 
 # AMOC hosing / hysteresis sweep. Forwards all args to run_amoc_hosing.py.
 #   sbatch --dependency=afterok:<control_jobid> --requeue experiments/run_amoc_hosing_slurm.sh \

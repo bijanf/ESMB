@@ -17,6 +17,7 @@ Writes <outdir>/hysteresis.npz (leg, hosing_sv, amoc_sv) and prints the loop.
 Checkpoints the running state per level so a preempted job can be re-pointed.
 """
 import argparse
+import glob
 import os
 import sys
 
@@ -55,6 +56,10 @@ def main_cli():
                          "tips at a lower hosing F_crit (default 1e-4 ~ 28 Sv at cd=300).")
     ap.add_argument("--co2", type=float, default=280.0)
     ap.add_argument("--outdir", default="outputs/amoc_hosing")
+    ap.add_argument("--fresh", action="store_true",
+                    help="ignore any existing per-level checkpoints in --outdir and restart "
+                         "(default: AUTO-RESUME from the last completed level, so a preempted "
+                         "or timed-out --requeue job continues instead of re-spinning up)")
     args = ap.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
@@ -68,9 +73,39 @@ def main_cli():
     def amoc_now(cs):
         return float(compute_amoc(cs.ocean, ocean_mask=omask)["upper_cell_26N"])
 
-    # Start state: a saved control checkpoint, OR (self-contained, queue-robust) a
-    # fresh WOA init spun up --spinup-years with the density-responsive THC ocean.
-    if args.ckpt:
+    up = np.linspace(0.0, args.fmax, args.nsteps)
+    legs = [("up", f) for f in up] + [("down", f) for f in up[::-1]]
+    n_hold = int(round(args.hold_years * DAYS_PER_YEAR))
+
+    # AUTO-RESUME: a --requeue job (preempted or timed-out) re-runs this script with the
+    # same --outdir; if per-level checkpoints exist, reload the last completed level and
+    # skip the spin-up + done levels rather than re-spinning up from scratch.
+    done_i, rec_leg, rec_f, rec_amoc = -1, [], [], []
+    if not args.fresh:
+        idxs = []
+        for p in glob.glob(os.path.join(args.outdir, "hose_*_dino.npz")):
+            try:
+                idxs.append(int(os.path.basename(p).split("_")[1]))
+            except (IndexError, ValueError):
+                pass
+        done_i = max(idxs) if idxs else -1
+
+    if done_i >= 0:
+        base = glob.glob(os.path.join(args.outdir, f"hose_{done_i:02d}_*_dino.npz"))[0]
+        base = base[: -len("_dino.npz")]
+        cstate = load_state(base)
+        hz = os.path.join(args.outdir, "hysteresis.npz")
+        if os.path.exists(hz):
+            d = np.load(hz, allow_pickle=True)
+            rec_leg = list(d["leg"].astype(str))[: done_i + 1]
+            rec_f = [float(x) for x in d["hosing_sv"]][: done_i + 1]
+            rec_amoc = [float(x) for x in d["amoc_sv"]][: done_i + 1]
+        print(f"RESUME: last completed level {done_i} ({os.path.basename(base)}); "
+              f"AMOC = {amoc_now(cstate):+.2f} Sv; skipping spin-up + {done_i + 1} levels",
+              flush=True)
+    # Start state (fresh run): a saved control checkpoint, OR (self-contained, queue-
+    # robust) a fresh WOA init spun up --spinup-years with the density-responsive THC ocean.
+    elif args.ckpt:
         cstate = load_state(args.ckpt)
         print(f"loaded control {args.ckpt}; AMOC = {amoc_now(cstate):+.2f} Sv", flush=True)
     else:
@@ -83,15 +118,12 @@ def main_cli():
                       f"AMOC {amoc_now(cstate):+.2f} Sv", flush=True)
         print(f"spun up {args.spinup_years:.0f} yr; AMOC = {amoc_now(cstate):+.2f} Sv", flush=True)
 
-    up = np.linspace(0.0, args.fmax, args.nsteps)
-    legs = [("up", f) for f in up] + [("down", f) for f in up[::-1]]
-    n_hold = int(round(args.hold_years * DAYS_PER_YEAR))
-
     print(f"AMOC hosing sweep: 0->{args.fmax}->0 Sv, {args.nsteps} levels/leg, "
           f"{args.hold_years:.0f} yr/level. Start AMOC = {amoc_now(cstate):+.2f} Sv", flush=True)
 
-    rec_leg, rec_f, rec_amoc = [], [], []
     for i, (leg, f) in enumerate(legs):
+        if i <= done_i:                              # already completed in a prior run
+            continue
         amoc_acc, nacc = 0.0, 0
         avg_window = int(round(args.avg_years * DAYS_PER_YEAR))
         for d in range(n_hold):
