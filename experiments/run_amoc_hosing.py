@@ -49,16 +49,21 @@ def main_cli():
                     help="convection-layer depth [m] for the density contrast (default = "
                          "overturning depth ~1100 m). Shallow (~300 m) gives a surface "
                          "hosing more leverage on deep-water formation -> lower F_crit.")
+    ap.add_argument("--k-vel", type=float, default=1.0e-4,
+                    help="THC overturning velocity scale [m/s]. Lower -> weaker, more "
+                         "realistic ~15 Sv on-state -> smaller freshwater transport -> "
+                         "tips at a lower hosing F_crit (default 1e-4 ~ 28 Sv at cd=300).")
     ap.add_argument("--co2", type=float, default=280.0)
     ap.add_argument("--outdir", default="outputs/amoc_hosing")
     args = ap.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
     model = DinoCoupledModel(ocean_ic="woa", thc_haline_gain=args.haline_gain,
-                             thc_contrast_depth_m=args.contrast_depth)
+                             thc_contrast_depth_m=args.contrast_depth, thc_k_vel=args.k_vel)
     omask = model.omask
     print(f"haline_gain = {args.haline_gain} (>1 = stronger salt-advection feedback); "
-          f"contrast_depth = {args.contrast_depth} m (None = overturning depth)", flush=True)
+          f"contrast_depth = {args.contrast_depth} m (None = overturning depth); "
+          f"k_vel = {args.k_vel:.1e} m/s", flush=True)
 
     def amoc_now(cs):
         return float(compute_amoc(cs.ocean, ocean_mask=omask)["upper_cell_26N"])
