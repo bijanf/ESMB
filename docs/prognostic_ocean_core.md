@@ -27,13 +27,14 @@ work-around, not a fix.
 |---|---|---|
 | **S2** | AD-safe variable-coefficient elliptic invert `div(coef·∇ψ)=rhs` (Cartesian + spherical), `coef=1/H` → JEBAR/topographic operator | **done** |
 | **S3** | Prognostic barotropic vorticity (`∂ζ/∂t = −β·v − r·ζ + curl(τ)/(ρH)`), ψ inverted each step; validated against the Stommel/Sverdrup gyre | **done (standalone)** |
-| **S4** | Prognostic baroclinic `du/dt` (semi-implicit Coriolis, hydrostatic pressure gradient, viscosity, equatorial friction) — the AMOC-relevant density-driven overturning | **next** |
-| **S5** | Build `1/H` from real ETOPO; wire S3+S4 into `step_ocean` **behind a flag** (default = current diagnostic path); retire the THC closure once the dynamical chain carries overturning to 26.5°N; re-run the hysteresis sweep for a clean bifurcation | pending |
+| **S4** | Prognostic baroclinic `du/dt` (semi-implicit Coriolis, hydrostatic pressure gradient, viscosity, friction) — the AMOC-relevant density-driven overturning | **done (standalone)** |
+| **S5** | Build `1/H` from real ETOPO; couple S3 (barotropic) + S4 (baroclinic) on the model grid; wire into `step_ocean` **behind a flag** (default = current diagnostic path); retire the THC closure once the dynamical chain carries overturning to 26.5°N; re-run the hysteresis sweep for a clean bifurcation | next |
 
-## What's built (S2–S3)
+## What's built (S2–S4)
 
 All in pure JAX, differentiable, **standalone — not yet wired into the live model** (zero
-regression). Validated by `tests/test_barotropic_gyre.py` (9 tests).
+regression). Validated by `tests/test_barotropic_gyre.py` (9 tests) and
+`tests/test_momentum.py` (3 tests).
 
 `chronos_esm/ocean/solver.py`
 - `solve_elliptic_varcoef(coef, rhs, dx, dy, mask, x0)` — Cartesian `div(coef·∇ψ)=rhs`.
@@ -54,6 +55,14 @@ regression). Validated by `tests/test_barotropic_gyre.py` (9 tests).
   `spin_up_gyre_sphere` (lat-lon): prognose ζ, diagnose ψ via the elliptic invert. On the
   sphere the planetary-vorticity advection simplifies to `β·v = (2Ω/a²)∂_λψ` (cosφ cancels).
 - `wind_stress_curl[_sphere]`, `velocities_from_psi` / `velocities_sphere`.
+
+`chronos_esm/ocean/momentum.py` (S4)
+- `step_momentum` / `spin_up` — prognostic baroclinic `du/dt`, `dv/dt` with
+  **semi-implicit Coriolis** (`coriolis_semi_implicit`, a 2×2 rotation solve — stable for
+  any `dt·f`; explicit `f×u` is unconditionally unstable), the **hydrostatic
+  pressure-gradient force** from density (`hydrostatic_pressure` → `pressure_gradient_accel`),
+  linear drag, and optional horizontal viscosity. Validated against **thermal-wind balance**
+  (`du/dz = −(g/(ρ₀f)) ∂ρ/∂y`) and Coriolis stability at `dt·f = 5`; differentiable.
 
 `chronos_esm/ocean/diagnostics.py`
 - `compute_barotropic_streamfunction` — the x-y transport streamfunction (gyre validation),
