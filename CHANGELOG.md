@@ -1,5 +1,78 @@
 # Changelog
 
+## [Unreleased] - 2026-06-21b — Prognostic barotropic ocean-core scaffold (P3 / S2–S3)
+
+- **First building blocks of a prognostic-momentum ocean core**, toward replacing the
+  diagnostic thermal-wind velocities + interim Stommel/box thermohaline closure (whose
+  AMOC bistability is genuine but ±10 Sv noisy) with a time-integrated overturning. All
+  new code is **standalone — not wired into `veros_driver`/`main`**, so there is zero
+  regression risk to the running model.
+  - `chronos_esm/ocean/solver.py`: `solve_elliptic_varcoef` / `apply_elliptic_varcoef` —
+    an AD-safe variable-coefficient elliptic solve `div(coef·∇ψ)=rhs` wrapping the existing
+    scan-CG. `coef=1/H` gives the JEBAR/topographic operator; `coef=const` reproduces
+    `solve_poisson_2d`. Dirichlet `ψ=0` at coasts via the land-identity rows (faces are
+    **not** masked — masking imposes a singular Neumann condition that diverges CG; caught
+    by a random-RHS test). `solve_elliptic_varcoef_sphere` adds the lat-lon operator
+    `(1/(a²cosφ))[∂_λ(coef/cosφ ∂_λψ)+∂_φ(coef cosφ ∂_φψ)]` in **symmetric face-conductance
+    form** (multiply the cell equation by the cell area so the matrix stays SPD — the
+    area-divided form is non-symmetric once cell area varies with latitude) with a polar
+    cosφ floor.
+  - `chronos_esm/ocean/barotropic.py`: Cartesian **and** spherical prognostic barotropic
+    vorticity prototypes — prognose ζ, diagnose ψ each step via the elliptic invert. On the
+    sphere the planetary-vorticity term simplifies to `β·v = (2Ω/a²)∂_λψ` (cosφ cancels).
+  - `chronos_esm/ocean/diagnostics.py`: `compute_barotropic_streamfunction` (x-y transport).
+  - Validation: `tests/test_barotropic_gyre.py` (9 tests) — manufactured-solution round
+    trips (constant + variable coef, Cartesian + spherical, recovered to ~1e-11), agreement
+    with `solve_poisson_2d`, Cartesian **and** spherical **Stommel gyres** (Sverdrup interior
+    `β·v = curl(τ)/(ρH)` + western intensification), and `jax.grad` finiteness. **Remaining
+    P3:** prognostic baroclinic `du/dt` (S4, the AMOC-relevant overturning), `1/H` from real
+    ETOPO, wiring into `veros_driver` behind a flag (semi-implicit Coriolis, equatorial
+    friction), and a stronger preconditioner (the anisotropic spherical CG stalls at a
+    float64 residual floor — fine for tests with warm-start, too slow for long runs).
+
+## [Unreleased] - 2026-06-21 — CO2 forcing-response proxy (P2)
+
+- **The free-ocean coupled model warms under CO2.** The Myhre forcing
+  `co2_forcing_wm2 = 5.35·ln(C/280)` was already wired into the ocean surface heat budget
+  (`coupler/dino_coupling.py`), but was suppressed ~50× by the control-mode WOA Haney
+  restoring and never exercised end-to-end. Added the missing proof and ran the experiment:
+  `tests/test_forcing_integration.py` confirms the term is live at **+3.71 W/m² for 2×CO2**
+  in *both* control and free (q-flux) mode (the co2-independent restoring cancels in
+  forced−baseline); `tests/test_co2_warming_e2e.py` shows the free q-flux model warms. A
+  GPU abrupt-2×CO2 experiment (`experiments/run_dino_co2.py`, baseline 280 vs forced 560
+  ppm from a converged control with frozen q-flux) gives **ΔSST = +1.58 K → 0.43 K/(W/m²)**.
+  This is a **TCR-like proxy, NOT equilibrium ECS**: the forcing enters as surface DLR with
+  no atmospheric radiative-feedback amplification (so it under-estimates sensitivity), on a
+  cold-tropics base state, with ±0.3 K endpoint interannual noise. Non-negotiable #2
+  (forcing response) is demonstrated at proxy level.
+
+## [Unreleased] - 2026-06-20 — AMOC tipping / verified bistability (P4)
+
+- **A genuine AMOC saddle-node hysteresis window, verified.** Built a tunable
+  salt-advection feedback on the thermohaline closure and the experiment harness to find
+  it. `chronos_esm/ocean/overturning.py` gains `haline_gain` (amplifies the subpolar
+  salinity contrast's grip on the overturning → raises the feedback loop gain above 1) and
+  a `subpolar_hosing_salt_tendency`; `thc_contrast_depth_m` (read the density contrast over
+  the upper ~300 m convection layer, not 0–1100 m — a surface freshwater hosing was being
+  diluted ~22× and under-equilibrated) and `thc_k_vel` (set the on-state strength to a
+  realistic ~15 Sv) are threaded through `veros_driver.step_ocean` and `DinoCoupledModel`.
+  - **Result** (`k_vel=6e-5, haline_gain=6, contrast_depth=300 m`): from an ON-state vs an
+    OFF-state initial condition at the same fixed hosing, the equilibrated AMOC stays 8–9 Sv
+    apart after 100 yr at F = 0.46/0.57/0.69 Sv — significant (autocorrelation-corrected
+    z = 2.6–4.4) and the off-branch does not recover. The full window is **≈ [0.38, 0.75]
+    Sv, centered ~0.6** (off-IC recovers below ~0.3; on-IC collapses above ~0.8). The
+    branches are **noisy** (a ±~10 Sv relaxation-oscillation intrinsic to the strong
+    feedback — only the prognostic core, P3, will make it clean). See
+    `docs/figures/amoc_bistability.pdf`.
+  - **Tooling:** `experiments/run_amoc_hosing.py` (quasi-static up/down sweep, auto-resume +
+    12 h wall), `experiments/run_amoc_bistability.py` (the rigorous fixed-F on/off-IC test),
+    `experiments/calibrate_amoc_fold.py` (a reduced-Stommel box, AD fold-continuation that
+    Newton-inverts (haline_gain, k_vel) for a target F_crit in milliseconds — the
+    differentiable alternative to a parameter grid), and `experiments/plot_amoc_bistability.py`.
+    Also fixed the AMOC metric sign convention in `compute_amoc` (a physically-correct cell
+    was scoring ~0). The interim closure *works around* the `d(AMOC)/d(density)≈0` blocker; a
+    clean bifurcation still needs the P3 prognostic-momentum core.
+
 ## [Unreleased] - 2026-06-18b — Vertical tracer advection (AMOC overturning branch)
 
 - **Tracers are now advected vertically by w.** `step_ocean` previously did horizontal
