@@ -1,0 +1,95 @@
+% ===================================================================
+% Chronos-ESM Manual — shared preamble (packages, notation, styles)
+% ===================================================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{bm}
+\usepackage{graphicx}
+\graphicspath{{figures/}{../figures/}}   % manual figures and the repo docs/figures
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[round]{natbib}
+\usepackage[colorlinks=true,linkcolor=NavyBlue,citecolor=ForestGreen,urlcolor=BrickRed]{hyperref}
+\usepackage{caption}
+\usepackage{microtype}
+\usepackage{enumitem}
+
+% --- colours -------------------------------------------------------
+\definecolor{NavyBlue}{RGB}{0,51,153}
+\definecolor{ForestGreen}{RGB}{34,102,51}
+\definecolor{BrickRed}{RGB}{153,0,0}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codekw}{RGB}{0,0,153}
+\definecolor{codecomment}{RGB}{102,102,102}
+\definecolor{codestr}{RGB}{153,51,0}
+
+% --- Python code listings (map equations <-> implementation) -------
+\lstdefinestyle{chronos}{
+  language=Python, backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\footnotesize, keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecomment}\itshape, stringstyle=\color{codestr},
+  showstringspaces=false, breaklines=true, frame=single, framerule=0pt,
+  numbers=left, numberstyle=\tiny\color{codecomment}, captionpos=b, tabsize=4,
+}
+\lstset{style=chronos}
+
+% --- theorem-like environments -------------------------------------
+\theoremstyle{definition}
+\newtheorem{exercise}{Exercise}[chapter]
+\newtheorem{example}{Example}[chapter]
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}[chapter]
+
+% "Code box": a marginless callout mapping math to a source location
+\newcommand{\codref}[2]{\par\noindent\textcolor{ForestGreen}{\small$\hookrightarrow$ \textit{Code:} \texttt{#1} — #2}\par}
+
+% ===================================================================
+% NOTATION MACROS — chapter authors MUST use these for consistency.
+% ===================================================================
+% calculus
+\newcommand{\pd}[2]{\frac{\partial #1}{\partial #2}}        % partial derivative
+\newcommand{\pdd}[2]{\frac{\partial^2 #1}{\partial #2^2}}
+\newcommand{\dt}[1]{\frac{\mathrm{d}#1}{\mathrm{d}t}}
+\newcommand{\Dt}[1]{\frac{\mathrm{D}#1}{\mathrm{D}t}}        % material derivative
+\newcommand{\grad}{\boldsymbol{\nabla}}
+\newcommand{\diver}{\grad\!\cdot\!}
+\newcommand{\curl}{\grad\!\times\!}
+\newcommand{\lap}{\nabla^{2}}
+\newcommand{\dd}{\,\mathrm{d}}
+% vectors / fields
+\newcommand{\uvec}{\mathbf{u}}                 % horizontal velocity vector
+\newcommand{\kvec}{\mathbf{k}}                 % vertical unit vector
+\newcommand{\xvec}{\mathbf{x}}
+\newcommand{\uu}{u}                            % zonal velocity
+\newcommand{\vv}{v}                            % meridional velocity
+\newcommand{\ww}{w}                            % vertical velocity
+\newcommand{\Temp}{\theta}                     % potential temperature
+\newcommand{\Salt}{S}                          % salinity
+\newcommand{\dens}{\rho}                       % density
+\newcommand{\densz}{\rho_0}                    % reference density
+\newcommand{\pres}{p}                          % pressure
+\newcommand{\psib}{\psi}                       % streamfunction
+\newcommand{\vort}{\zeta}                      % relative vorticity
+% parameters / constants
+\newcommand{\Cor}{f}                           % Coriolis parameter
+\newcommand{\beq}{\beta}                       % beta = df/dy
+\newcommand{\Erad}{a}                          % Earth radius
+\newcommand{\Om}{\Omega}                       % Earth rotation rate
+\newcommand{\grav}{g}                          % gravity
+\newcommand{\lat}{\phi}                        % latitude
+\newcommand{\lon}{\lambda}                     % longitude
+\newcommand{\dep}{H}                           % ocean depth / column thickness
+% software / discrete
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\jax}{\textsc{jax}}
+\newcommand{\dino}{\textsc{dinosaur}}
+\newcommand{\model}{Chronos-ESM}
+\newcommand{\softplus}{\operatorname{softplus}}
+\newcommand{\Sv}{\,\mathrm{Sv}}                % Sverdrup

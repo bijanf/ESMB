@@ -1,0 +1,62 @@
+% ===================================================================
+%  Chronos-ESM: A Differentiable Earth System Model
+%  Manual & Textbook  —  build with:  latexmk -pdf main.tex
+% ===================================================================
+\documentclass[11pt,openany]{book}
+\input{preamble}
+
+\title{\bfseries Chronos-ESM\\[0.3em]\large A Differentiable Earth System Model\\[0.6em]
+       \normalsize Theory, Numerics, and Climate Applications}
+\author{Bijan Fallah \\ \small and the Chronos-ESM contributors}
+\date{Compiled \today}
+
+\begin{document}
+\frontmatter
+\input{frontmatter}
+\tableofcontents
+\listoffigures
+
+\mainmatter
+
+\part{Foundations}
+\include{chapters/ch01_introduction}
+\include{chapters/ch02_preliminaries}
+\include{chapters/ch03_differentiable}
+
+\part{The Component Models}
+\include{chapters/ch04_ocean_equations}
+\include{chapters/ch05_ocean_mixing}
+\include{chapters/ch06_ocean_numerics}
+\include{chapters/ch07_ocean_prognostic_core}
+\include{chapters/ch08_ocean_overturning}
+\include{chapters/ch09_atmosphere_multilevel}
+\include{chapters/ch10_atmosphere_singlelevel}
+\include{chapters/ch11_seaice}
+\include{chapters/ch12_land}
+\include{chapters/ch13_coupler_fluxes}
+
+\part{Forcing, Sensitivity, and Data Assimilation}
+\include{chapters/ch14_forcing_response}
+\include{chapters/ch15_differentiable_applications}
+
+\part{Canonical Climate Test Cases}
+\include{chapters/ch16_climatology}
+\include{chapters/ch17_amoc_tipping}
+\include{chapters/ch18_jets_stormtracks}
+\include{chapters/ch19_tropics_monsoon}
+
+\part{Community, Standards, and Teaching}
+\include{chapters/ch20_cmip7}
+\include{chapters/ch21_teaching}
+
+\appendix
+\include{chapters/appA_notation}
+\include{chapters/appB_parameters}
+\include{chapters/appC_codemap}
+\include{chapters/appD_running}
+
+\backmatter
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

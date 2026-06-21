@@ -1,0 +1,153 @@
+\chapter{The AMOC: Overturning, Hosing, and Tipping}
+\label{chap:ch17_amoc_tipping}
+
+The Atlantic Meridional Overturning Circulation (AMOC) carries warm, salty water poleward in
+the upper Atlantic and returns cold, dense water at depth. It is a textbook example of a climate
+\emph{tipping element}: theory and a hierarchy of models suggest the overturning can collapse
+abruptly and \emph{irreversibly} once a freshwater perturbation exceeds a critical threshold,
+because of the salt-advection feedback first identified by \citet{stommel1961}. This chapter
+uses \model{} as a laboratory to reproduce that bifurcation, and --- exploiting
+differentiability --- to \emph{calibrate} where it occurs. The governing equations of the
+overturning closure are given in Chapter~\ref{chap:ch08_ocean_overturning}; here we focus on the
+experiments and results.
+
+\section{The salt-advection feedback}
+
+Write the overturning strength $q$ as an increasing function of the meridional density contrast
+between the subpolar and subtropical Atlantic. A stronger $q$ imports more salt to the subpolar
+basin, raising its density, which strengthens $q$ further: a positive feedback. A subpolar
+freshwater input (``hosing'') opposes it. When the feedback loop gain exceeds unity the system
+becomes \emph{bistable} --- an ``on'' (vigorous) and an ``off'' (collapsed) state coexist over a
+finite range of forcing --- and the transition between them is a saddle-node bifurcation with
+hysteresis. In \model{} the loop gain is set by the tunable parameter \code{haline\_gain}
+(Chapter~\ref{chap:ch08_ocean_overturning}).
+
+\section{The hosing experiment}
+
+We add a freshwater flux $F$ (in Sverdrups, $1\Sv=10^6~\mathrm{m^3\,s^{-1}}$) over the
+$45$--$65^\circ$N Atlantic surface and record the AMOC strength at $26.5^\circ$N. Two protocols
+are used:
+
+\begin{description}[leftmargin=0pt,style=nextline]
+  \item[Quasi-static sweep] Ramp $F$ slowly up ($0\!\to\!F_{\max}$) then down
+    ($F_{\max}\!\to\!0$), holding each level to near-equilibrium. An open loop (the down-leg
+    below the up-leg) signals hysteresis. \emph{Caveat:} near the fold the collapse timescale is
+    multi-decadal, so finite holds give a \emph{rate-dependent} loop that can be mistaken for, or
+    hide, true bistability.
+    \codref{experiments/run\_amoc\_hosing.py}{quasi-static hosing sweep}
+  \item[Fixed-$F$ bistability test] The rigorous protocol: at a single fixed $F$, integrate one
+    run started from an \emph{on}-state and one from an \emph{off}-state for $\sim100$~years. If
+    the two converge, the system is monostable at that $F$; if they remain separated, it is
+    genuinely bistable. This is immune to rate-dependence.
+    \codref{experiments/run\_amoc\_bistability.py}{fixed-$F$ on/off initial-condition test}
+\end{description}
+
+\section{A verified bistable window}
+
+With the calibrated configuration \code{haline\_gain}$=6$, \code{thc\_k\_vel}$=6\times10^{-5}$,
+and a convection-layer contrast depth of $300$~m, the fixed-$F$ test gives the result in
+Table~\ref{tab:amoc_bist} and Figure~\ref{fig:amoc_bist}. At $F=0.46,\,0.57,\,0.69\Sv$ the
+on-state and off-state branches remain $8$--$9\Sv$ apart after $100$~years --- a separation that
+is statistically significant (autocorrelation-corrected $z=2.6$--$4.4$) and persistent (the
+off-branch does not recover). Below $F\approx0.3\Sv$ an off-state initial condition recovers to
+the upper branch; above $F\approx0.8\Sv$ an on-state initial condition collapses. The
+\emph{hysteresis window} is therefore approximately
+\[
+  F_{\mathrm{lower}} \approx 0.38\Sv \;<\; F \;<\; F_{\mathrm{upper}} \approx 0.75\Sv,
+\]
+centered near $0.6\Sv$ --- consistent with the freshwater-transport scale of a $\sim15$--$20\Sv$
+AMOC and with the collapse thresholds reported across the model hierarchy
+\citep{rahmstorf2005}.
+
+\begin{table}[h]
+\centering
+\caption{Equilibrated AMOC (last-40-yr mean) at $26.5^\circ$N from on-state vs.\ off-state
+initial conditions, held at fixed hosing $F$ for $100$~years.}
+\label{tab:amoc_bist}
+\begin{tabular}{cccc}
+\toprule
+$F$ (Sv) & ON-branch (Sv) & OFF-branch (Sv) & separation $z$ \\
+\midrule
+$\le 0.30$ & \multicolumn{2}{c}{off-IC recovers to ON} & --- \\
+$0.46$ & $\approx 20$ & $\approx 12$ & $2.6$ \\
+$0.57$ & $\approx 18$ & $\approx 10$ & $3.1$ \\
+$0.69$ & $\approx 15$ & $\approx 6$  & $4.4$ \\
+$\ge 0.80$ & \multicolumn{2}{c}{on-IC collapses to OFF} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{amoc_bistability}
+\caption{The AMOC hysteresis window. (a) On-state (blue) and off-state (red) equilibrated AMOC
+versus hosing $F$; the branches stay separated across the window. (b) At $F=0.57\Sv$ the two
+initial conditions settle on different branches and do not reconverge over $100$~years ---
+the signature of genuine bistability.}
+\label{fig:amoc_bist}
+\end{figure}
+
+\paragraph{An honest caveat.} The branches are \emph{noisy}: the AMOC oscillates by
+$\sim\!\pm10\Sv$ (a relaxation oscillation intrinsic to the strong feedback in this interim
+box-style closure). The bifurcation is genuine --- established by the statistically-significant,
+non-recovering initial-condition dependence --- but it is not a clean, low-variance loop. A clean
+dynamical bifurcation requires the prognostic-momentum ocean core of
+Chapter~\ref{chap:ch07_ocean_prognostic_core}; the closure used here \emph{works around}, rather
+than solves, the fact that the diagnostic-velocity ocean has $\partial(\mathrm{AMOC})/\partial\rho
+\approx 0$.
+
+\section{Calibrating the tipping point by differentiation}
+
+A tipping threshold is a bifurcation, and therein lies a subtlety for differentiable modeling:
+one \emph{cannot} obtain $\partial F_{\mathrm{crit}}/\partial\boldsymbol{\theta}$ by
+backpropagating through the hosing sweep, because the trajectory's sensitivity \emph{diverges} at
+the fold (that divergence \emph{is} the bifurcation). The correct tool is \emph{fold
+continuation}: reduce the closure to its governing Stommel box, where the steady-state condition
+$F = R(s;\boldsymbol{\theta})$ has a fold at $\partial R/\partial s=0$, so that
+$F_{\mathrm{crit}}(\boldsymbol{\theta}) = \max_s R(s;\boldsymbol{\theta})$. By the envelope
+theorem the gradient through this maximum is exact, and a few Newton steps invert
+$F_{\mathrm{crit}}(\boldsymbol{\theta})=F^\star$ for the parameters in milliseconds --- the
+differentiable replacement for a brute-force parameter grid.
+\codref{experiments/calibrate\_amoc\_fold.py}{AD fold-continuation calibration}
+
+\noindent
+The gradient ranking this yields,
+$\partial F_{\mathrm{crit}}/\partial(\code{k\_vel}) \gg
+ \partial F_{\mathrm{crit}}/\partial(\code{haline\_gain})$,
+shows that the AMOC on-state \emph{strength} is the dominant control on the tipping threshold ---
+a non-obvious result that the grid search would have taken hours to reveal.
+
+\section{Reproducing this chapter}
+
+\begin{lstlisting}[language=bash,caption={Hosing sweep, bistability test, and figure.}]
+# quasi-static hysteresis sweep (self-contained from WOA; auto-resumes):
+python experiments/run_amoc_hosing.py --spinup-years 20 --fmax 0.8 --nsteps 8 \
+    --hold-years 15 --haline-gain 6 --k-vel 6e-5 --contrast-depth 300
+
+# rigorous fixed-F bistability test (run once per branch IC, then compare means):
+python experiments/run_amoc_bistability.py --ckpt <on_state>  --hosing-sv 0.57 \
+    --haline-gain 6 --k-vel 6e-5 --contrast-depth 300 --years 100 --outdir out/on
+python experiments/run_amoc_bistability.py --ckpt <off_state> --hosing-sv 0.57 \
+    --haline-gain 6 --k-vel 6e-5 --contrast-depth 300 --years 100 --outdir out/off
+
+# differentiable calibration of the threshold, and the figure:
+python experiments/calibrate_amoc_fold.py --target 0.6
+python experiments/plot_amoc_bistability.py --root out --out docs/figures/amoc_bistability.pdf
+\end{lstlisting}
+
+\begin{exercise}
+Re-run the fixed-$F$ test at $F=0.57\Sv$ but lower \code{haline\_gain} to $4$. Is the system still
+bistable? Relate your answer to the loop-gain condition for bistability.
+\end{exercise}
+
+\begin{exercise}
+Using \code{calibrate\_amoc\_fold.py}, find the \code{(haline\_gain, k\_vel)} pair that places the
+collapse threshold at exactly $F_{\mathrm{crit}}=0.5\Sv$. Verify with one fixed-$F$ run near your
+predicted threshold.
+\end{exercise}
+
+\begin{exercise}[Differentiability]
+Explain in one paragraph why $\partial F_{\mathrm{crit}}/\partial\boldsymbol{\theta}$ cannot be
+computed by automatic differentiation \emph{through} a hosing sweep that crosses the fold, and how
+fold continuation circumvents the problem.
+\end{exercise}

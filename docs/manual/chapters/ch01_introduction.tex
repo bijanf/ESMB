@@ -1,0 +1,122 @@
+\chapter{Introduction: A Differentiable Earth System Model}
+\label{chap:ch01_introduction}
+
+\section{What is Chronos-ESM?}
+
+\model{} is a coupled Earth System Model (ESM): a numerical representation of the physical
+climate system in which an \emph{atmosphere}, an \emph{ocean}, \emph{sea ice}, and a
+\emph{land surface} evolve together, exchanging heat, water, and momentum. What distinguishes
+it from the large community models (CESM, MPI-ESM, IPSL-CM, and the rest of the CMIP fleet)
+is not the physics it contains but \emph{how it is written} and \emph{how fast it runs}:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{It is differentiable.} The entire model --- every flux, every time step, every
+    spectral transform --- is written in \jax{} \citep{jax2018}, a system for composable
+    program transformations. As a consequence one can compute the exact gradient of \emph{any}
+    scalar diagnostic (global-mean temperature, the strength of the Atlantic overturning, the
+    freshwater flux at which that overturning collapses) with respect to \emph{any} input or
+    tunable parameter, by automatic differentiation. This turns calibration, sensitivity
+    analysis, and variational data assimilation from heroic, model-specific efforts into
+    one-line operations (Part~III).
+  \item \textbf{It runs on a laptop or a GPU.} At its default T31 spectral resolution
+    ($\approx 3.75^\circ$, roughly $96\times48$ horizontal grid points) a coupled century
+    integrates in minutes-to-hours on a single GPU, and runs --- more slowly but identically
+    --- on a CPU. There is no MPI and no bespoke build system: \code{pip install} and run.
+  \item \textbf{It is small enough to understand.} The whole model is about $8{,}000$ lines of
+    Python. A student can read the ocean's tracer-advection routine, change the equation of
+    state, and watch the climate respond the same afternoon.
+\end{itemize}
+
+These three properties --- differentiable, fast, legible --- are what make \model{} suitable
+both as a research instrument for the emerging field of differentiable Earth-system science
+and as a teaching model for graduate climate courses. This book serves both audiences.
+
+\section{The model at a glance}
+
+\model{} couples four components on a sphere of radius $\Erad$ rotating at rate $\Om$:
+
+\begin{description}[leftmargin=0pt,style=nextline]
+  \item[Atmosphere] A multi-level spectral primitive-equation dynamical core built on Google's
+    differentiable \dino{} dycore --- the dynamical engine behind NeuralGCM
+    \citep{kochkov2024neuralgcm}. It supports genuine baroclinic instability (growing synoptic
+    eddies, a mid-latitude jet) and carries moisture for a tropical rain band. A legacy
+    single-level spectral model is also provided for the cheapest experiments
+    (Chapters~\ref{chap:ch09_atmosphere_multilevel}--\ref{chap:ch10_atmosphere_singlelevel}).
+  \item[Ocean] A $z$-level, hydrostatic, Boussinesq primitive-equation ocean with
+    Gent--McWilliams eddy transport \citep{gentmcwilliams1990}, initialized from the World
+    Ocean Atlas climatology (Chapters~\ref{chap:ch04_ocean_equations}--\ref{chap:ch08_ocean_overturning}).
+  \item[Sea ice] A Semtner-style thermodynamic ice model \citep{semtner1976}
+    (Chapter~\ref{chap:ch11_seaice}).
+  \item[Land] A slab/bucket land-surface scheme with runoff routing
+    (Chapter~\ref{chap:ch12_land}).
+\end{description}
+
+The components exchange fluxes through a coupler (Chapter~\ref{chap:ch13_coupler_fluxes}) using
+bulk aerodynamic formulae, with an optional flux correction that allows the coupled system to
+be run either as a tightly observationally-constrained \emph{control} or as a freely-evolving,
+forcing-responsive model.
+
+\section{Philosophy: equations and code, side by side}
+
+A recurring frustration in climate science is the distance between the equations a model is
+\emph{said} to solve and the equations its code \emph{actually} integrates --- the
+discretizations, the limiters, the clamps, the approximations adopted for stability. This book
+takes the unusual stance that those details \emph{are} the model and deserve first-class
+documentation. Throughout, each governing equation is presented in its continuous form, then in
+the discrete form the code uses, with a pointer to the exact source location:
+
+\codref{chronos\_esm/ocean/veros\_driver.py}{the ocean time step \code{step\_ocean}}
+
+\noindent
+Where a scheme is a deliberate simplification --- the single-level atmosphere's lack of vertical
+structure, or the interim thermohaline closure that stands in for a prognostic overturning until
+the momentum core is wired in --- we say so plainly and quantify the consequence. Honest
+documentation of an evolving model is itself a scientific contribution.
+
+\section{Why differentiability matters}
+
+Conventional ESMs are evaluated and tuned by running them many times and comparing outputs ---
+an expensive, derivative-free search over a high-dimensional parameter space. Because \model{}
+is differentiable, the sensitivity of any diagnostic $J$ to any parameter vector
+$\boldsymbol{\theta}$ is available directly as $\partial J/\partial\boldsymbol{\theta}$ at the
+cost of roughly one extra model evaluation, by reverse-mode automatic differentiation. This
+enables:
+\begin{itemize}[leftmargin=1.4em]
+  \item \emph{gradient-based calibration} --- fit parameters to observations by descent rather
+    than by grid search;
+  \item \emph{variational data assimilation} (4D-Var) --- find the initial state that best fits
+    a window of observations;
+  \item \emph{rigorous sensitivity and tipping analysis} --- e.g.\ locating a bifurcation by
+    differentiating through the steady-state condition rather than by brute-force sweeps
+    (Chapters~\ref{chap:ch15_differentiable_applications} and~\ref{chap:ch17_amoc_tipping}).
+\end{itemize}
+A theme of Part~III is that differentiability is powerful but not free: some targets --- notably
+bifurcations such as an AMOC collapse --- are non-smooth, and require the right formulation
+(fold continuation) rather than naive backpropagation through a long integration.
+
+\section{How to read this book}
+
+Part~I develops the continuous and discrete mathematics common to all components, and the
+differentiable-programming paradigm. Part~II documents each component model in
+equation-complete detail, derived from the code. Part~III covers forcing, sensitivity, and data
+assimilation. Part~IV evaluates the model against the canonical phenomena every climate model
+must reproduce. Part~V looks outward: a roadmap toward CMIP7 participation, and a guide to using
+\model{} in the classroom. Appendices collect the notation, the parameter values, a map from
+code modules to chapters, and installation instructions.
+
+Readers wanting a fast orientation may read this chapter, then jump to the test cases of
+Part~IV to see what the model produces, returning to Part~II for the mechanisms. Instructors
+will find a suggested course outline in Chapter~\ref{chap:ch21_teaching}.
+
+\begin{exercise}
+Install \model{} (Appendix~\ref{chap:appD_running}) and run the shortest coupled integration in
+the repository. Plot the global-mean surface temperature over the run. How long did it take, and
+on what hardware?
+\end{exercise}
+
+\begin{exercise}
+List three scientific questions you could ask with a differentiable climate model that would be
+impractical with a conventional one. For each, identify the scalar diagnostic $J$ and the
+parameter $\boldsymbol{\theta}$ whose gradient $\partial J/\partial\boldsymbol{\theta}$ you would
+compute.
+\end{exercise}

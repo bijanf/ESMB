@@ -1,0 +1,48 @@
+\maketitle
+
+\thispagestyle{empty}
+\vspace*{\fill}
+\noindent\small
+Copyright \textcopyright{} 2026 Bijan Fallah and the Chronos-ESM contributors.\\
+This manual accompanies the Chronos-ESM source code (Apache License 2.0) and is intended
+for research and teaching. It is a living document, generated alongside the code so that
+every governing equation is traceable to its implementation.\\[1em]
+Source: \url{https://github.com/bijanf/ESMB}
+\vspace*{\fill}
+\clearpage
+
+\chapter*{Preface}
+\addcontentsline{toc}{chapter}{Preface}
+
+\model{} is a fully \emph{differentiable}, GPU- and CPU-capable coupled Earth System Model
+written in \jax{}. It couples a multi-level spectral primitive-equation atmosphere (built on
+Google's \dino{} dynamical core), a $z$-level primitive-equation ocean, a thermodynamic sea
+ice model, and a land-surface scheme, at a teaching-friendly T31 ($\approx 3.75^\circ$)
+resolution that runs in minutes-to-hours on a single GPU.
+
+This book has three aims. First, to be \textbf{equation-complete and honest}: every
+prognostic equation, closure, and numerical scheme is derived from, and cross-referenced to,
+the actual source code --- including its approximations and known biases. Climate-model
+documentation too often hides the gap between the textbook equations and what the code really
+integrates; here the two are presented together, with the code location given beside each
+equation. Second, to be \textbf{pedagogical}: the model is small and fast enough that a
+student can run a coupled climate experiment, change an equation, and see the result the same
+afternoon. Each chapter ends with exercises that use the model as a laboratory. Third, to
+showcase \textbf{differentiable Earth-system modeling}: because the entire model is written
+in \jax{}, one can take the gradient of any output (global temperature, AMOC strength, a
+tipping threshold) with respect to any input or parameter --- enabling calibration,
+sensitivity analysis, and data assimilation that are impractical with conventional models.
+
+The book is organized in five parts: \emph{Foundations} (the continuous and discrete
+mathematics, and the differentiable-programming paradigm); \emph{The Component Models}
+(ocean, atmosphere, ice, land, and the coupler, each derived from the code); \emph{Forcing,
+Sensitivity, and Data Assimilation}; \emph{Canonical Climate Test Cases} (the standard
+phenomena every climate model must reproduce --- mean climatology, the AMOC and its tipping,
+mid-latitude jets and storm tracks, the ITCZ and monsoons); and \emph{Community, Standards,
+and Teaching}, including a roadmap toward CMIP7 participation and a guide to using \model{} in
+the classroom.
+
+\bigskip
+\noindent\textit{A note on status.} \model{} is research software under active development.
+Where a component is a deliberate simplification or a work in progress, this book says so
+explicitly --- the honest documentation of an evolving model is part of its scientific value.
