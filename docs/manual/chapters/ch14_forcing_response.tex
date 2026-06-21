@@ -1,4 +1,394 @@
-\chapter{Radiative Forcing and Climate Response}
-\label{chap:ch14_forcing_response}
+\chapter{Radiative Forcing and Climate Response}\label{chap:ch14_forcing_response}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal, chapter-scoped) ---------------------------
+\providecommand{\Forc}{F}                 % radiative forcing [W/m^2]
+\providecommand{\Qflux}{\overline{Q}}     % frozen q-flux (time-mean restoring flux)
+\providecommand{\Hrest}{\lambda}          % Haney restoring coefficient [W/m^2/K]
+\providecommand{\SST}{T_{\mathrm{s}}}     % sea-surface temperature
+\providecommand{\SSTt}{T^{\star}}         % SST restoring target (WOA climatology)
+
+A climate model earns its name only if it \emph{responds}: if you push it with an
+external forcing, the simulated climate must move, and move by an amount you can
+defend. This chapter is about giving \model{} that capability for the single most
+important anthropogenic lever, atmospheric carbon dioxide. We proceed in three
+steps that mirror the code. First, we convert a CO\textsubscript{2} concentration
+into a radiative forcing through the Myhre logarithmic law
+(\S\ref{sec:f14_myhre}). Second, we confront a structural obstacle: the surface
+flux correction that keeps the control climate from drifting also \emph{absorbs}
+any forcing we impose, so we must free the ocean surface with the q-flux method
+(\S\ref{sec:f14_qflux}). Third, we design the abrupt-$2\times$CO\textsubscript{2}
+experiment as a difference of two branches (\S\ref{sec:f14_experiment}) and read
+off the response (\S\ref{sec:f14_result}). Throughout, the central honesty of the
+chapter is that what \model{} produces is a \emph{transient, surface-forcing
+proxy} for the transient climate response (TCR), not the equilibrium climate
+sensitivity (ECS); \S\ref{sec:f14_honesty} makes that distinction quantitative.
+
+This chapter builds directly on the coupler and surface-flux budget of
+Chapter~\ref{chap:ch13_coupler_fluxes}; the ocean that does the warming is the
+prognostic core of Chapter~\ref{chap:ch07_ocean_prognostic_core}, and the
+overturning circulation that the same forcing can perturb is the subject of
+Chapter~\ref{chap:ch17_amoc_tipping}.
+
+% ======================================================================
+\section{The Myhre CO\texorpdfstring{$_2$}{2} radiative forcing}\label{sec:f14_myhre}
+% ======================================================================
+
+The radiative effect of a well-mixed greenhouse gas is, to leading order, not
+linear in its concentration but logarithmic: each \emph{doubling} of
+CO\textsubscript{2} adds roughly the same forcing because the strong absorption
+lines saturate and only the band wings contribute further. \citet{myhre1998}
+fitted line-by-line radiative-transfer calculations to the compact expression
+
+\begin{equation}
+  \Forc(C) \;=\; 5.35 \,\ln\!\left(\frac{C}{C_0}\right)
+  \qquad [\mathrm{W\,m^{-2}}],
+  \label{eq:f14_myhre}
+\end{equation}
+
+where $C$ is the CO\textsubscript{2} mixing ratio in parts per million by volume
+(ppm), $C_0=280\,\mathrm{ppm}$ is the pre-industrial reference, and the
+coefficient $5.35\,\mathrm{W\,m^{-2}}$ carries the radiative physics. By
+construction $\Forc(C_0)=0$, and a doubling $C=2C_0$ gives the canonical
+\begin{equation}
+  \Forc(2C_0) \;=\; 5.35\,\ln 2 \;\approx\; 3.71\,\mathrm{W\,m^{-2}}.
+  \label{eq:f14_2x}
+\end{equation}
+
+\model{} implements Equation~\eqref{eq:f14_myhre} verbatim as a pure-\jax{}
+function, so it is differentiable in $C$ --- a property we will exploit when we
+ask for $\mathrm{d}(\text{climate})/\mathrm{d}(\text{CO}_2)$ in
+Chapter~\ref{chap:ch15_differentiable_applications}.
+
+\begin{lstlisting}[caption={Myhre forcing, the single radiative channel.}]
+def co2_forcing_wm2(co2_ppm, co2_ref=280.0):
+    return 5.35 * jnp.log(jnp.asarray(co2_ppm) / co2_ref)
+\end{lstlisting}
+\codref{chronos\_esm/coupler/dino\_coupling.py}{\code{co2\_forcing\_wm2} ---
+Equation~\eqref{eq:f14_myhre}}
+
+\begin{remark}[A single forcing channel, and where it enters]
+\model{} injects $\Forc$ at exactly one point: it is \emph{added to the ocean
+surface heat budget} as an extra downwelling term, alongside the shortwave,
+longwave, sensible and latent fluxes assembled in
+Chapter~\ref{chap:ch13_coupler_fluxes}. Writing the net downward surface heat
+flux of the control as $Q_{\mathrm{net}}$, the forced budget is simply
+\begin{equation}
+  Q_{\mathrm{net}}^{\,\mathrm{forced}} \;=\; Q_{\mathrm{net}} \;+\; \Forc(C).
+  \label{eq:f14_inject}
+\end{equation}
+A tempting alternative --- shifting the SST-slaved atmospheric radiative
+equilibrium temperature $T_{\mathrm{eq}}$ --- would be nearly inert (the
+single-/multi-level atmosphere relaxes back) and would risk double-counting, so
+it is deliberately \emph{not} used. The code comment in
+\code{co2\_forcing\_wm2} states this design choice explicitly.
+\end{remark}
+
+The forcing is added in \code{ocean\_fluxes\_jax} \emph{before} the
+flux-correction term, because --- as we now show --- that correction is precisely
+the artifact that would otherwise swallow it.
+
+\begin{lstlisting}[caption={Forcing enters the surface budget before flux correction.}]
+net_heat = sw_net + lw_down - lw_up - sens - lat
+if co2_ppm is not None:
+    net_heat = net_heat + co2_forcing_wm2(co2_ppm)   # single channel
+if sst_target is not None:
+    net_heat = net_heat + flux_correction.heat_correction(
+        sst_K, sst_target, restore_tau_days, q_flux=q_flux)
+\end{lstlisting}
+\codref{chronos\_esm/coupler/dino\_coupling.py}{\code{ocean\_fluxes\_jax} ---
+forcing injected before the SST flux correction}
+
+% ======================================================================
+\section{The flux-correction obstacle and the q-flux cure}\label{sec:f14_qflux}
+% ======================================================================
+
+\subsection{Why strong restoring eats the forcing}
+
+The control climate of \model{} is held against drift by a \emph{Haney
+restoring} of SST toward the WOA18 climatology $\SSTt$. The correction is a
+linear damping of the SST error,
+\begin{equation}
+  Q_{\mathrm{corr}}(\SST) \;=\; \Hrest\,\bigl(\SSTt - \SST\bigr),
+  \qquad
+  \Hrest \;=\; \frac{\densz\, c_p\, \Delta z_1}{\tau},
+  \label{eq:f14_haney}
+\end{equation}
+where $\Hrest$ is the restoring coefficient $[\mathrm{W\,m^{-2}\,K^{-1}}]$,
+$\densz=1025\,\mathrm{kg\,m^{-3}}$ and $c_p=3985\,\mathrm{J\,kg^{-1}K^{-1}}$ are
+seawater density and heat capacity, $\Delta z_1\approx 50\,\mathrm{m}$ is the
+thickness of the top ocean layer, and $\tau$ is the restoring timescale. The
+control uses $\tau=30\,\mathrm{d}$, which gives a \emph{strong}
+\begin{equation}
+  \Hrest \;=\; \frac{1025\times 3985\times 50}{30\times 86400}
+  \;\approx\; 79\,\mathrm{W\,m^{-2}\,K^{-1}}.
+  \label{eq:f14_lambda30}
+\end{equation}
+
+\codref{chronos\_esm/ocean/flux\_correction.py}{\code{restoring\_lambda},
+\code{restoring\_flux} --- Equations~\eqref{eq:f14_haney}--\eqref{eq:f14_lambda30}}
+
+Now superimpose a forcing $\Forc$ on this surface budget and ask for the
+\emph{steady} SST anomaly $\Delta\SST$ it can sustain. The surface heat balance
+of the perturbed top layer requires the extra input $\Forc$ to be removed by the
+restoring it provokes,
+\begin{equation}
+  \Forc \;-\; \Hrest\,\Delta\SST \;=\; 0
+  \quad\Longrightarrow\quad
+  \Delta\SST \;=\; \frac{\Forc}{\Hrest}.
+  \label{eq:f14_balance}
+\end{equation}
+With $\Forc=3.71\,\mathrm{W\,m^{-2}}$ and $\Hrest\approx
+79\,\mathrm{W\,m^{-2}\,K^{-1}}$, Equation~\eqref{eq:f14_balance} permits only
+$\Delta\SST\approx 0.047\,\mathrm{K}$ --- a forty-seventh of a degree. The strong
+restoring is, in effect, an infinite heat reservoir clamped to the present
+climate: it silently supplies whatever flux is needed to hold $\SST\to\SSTt$ and
+therefore \emph{absorbs the forcing entirely}. This is the central problem of
+forced experiments with a flux-corrected model.
+
+\subsection{The q-flux methodology}
+
+The cure is the classical mixed-layer \emph{q-flux} (flux-anomaly correction).
+The key realization is that the time-mean of the restoring flux over a converged
+control \emph{is itself the flux correction the model needs} to hold its mean
+state:
+\begin{equation}
+  \Qflux(\lat,\lon) \;\equiv\;
+  \Bigl\langle\, \Hrest\,\bigl(\SSTt - \SST\bigr) \,\Bigr\rangle_t,
+  \label{eq:f14_qbar}
+\end{equation}
+the angle brackets denoting a time average over the equilibrated control. We
+\emph{freeze} this field. In the forced (``free'') run we then prescribe the
+fixed $\Qflux$ and replace the strong restoring with only a \emph{weak,
+long-timescale anomaly} restoring:
+\begin{equation}
+  Q_{\mathrm{corr}}^{\,\mathrm{free}}(\SST)
+  \;=\; \underbrace{\Qflux}_{\text{frozen, holds mean}}
+  \;+\; \underbrace{\Hrest_{\mathrm{weak}}\,\bigl(\SSTt - \SST\bigr)}_{\text{bounds drift}},
+  \qquad
+  \Hrest_{\mathrm{weak}} = \frac{\densz c_p \Delta z_1}{\tau_{\mathrm{weak}}}.
+  \label{eq:f14_free}
+\end{equation}
+With $\tau_{\mathrm{weak}}=3650\,\mathrm{d}$ (ten years) the weak coefficient
+collapses to
+\begin{equation}
+  \Hrest_{\mathrm{weak}}
+  \;=\; \frac{1025\times 3985\times 50}{3650\times 86400}
+  \;\approx\; 0.65\,\mathrm{W\,m^{-2}\,K^{-1}},
+  \label{eq:f14_lambdaweak}
+\end{equation}
+a factor of $\sim\!120$ weaker than the control restoring. The division of labour
+is exact: the frozen $\Qflux$ carries the mean state (so the cold-tongue drift
+documented in Chapter~\ref{chap:ch16_climatology} does \emph{not} re-open), the
+weak term merely bounds slow drift, and SST is now \emph{free to respond} to
+$\Forc$ on the multi-year anomaly timescale. The same single function selects the
+two modes by the presence or absence of \code{q\_flux}:
+
+\begin{lstlisting}[caption={One function, two modes: control restoring vs free q-flux.}]
+def heat_correction(sst_K, sst_target_K, restore_tau_days, q_flux=None):
+    corr = restoring_flux(sst_K, sst_target_K, restore_tau_days)  # weak or strong
+    if q_flux is not None:          # FREE mode: add frozen q-flux
+        corr = corr + jnp.asarray(q_flux)
+    return corr
+\end{lstlisting}
+\codref{chronos\_esm/ocean/flux\_correction.py}{\code{heat\_correction} ---
+Equation~\eqref{eq:f14_free}; \code{q\_flux=None} recovers
+Equation~\eqref{eq:f14_haney}}
+
+\begin{remark}[Differentiability survives the correction]
+Every operation in Equations~\eqref{eq:f14_myhre}--\eqref{eq:f14_free} is
+expressed in \code{jnp}, with no \code{numpy} or \code{pint} hops. Consequently
+$\mathrm{d}(\text{climate})/\mathrm{d}(\text{forcing})$ survives the flux
+correction: the q-flux is a \emph{constant additive field}, so it contributes
+nothing to the gradient with respect to $C$, while the weak restoring contributes
+a bounded, differentiable damping. This is what makes the forced experiment a
+legitimate target for the inverse methods of
+Chapter~\ref{chap:ch15_differentiable_applications}.
+\end{remark}
+
+% ======================================================================
+\section{The abrupt-2\texorpdfstring{$\times$}{x}CO\texorpdfstring{$_2$}{2} experiment}\label{sec:f14_experiment}
+% ======================================================================
+
+The experiment, following the spirit of the CMIP \texttt{abrupt-2xCO2} protocol
+\citep{eyring2016cmip6}, is driven by \codref{experiments/run\_dino\_co2.py}{the
+forced-CO\textsubscript{2} driver}. Its design has three deliberate features.
+
+\paragraph{Branching from a common state.} Both branches start from the
+\emph{same} converged control checkpoint and its frozen $\Qflux$. We integrate
+two free-mode trajectories that differ only in the prescribed concentration:
+\begin{align}
+  \text{baseline:} \quad & C = C_0 = 280\,\mathrm{ppm}
+    &&\Rightarrow\; \Forc = 0, \label{eq:f14_base}\\
+  \text{forced:} \quad & C = 2C_0 = 560\,\mathrm{ppm}
+    &&\Rightarrow\; \Forc = 5.35\ln 2 \approx 3.71\,\mathrm{W\,m^{-2}}.
+    \label{eq:f14_forced}
+\end{align}
+
+\paragraph{Warming as a difference (drift cancellation).} The free model still
+has a small residual drift (the weak restoring does not pin the mean exactly).
+The CO\textsubscript{2} warming is defined as the \emph{difference} of the two
+ocean-mean SST trajectories,
+\begin{equation}
+  \Delta\SST(t) \;=\; \SST^{\,\mathrm{forced}}(t) - \SST^{\,\mathrm{baseline}}(t),
+  \label{eq:f14_dSST}
+\end{equation}
+because both branches inherit the \emph{same} drift from the same initial state
+and the same $\Qflux$, so subtracting one from the other cancels it to leading
+order and isolates the forced signal. The ocean-area-mean SST of each branch is
+
+\begin{equation}
+  \overline{\SST}(t) \;=\;
+  \frac{\sum_{i\in\mathrm{ocean}} \SST^{(i)}(t)}{\sum_{i\in\mathrm{ocean}} 1}
+  \;-\; 273.15 \quad [^\circ\mathrm{C}],
+  \label{eq:f14_oceanmean}
+\end{equation}
+the sum running over the surface ocean grid cells (\code{omask}); see
+\code{\_run\_branch} / \code{sst\_mean\_C} in the driver.
+
+\paragraph{Time horizon.} The branches run for $\sim\!50$ model years
+(\code{--years 50}, the experiment's default), stepping the fast coupled model at
+the coupling interval and recording $\overline{\SST}$ annually. Fifty years is
+short relative to the deep-ocean equilibration timescale ($\sim\!10^3$ yr), which
+is exactly why the result is a transient, not an equilibrium, measure --- the
+point of \S\ref{sec:f14_honesty}.
+
+\begin{example}[Two lines, one number]
+The driver prints the forcing $\Forc$ from Equation~\eqref{eq:f14_2x}, the
+end-of-run warming $\Delta\SST(\text{end})$ from Equation~\eqref{eq:f14_dSST},
+and their ratio $\Delta\SST/\Forc$ in $\mathrm{K\,(W\,m^{-2})^{-1}}$. That ratio
+is the headline climate-response number, and it is what we interpret next.
+\end{example}
+
+% ======================================================================
+\section{Result and its honest interpretation}\label{sec:f14_result}
+% ======================================================================
+
+A 50-year free-mode abrupt-$2\times$CO\textsubscript{2} run yields a global
+ocean-mean surface warming of
+\begin{equation}
+  \Delta\SST \;\approx\; +1.58\,\mathrm{K},
+  \qquad
+  \frac{\Delta\SST}{\Forc} \;\approx\;
+  \frac{1.58}{3.71} \;\approx\; 0.43\,\mathrm{K\,(W\,m^{-2})^{-1}}.
+  \label{eq:f14_result}
+\end{equation}
+The model has moved, in the right direction, by a physically plausible amount:
+the sign is correct, the magnitude is within the order of magnitude of observed
+estimates, and (crucially) the response is \emph{nonzero}, confirming that the
+q-flux successfully freed the SST from the restoring clamp of
+Equation~\eqref{eq:f14_balance}.
+
+% ----------------------------------------------------------------------
+\subsection{What this number is --- and is not}\label{sec:f14_honesty}
+% ----------------------------------------------------------------------
+
+It would be easy, and wrong, to call $0.43\,\mathrm{K\,(W\,m^{-2})^{-1}}$ a
+climate sensitivity. Three structural limitations make it a \emph{proxy} only,
+and a textbook must state them plainly.
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Transient, not equilibrium.} Fifty years samples only the upper
+  ocean's adjustment; the deep ocean continues to take up heat for centuries.
+  $\Delta\SST$ in Equation~\eqref{eq:f14_result} is therefore a TCR-like
+  \emph{transient} response, structurally smaller than the equilibrium climate
+  sensitivity (ECS) the same forcing would eventually produce.
+
+\item \textbf{No atmospheric radiative feedback amplification.} The forcing
+  enters as a fixed surface-heat term (Equation~\eqref{eq:f14_inject}); there is
+  \emph{no top-of-atmosphere energy closure}. The water-vapour, lapse-rate, cloud
+  and surface-albedo feedbacks that amplify (or damp) the response in a full GCM
+  are simply absent. The number is a \emph{surface-forcing} response, with the
+  net feedback parameter effectively set by the weak restoring
+  $\Hrest_{\mathrm{weak}}$ and the ocean's heat uptake rather than by radiative
+  physics. The driver itself prints the caveat ``TCR-like proxy, NOT equilibrium
+  ECS''.
+
+\item \textbf{Cold-tropics base state.} The control climate carries a cold
+  tropical bias (the cold-tongue / dead-ITCZ issue of
+  Chapter~\ref{chap:ch16_climatology}). Surface fluxes --- the longwave
+  $\propto \SST^4$ and the Clausius--Clapeyron-controlled latent flux --- are
+  nonlinear in SST, so a response computed about a biased base state is itself
+  biased; the slope in Equation~\eqref{eq:f14_result} should not be read to two
+  significant figures of accuracy.
+\end{enumerate}
+
+\begin{proposition}[The result is a lower-bound-flavoured TCR proxy]
+Because the dominant missing ingredients --- deep-ocean equilibration time and
+positive water-vapour/cloud feedbacks --- both act to \emph{increase} the
+eventual warming relative to Equation~\eqref{eq:f14_result}, while no comparably
+large omitted process is known to decrease it, the model's
+$0.43\,\mathrm{K\,(W\,m^{-2})^{-1}}$ is best read as a conservative,
+transient-flavoured estimate. It is a demonstration that the coupled model
+\emph{responds correctly in sign and order of magnitude}, not a calibrated
+sensitivity.
+\end{proposition}
+
+\begin{remark}[Why this is still scientifically useful]
+A differentiable model whose forced response is honest about its scope is
+precisely the right laboratory for \emph{sensitivity analysis} and
+\emph{calibration}. The very next chapter
+(\ref{chap:ch15_differentiable_applications}) uses the differentiability
+preserved through the q-flux to compute $\mathrm{d}\Delta\SST/\mathrm{d}C$ by
+automatic differentiation rather than by finite differencing two 50-year runs ---
+turning the experiment of this chapter into a single gradient evaluation.
+\end{remark}
+
+\begin{table}[ht]
+\centering
+\caption{Key quantities of the abrupt-$2\times$CO\textsubscript{2} experiment.}
+\begin{tabular}{lll}
+\toprule
+Quantity & Value & Source \\
+\midrule
+Forcing coefficient & $5.35\,\mathrm{W\,m^{-2}}$ & \citet{myhre1998}, Eq.~\eqref{eq:f14_myhre} \\
+$\Forc(2\times\text{CO}_2)$ & $3.71\,\mathrm{W\,m^{-2}}$ & Eq.~\eqref{eq:f14_2x} \\
+Control restoring $\Hrest$ ($\tau{=}30\,$d) & $79\,\mathrm{W\,m^{-2}K^{-1}}$ & Eq.~\eqref{eq:f14_lambda30} \\
+Free restoring $\Hrest_{\mathrm{weak}}$ ($\tau{=}3650\,$d) & $0.65\,\mathrm{W\,m^{-2}K^{-1}}$ & Eq.~\eqref{eq:f14_lambdaweak} \\
+Warming $\Delta\SST$ (50 yr) & $+1.58\,\mathrm{K}$ & Eq.~\eqref{eq:f14_result} \\
+Response $\Delta\SST/\Forc$ & $0.43\,\mathrm{K\,(W\,m^{-2})^{-1}}$ & Eq.~\eqref{eq:f14_result} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ======================================================================
+\section*{Exercises}
+% ======================================================================
+
+\begin{exercise}[The forcing trap, quantified]
+Using Equation~\eqref{eq:f14_balance}, compute the steady SST anomaly that the
+\emph{control} restoring ($\Hrest=79\,\mathrm{W\,m^{-2}K^{-1}}$) would permit
+under $2\times$CO\textsubscript{2}, and compare it with the
+$0.65\,\mathrm{W\,m^{-2}K^{-1}}$ free mode. By what factor does freeing the ocean
+increase the permitted steady response? Explain in one sentence why this factor
+is \emph{not} the same as the ratio of the actual simulated warmings, and which
+two physical processes (in the transient run) break the simple proportionality.
+\end{exercise}
+
+\begin{exercise}[A forcing sweep]
+Run \code{experiments/run\_dino\_co2.py} for $C\in\{420,560,1120\}\,\mathrm{ppm}$
+against the $280\,\mathrm{ppm}$ baseline. For each, record $\Forc$ from
+Equation~\eqref{eq:f14_myhre} and the simulated $\Delta\SST$. Plot $\Delta\SST$
+against $\Forc$ (not against $C$). Is the relationship linear? Fit a slope and
+compare it with Equation~\eqref{eq:f14_result}. What does the logarithmic form of
+Equation~\eqref{eq:f14_myhre} imply for the spacing of your three points on the
+\emph{concentration} axis versus the \emph{forcing} axis?
+\end{exercise}
+
+\begin{exercise}[Drift cancellation matters]
+The experiment defines warming as a difference of two branches
+(Equation~\eqref{eq:f14_dSST}). Re-derive $\Delta\SST$ from the single forced
+branch alone (do \emph{not} subtract the baseline) and compare. Estimate the
+residual drift of the free model from the baseline curve and argue, with numbers,
+whether ignoring it would have changed the headline
+$0.43\,\mathrm{K\,(W\,m^{-2})^{-1}}$ by more than its honest uncertainty.
+\end{exercise}
+
+\begin{exercise}[From two runs to one gradient]
+The Myhre forcing is differentiable in $C$. Sketch how you would obtain
+$\mathrm{d}\Delta\SST/\mathrm{d}C$ at $C=560\,\mathrm{ppm}$ using \code{jax.grad}
+through \code{ocean\_fluxes\_jax} rather than by finite-differencing two 50-year
+integrations. Which term in the surface budget carries the gradient, and which
+two terms (the frozen $\Qflux$ and the area-mean removal) contribute zero or a
+constant to it? Cross-reference your answer with
+Chapter~\ref{chap:ch15_differentiable_applications}.
+\end{exercise}

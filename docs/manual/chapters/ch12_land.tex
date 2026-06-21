@@ -1,4 +1,370 @@
-\chapter{The Land Surface}
-\label{chap:ch12_land}
+\chapter{The Land Surface}\label{chap:ch12_land}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols for this chapter only (kept minimal) ---
+\providecommand{\Tsfc}{T_{\mathrm s}}        % land surface (skin) temperature
+\providecommand{\Tair}{T_{\mathrm a}}        % near-surface air temperature
+\providecommand{\Wsoil}{W}                    % soil-moisture column depth [m]
+\providecommand{\Wmax}{W_{\max}}              % bucket capacity [m]
+\providecommand{\Rnet}{R_{\mathrm n}}         % net radiation [W m^{-2}]
+\providecommand{\Hsen}{H}                      % sensible heat flux
+\providecommand{\LE}{L_v E}                    % latent heat flux
+\providecommand{\lai}{L}                       % leaf-area index
+\providecommand{\Topt}{T_{\mathrm{opt}}}      % optimal growth temperature
+
+The land surface in \model{} is deliberately the simplest of the three media.
+Where the ocean (\ref{chap:ch04_ocean_equations}) carries a full
+three-dimensional primitive-equation state and the atmosphere
+(\ref{chap:ch09_atmosphere_multilevel}) carries a spectral dynamical core, land is a
+\emph{single-layer slab}: one prognostic skin temperature, one column of soil
+water held in a leaky bucket, a prognostic leaf-area index, a soil-carbon pool,
+and a snow reservoir. There is no horizontal transport within the land --- each
+grid column is an independent ``tile'' --- and the only land-to-land coupling is
+through the shared atmosphere above it. This is the classic \emph{bucket model}
+of Manabe, dressed with a dynamic-vegetation albedo and a one-bucket snow scheme.
+Its purpose is to close the surface energy and water budgets seen by the
+atmosphere, not to be a land-carbon-cycle laboratory; we are explicit below about
+where the simplifications bite.
+
+The implementation is a single \jax{}, fully differentiable time step,
+\codref{chronos\_esm/land/driver.py}{\code{step\_land}}, with the vegetation
+sub-step in \codref{chronos\_esm/land/vegetation.py}{\code{step\_vegetation}}.
+
+\section{State variables and timescales}
+
+The land state is the tuple
+\begin{equation}
+  \mathcal{L} = \bigl(\,\Tsfc,\ \Wsoil,\ \lai,\ C_{\mathrm s},\ h_{\mathrm{sn}}\,\bigr),
+\end{equation}
+namely the surface temperature $\Tsfc$ [K], the soil-moisture depth $\Wsoil$ [m]
+(bounded by the bucket capacity $\Wmax = 0.15\ \mathrm{m}$), the leaf-area index
+$\lai$ [$\mathrm{m^2\,m^{-2}}$], a soil-carbon density $C_{\mathrm s}$
+[$\mathrm{kg\,C\,m^{-2}}$], and a snow water-equivalent depth $h_{\mathrm{sn}}$
+[m]. The component is integrated with the \emph{coupling interval} as its time
+step (the daily coupling cadence, passed as \code{dt}), not the atmospheric
+dynamics step --- a deliberate choice that exploits the long thermal and
+hydrological memory of the slab.
+
+\begin{remark}
+The slab has a single thermal layer of depth $d=1\ \mathrm{m}$, soil density
+$\rho_{\mathrm s}=1600\ \mathrm{kg\,m^{-3}}$ and heat capacity
+$c_{\mathrm s}=800\ \mathrm{J\,kg^{-1}\,K^{-1}}$, giving a column heat capacity
+$\mathcal{C}_0 = \rho_{\mathrm s} c_{\mathrm s} d \approx
+1.28\times10^{6}\ \mathrm{J\,m^{-2}\,K^{-1}}$. The thermal depth was raised from
+typical $\sim\!0.1$~m bucket values to 1~m \emph{for numerical stability of the
+semi-implicit step}, which makes the diurnal response unphysically sluggish ---
+acceptable here because the model is run at daily coupling and validated against
+monthly/annual climatology, not the diurnal cycle.
+\end{remark}
+
+\section{Surface energy balance}
+
+\subsection{Net radiation}
+
+Land absorbs shortwave according to its albedo and emits longwave as a grey
+body. With downwelling shortwave $S^\downarrow$ and longwave $L^\downarrow$
+supplied by the atmosphere,
+\begin{align}
+  S_{\mathrm{net}} &= (1-\alpha)\,S^\downarrow, \label{eq:swnet}\\
+  L_{\mathrm{net}} &= L^\downarrow - \varepsilon\,\sigma\,\Tsfc^4,
+  \label{eq:lwnet}\\
+  \Rnet &= S_{\mathrm{net}} + L_{\mathrm{net}},
+\end{align}
+where $\sigma$ is the Stefan--Boltzmann constant, $\varepsilon$ the land
+emissivity, and $\alpha$ the (dynamic) surface albedo of
+Section~\ref{sec:albedo}. See
+\codref{chronos\_esm/land/driver.py}{net-radiation block in \code{step\_land}}.
+
+\subsection{Turbulent fluxes}
+
+Sensible and latent heat are bulk-aerodynamic. With air density
+$\rho_a=1.225\ \mathrm{kg\,m^{-3}}$, $c_p = 1004\ \mathrm{J\,kg^{-1}\,K^{-1}}$,
+wind speed $U$, and a drag coefficient $C_h=C_e$ supplied by the coupler (which
+folds in the surface-roughness logic),
+\begin{equation}
+  \Hsen = \rho_a\,c_p\,C_h\,U\,(\Tsfc - \Tair).
+  \label{eq:sensible}
+\end{equation}
+The latent flux uses a Monteith-style saturation deficit. Saturation specific
+humidity is built from the August--Roche--Magnus vapour-pressure formula at the
+surface pressure $p_0=101325\ \mathrm{Pa}$,
+\begin{align}
+  e_s(\Tsfc) &= 611\,\exp\!\Bigl[\frac{17.67\,(\Tsfc-273.15)}
+                                       {(\Tsfc-273.15)+243.5}\Bigr], &
+  q_{\mathrm{sat}} &= 0.622\,\frac{e_s}{p_0}.
+  \label{eq:qsat}
+\end{align}
+The actual evaporation is the \emph{potential} evaporation throttled by a soil-
+and vegetation-dependent moisture availability $\beta$:
+\begin{align}
+  E_{\mathrm{pot}} &= \max\!\bigl[\rho_a\,C_e\,U\,(q_{\mathrm{sat}}-q_a),\ 0\bigr],
+  & E &= \beta\,E_{\mathrm{pot}}, & \LE &= L_v\,E,
+  \label{eq:evap}
+\end{align}
+with the latent heat of vapourisation $L_v = 2.5\times10^{6}\
+\mathrm{J\,kg^{-1}}$ (sublimation over snow is treated with the same $L_v$, a
+known $\sim\!13\%$ underestimate of the true sublimation enthalpy). The
+$\max(\cdot,0)$ forbids dew/condensation. The availability factor is the
+\emph{bucket beta}, enhanced by vegetation cover and forced to unity over snow:
+\begin{equation}
+  \beta = \mathrm{clip}\!\Bigl[\underbrace{\mathrm{clip}\bigl(\tfrac{\Wsoil}{\Wmax},0,1\bigr)}_{\beta_{\mathrm{bucket}}}\,
+          (1+f_{\mathrm{veg}}),\ 0,\ 1\Bigr],\qquad
+  \beta \leftarrow (1-c_{\mathrm{sn}})\,\beta + c_{\mathrm{sn}}\cdot 1,
+  \label{eq:beta}
+\end{equation}
+where $f_{\mathrm{veg}}$ is the vegetated fraction (Section~\ref{sec:albedo})
+and $c_{\mathrm{sn}}$ the snow-cover fraction. The factor $(1+f_{\mathrm{veg}})$
+crudely represents transpiration drawing water faster than bare-soil
+evaporation, but because the result is clipped to $[0,1]$ it saturates: a
+fully-vegetated, half-full bucket already evaporates at the potential rate. See
+\codref{chronos\_esm/land/driver.py}{turbulent-flux and $\beta$ block}.
+
+\subsection{Ground heat flux and the semi-implicit temperature update}
+
+The energy reaching the slab is the residual
+\begin{equation}
+  G = \Rnet - \Hsen - \LE,
+\end{equation}
+and the slab obeys $\mathcal{C}\,\dt{\Tsfc} = G$, with the total heat capacity
+augmented by a snow term,
+$\mathcal{C} = \mathcal{C}_0 + \rho_{\mathrm{sn}} c_{\mathrm{sn,heat}}
+h_{\mathrm{sn}}$ ($\rho_{\mathrm{sn}}=300$, $c_{\mathrm{sn,heat}}=2000$). Because
+$G$ depends strongly and nonlinearly on $\Tsfc$ (through $\Tsfc^4$, $\Hsen$ and
+$q_{\mathrm{sat}}$), an explicit Euler step would need a tiny $\Delta t$. The
+code instead linearises $G$ about the current temperature and takes one
+\emph{semi-implicit} (backward-Euler-in-the-linearised-source) step. Writing
+$G(\Tsfc+\Delta\Tsfc)\approx G + G'\,\Delta\Tsfc$ with
+\begin{equation}
+  G' = \pd{G}{\Tsfc} =
+       \underbrace{-4\varepsilon\sigma\Tsfc^3}_{\text{longwave}}
+       \;\underbrace{-\,\rho_a c_p C_h U}_{\text{sensible}}
+       \;\underbrace{-\,\rho_a L_v C_e U\,\beta\,\pd{q_{\mathrm{sat}}}{\Tsfc}}_{\text{latent}},
+  \qquad
+  \pd{q_{\mathrm{sat}}}{\Tsfc} = q_{\mathrm{sat}}\,\frac{17.67\cdot 243.5}{(\Tsfc-273.15+243.5)^2},
+  \label{eq:dgdt}
+\end{equation}
+the implicit balance $\mathcal{C}\,\Delta\Tsfc/\Delta t = G + G'\Delta\Tsfc$
+gives the increment actually coded,
+\begin{equation}
+  \boxed{\;\Delta\Tsfc = \frac{G}{\;\mathcal{C}/\Delta t - G'\;}\;}
+  \label{eq:dtemp}
+\end{equation}
+Since $G'<0$ the denominator is always positive and larger than the explicit
+$\mathcal{C}/\Delta t$, so the step is unconditionally damped --- this is what
+permits the long $\Delta t$. The update $\Tsfc \mapsto \Tsfc + \Delta\Tsfc$ is
+applied only on land (multiplied by the land mask). See
+\codref{chronos\_esm/land/driver.py}{semi-implicit temperature update}.
+
+\section{Snow and the phase-change correction}
+
+Precipitation is partitioned by the \emph{air} temperature: it is snow where
+$\Tair<273.15\ \mathrm{K}$ and rain otherwise (a hard threshold, no mixed
+phase). After the temperature update, any column that is both warm
+($\Tsfc>273.15$) and snow-covered melts. The available melt energy
+$(\Tsfc-273.15)\,\mathcal{C}$ is converted to a melt depth through the latent
+heat of fusion $L_f = 3.34\times10^{5}\ \mathrm{J\,kg^{-1}}$,
+\begin{equation}
+  \Delta h_{\mathrm{melt}} =
+  \min\!\Bigl[\max\bigl(0,\ (\Tsfc-273.15)\,\mathcal{C}/L_f/\rho_w\bigr),\ h_{\mathrm{sn}}\Bigr],
+\end{equation}
+and the slab temperature is corrected \emph{downward} by the latent heat
+consumed, $\Tsfc \mapsto \Tsfc - \Delta h_{\mathrm{melt}}\,\rho_w L_f/\mathcal{C}$,
+which pins a still-snowy column to the freezing point. The snow reservoir
+evolves as
+\begin{equation}
+  h_{\mathrm{sn}}^{\,n+1} = \max\!\bigl[0,\ h_{\mathrm{sn}}^{\,n}
+                            + \Delta t\,P_{\mathrm{snow}} - \Delta h_{\mathrm{melt}}\bigr].
+\end{equation}
+A final safety clamp $\Tsfc\in[180,340]\ \mathrm{K}$ guards the differentiable
+step against transient overshoots. See
+\codref{chronos\_esm/land/driver.py}{snow/melt block}.
+
+\section{Bucket hydrology and runoff}\label{sec:bucket}
+
+The soil-water column is a leaky bucket. Inflow is rain plus snowmelt (the melt
+depth is converted from a per-step amount back to a rate $\Delta
+h_{\mathrm{melt}}/\Delta t$); the only sink is evaporation
+$E_{\mathrm{soil}}=E/\rho_w$:
+\begin{equation}
+  \dt{\Wsoil} = \bigl(P_{\mathrm{rain}} + \Delta h_{\mathrm{melt}}/\Delta t\bigr) - E/\rho_w.
+  \label{eq:bucket}
+\end{equation}
+After the explicit update $\Wsoil^\ast = \Wsoil + \Delta t\,\dt{\Wsoil}$ the
+bucket is capped at $\Wmax$, and \emph{everything above the rim is runoff}:
+\begin{align}
+  R &= \max(\Wsoil^\ast - \Wmax,\ 0), &
+  \Wsoil^{\,n+1} &= \mathrm{clip}(\Wsoil^\ast,\ 0,\ \Wmax).
+  \label{eq:runoff}
+\end{align}
+This is instantaneous saturation-excess runoff: there is no infiltration delay,
+no sub-surface drainage, and no base-flow recession. Dry-end behaviour is
+similarly simple --- the floor at $0$ silently discards any negative residual,
+a small non-conservation that is negligible at the validated drift levels.
+See \codref{chronos\_esm/land/driver.py}{soil-moisture update and runoff}.
+
+\subsection{Routing runoff to the coastal ocean}
+
+Runoff must reach the ocean or the global water budget leaks. The coupler does
+not solve a river network; it performs a one-step \emph{nearest-neighbour
+spread} from each land cell to its four neighbours, depositing only into ocean
+cells. With the overflow expressed as a freshwater flux $r =
+R\,\rho_w/\Delta t$ [$\mathrm{kg\,m^{-2}\,s^{-1}}$] masked to land, the spread is
+\begin{equation}
+  r_{\mathrm{spread}} = \tfrac14\bigl(r_{i-1,j} + r_{i+1,j} + r_{i,j-1} + r_{i,j+1}\bigr),
+  \qquad
+  r_{\mathrm{ocean}} = r_{\mathrm{spread}}\cdot m_{\mathrm{ocean}},
+  \label{eq:route}
+\end{equation}
+and $r_{\mathrm{ocean}}$ is added to the ocean's freshwater forcing. The
+longitude axis is periodic (a true \code{roll}); the latitude axis uses
+\emph{zero-filled} shifts so polar land cannot wrap runoff from the south-pole
+row into the north-pole row. See
+\codref{chronos\_esm/main.py}{runoff routing in the coupled step}.
+
+\begin{remark}
+This scheme conserves freshwater \emph{only} for coastal land. Runoff generated
+in a deep continental interior --- whose four neighbours are all land --- is
+spread one cell, masked to ocean, and the part landing back on land is
+discarded. At T31 most large land masses have such interiors, so a fraction of
+terrestrial runoff never reaches the ocean. A genuine flow-accumulation router
+(downhill drainage to a single coastal mouth) is the natural upgrade; it is not
+yet implemented.
+\end{remark}
+
+\section{Vegetation and dynamic albedo}\label{sec:albedo}
+
+Leaf-area index is prognostic and follows a logistic growth law with
+temperature- and moisture-limited growth competing against senescence:
+\begin{equation}
+  \dt{\lai} = \underbrace{r\,g\,\lai\Bigl(1-\frac{\lai}{\lai_{\max}}\Bigr)}_{\text{logistic growth}}
+            + \underbrace{s\,g}_{\text{seed}}
+            - \underbrace{\Bigl(\frac{1}{\tau_d} + \frac{1-\beta_{\mathrm{bucket}}}{\tau_d/2}\Bigr)\lai}_{\text{decay + drought stress}},
+  \label{eq:lai}
+\end{equation}
+with $\lai_{\max}=6$, growth rate $r=1/\tau_g$ ($\tau_g=10$~d), decay timescale
+$\tau_d=30$~d, and a tiny seed term ($s=10^{-8}$) so that bare desert can
+re-green when conditions improve. The growth potential $g\in[0,1]$ multiplies a
+Gaussian temperature window centred on $\Topt=298.15\ \mathrm{K}$ (width
+$15\ \mathrm{K}$, hard-cut to zero below $278.15\ \mathrm{K}$) with the moisture
+factor $\beta_{\mathrm{bucket}}$:
+\begin{equation}
+  g(\Tsfc,\beta_{\mathrm{bucket}}) =
+  \beta_{\mathrm{bucket}}\,\exp\!\Bigl[-\frac{(\Tsfc-\Topt)^2}{2\cdot 15^2}\Bigr]
+  \cdot \mathbb{1}[\Tsfc \ge 278.15].
+\end{equation}
+The result is clipped to $[\lai_{\min},\lai_{\max}]=[0.1,6]$. Note this growth
+sub-step uses the atmospheric step \code{DT\_ATMOS} internally even though the
+thermodynamic step uses the coupling interval --- an inconsistency that makes
+the vegetation timescales effectively slower than the nominal $\tau_g,\tau_d$;
+it is harmless for climate equilibria but worth knowing before tuning. See
+\codref{chronos\_esm/land/vegetation.py}{\code{step\_vegetation}}.
+
+LAI controls albedo through a Beer--Lambert canopy-closure factor. The vegetated
+fraction and the area-weighted albedo are
+\begin{align}
+  f_{\mathrm{veg}} &= 1 - e^{-k\lai}, \quad k=0.5, &
+  \alpha_{\mathrm{veg}} &= f_{\mathrm{veg}}\,\alpha_{\mathrm{leaf}}
+                          + (1-f_{\mathrm{veg}})\,\alpha_{\mathrm{soil}},
+  \label{eq:vegalbedo}
+\end{align}
+with a dark canopy $\alpha_{\mathrm{leaf}}=0.12$ over bright bare soil
+$\alpha_{\mathrm{soil}}=0.35$. The snow-cover fraction then over-rides this,
+$c_{\mathrm{sn}}=\mathrm{clip}(h_{\mathrm{sn}}/0.05,0,1)$ (full cover at 5~cm),
+giving the final albedo fed back to Eq.~\eqref{eq:swnet},
+\begin{equation}
+  \alpha = (1-c_{\mathrm{sn}})\,\alpha_{\mathrm{veg}} + c_{\mathrm{sn}}\,\alpha_{\mathrm{snow}},
+  \qquad \alpha_{\mathrm{snow}}=0.80.
+  \label{eq:albedo}
+\end{equation}
+This closes a genuine \emph{albedo feedback}: cooling promotes snow, snow raises
+$\alpha$, which cools further --- the same positive loop that drives high-latitude
+sensitivity in full models, here in its barest form. See
+\codref{chronos\_esm/land/vegetation.py}{\code{compute\_land\_properties}}.
+
+\begin{example}[Why the surface is so reflective by default]
+At $\lai=1$ (the initial sparse state of \code{init\_land\_state}),
+$f_{\mathrm{veg}}=1-e^{-0.5}\approx0.39$, so
+$\alpha_{\mathrm{veg}}=0.39\cdot0.12+0.61\cdot0.35\approx0.26$. Even mature
+forest ($\lai=6$) gives $f_{\mathrm{veg}}\approx0.95$ and
+$\alpha_{\mathrm{veg}}\approx0.13$. Bare/desert tiles therefore sit near
+$\alpha=0.35$ --- bright, which is realistic for deserts but means any column
+that fails to green stays cold, reinforcing the limit on growth.
+\end{example}
+
+\section{Soil carbon: a passive diagnostic}
+
+A single-pool soil-carbon budget is integrated for completeness but is not
+coupled back to the atmosphere's $\mathrm{CO_2}$ (which is prescribed; see
+\ref{chap:ch14_forcing_response}). Gross primary production is light-use-efficiency
+limited, autotrophic respiration is half of GPP, and heterotrophic respiration
+is $Q_{10}$-temperature-sensitive,
+\begin{align}
+  \mathrm{GPP} &= \mathrm{LUE}\,S^\downarrow\,\lai\,\beta, &
+  R_a &= 0.5\,\mathrm{GPP}, &
+  R_h &= k\,C_{\mathrm s}\,2^{(\Tsfc-T_{\mathrm{ref}})/10}\,\beta, \\
+  \dt{C_{\mathrm s}} &= (\mathrm{GPP}-R_a) - R_h, &
+  \mathrm{NEE} &= R_a + R_h - \mathrm{GPP},
+\end{align}
+with $\mathrm{LUE}=10^{-9}$, $k=10^{-8}$, $T_{\mathrm{ref}}=288.15\ \mathrm{K}$,
+$C_{\mathrm s}\ge 0$. NEE is returned for diagnostics only. Treat this pool as
+an indicator of where a carbon cycle \emph{would} respond, not as a calibrated
+flux. See \codref{chronos\_esm/land/driver.py}{carbon-cycle block}.
+
+\section{Summary of approximations}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}ll@{}}
+\toprule
+Process & Treatment in \model{} \\
+\midrule
+Heat storage & 1~m slab, semi-implicit Eq.~\eqref{eq:dtemp}; no diurnal cycle \\
+Soil water & single leaky bucket, $\Wmax=0.15$~m, instant saturation runoff \\
+Runoff routing & 4-neighbour spread to coastal ocean; interiors leak \\
+Snow & one reservoir, $\Tair$ phase split, $L_v$ used for sublimation \\
+Vegetation & prognostic LAI (logistic), Beer--Lambert albedo \\
+Carbon & passive single pool, not fed back to atmosphere \\
+Lateral land transport & none (independent tiles) \\
+\bottomrule
+\end{tabular}
+\caption{The land surface as a closure for the atmospheric boundary, not a
+stand-alone biosphere model.}
+\end{table}
+
+\begin{exercise}[The bucket time constant]
+Using Eqs.~\eqref{eq:evap}--\eqref{eq:bucket}, linearise the bucket about a
+half-full state and estimate the e-folding drying time of $\Wsoil$ under constant
+potential evaporation with no precipitation. Take $E_{\mathrm{pot}}$ for a
+$5\ \mathrm{m\,s^{-1}}$ wind, $C_e=1.5\times10^{-3}$, and a $0.5\%$ humidity
+deficit. Compare your estimate to $\Wmax/E_{\mathrm{soil}}$ and explain why the
+$(1+f_{\mathrm{veg}})$ enhancement in $\beta$ does \emph{not} shorten it once
+$\beta$ saturates at 1.
+\end{exercise}
+
+\begin{exercise}[Snow--albedo feedback as a laboratory]
+Initialise a high-latitude column at $\Tsfc=274\ \mathrm{K}$ with
+$h_{\mathrm{sn}}=0$ and step \code{step\_land} forward with a fixed weak
+$S^\downarrow$ and a cold $\Tair=270\ \mathrm{K}$. Show numerically that the
+column transitions to a snow-covered, high-albedo state and that the transition
+is hysteretic: once snowed in (Eq.~\eqref{eq:albedo} pins $\alpha=0.80$ above
+5~cm), a larger $S^\downarrow$ is needed to melt out than was needed to snow in.
+Relate this to the bistability ideas of \ref{chap:ch17_amoc_tipping}.
+\end{exercise}
+
+\begin{exercise}[Closing the freshwater budget]
+Build a synthetic continent (a block of land cells with a land interior) and
+verify by direct summation over Eq.~\eqref{eq:route} that the freshwater
+delivered to the ocean is \emph{less} than the total runoff $R$ generated, by
+the fraction of runoff produced in interior cells. Sketch the modification
+needed to make \code{step\_land}'s runoff routing globally conservative (hint:
+accumulate interior runoff downstream rather than discarding it).
+\end{exercise}
+
+\begin{exercise}[Differentiable land calibration]
+The entire land step is written in \jax{} and is differentiable. Pick a single
+scalar parameter (e.g.\ $\alpha_{\mathrm{soil}}$ or $\Wmax$), define a loss as
+the squared error of seasonal-mean $\Tsfc$ against a target, and use
+\code{jax.grad} to compute $\partial \mathcal{L}/\partial \theta$. Comment on
+which clamps (the $\Tsfc\in[180,340]$ guard, the $\max(\cdot,0)$ on
+evaporation/runoff) produce zero-gradient regions, and how that constrains
+gradient-based tuning.
+\end{exercise}

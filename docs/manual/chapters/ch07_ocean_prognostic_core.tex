@@ -1,4 +1,326 @@
-\chapter{The Ocean: Prognostic-Momentum Core}
-\label{chap:ch07_ocean_prognostic_core}
+\chapter{The Ocean: Prognostic-Momentum Core}\label{chap:ch07_ocean_prognostic_core}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal; not in the shared preamble) ---
+\providecommand{\taux}{\tau^{x}}                 % zonal wind stress
+\providecommand{\tauy}{\tau^{y}}                 % meridional wind stress
+\providecommand{\wbc}{\delta_{\mathrm{S}}}        % Stommel western boundary-layer width
+
+The ocean velocities used by the live, coupled \model{} are \emph{diagnostic}: the
+horizontal flow is read off the density field through an algebraic thermal-wind inversion,
+and the overturning is closed with an interim Stommel/box parameterization
+(Chapter~\ref{chap:ch08_ocean_overturning}). That design is numerically robust but it
+breaks a property we want for tipping-point science: in the diagnostic core the sensitivity
+of the Atlantic overturning to a density perturbation, $\partial(\mathrm{AMOC})/\partial\dens$,
+is controlled by the closure rather than by momentum dynamics, so a bifurcation cannot be
+\emph{earned} by the physics. This chapter documents the prognostic-momentum ocean core that
+is being built to replace that closure. It is a set of standalone, fully differentiable
+building blocks --- a variable-coefficient elliptic solver, a prognostic barotropic
+vorticity equation, and a prognostic baroclinic momentum equation --- each validated against
+an analytic balance. \textbf{None of it is yet wired into \code{veros\_driver}/\code{main};}
+it lives apart precisely so that it can be validated with zero regression risk to the running
+model. The standard reference for every balance below is \citet{vallis2017}.
+
+\section{The variable-coefficient elliptic invert}
+
+A streamfunction $\psib$ is the natural prognostic object for a rotating, nearly-nondivergent
+ocean: the horizontal transport is $\uvec=\kvec\times\grad\psib$, which is divergence-free by
+construction. The vorticity of this transport defines $\psib$ through an elliptic equation. For
+a flat-bottom ocean this is Poisson's equation $\lap\psib=\vort$; over real bathymetry it
+becomes a \emph{variable-coefficient} elliptic problem,
+\begin{equation}\label{eq:varcoef-cart}
+  \diver\!\big(\,c\,\grad\psib\,\big)=\vort,
+  \qquad c=\frac{1}{\dep}.
+\end{equation}
+The coefficient $c=1/\dep$ encodes topography: where the column is shallow, a given transport
+streamfunction implies a larger vorticity, and the steering of flow along $\Cor/\dep$ contours
+is exactly the joint-effect-of-baroclinicity-and-relief (JEBAR) mechanism that makes deep
+western boundary currents follow the continental slope \citep{vallis2017}. Setting $c=1$
+recovers the flat-bottom Poisson limit. The same operator with $c=\mathrm{const}$ also serves
+as a Laplacian for a viscous $\nu\lap\vort$ term.
+
+\subsection*{Discrete operator (Cartesian)}
+
+The code discretizes Eq.~\eqref{eq:varcoef-cart} in flux form on a regular grid that is
+periodic in $x$ and Dirichlet ($\psib=0$) in $y$ and on land. The coefficient is averaged to
+cell faces (east/west/north/south) as the arithmetic mean of the two adjacent cells,
+\begin{equation}
+  c_{\mathrm E}=\tfrac12\big(c_{i,j}+c_{i,j+1}\big),\quad
+  c_{\mathrm W}=\tfrac12\big(c_{i,j}+c_{i,j-1}\big),\quad\text{(and likewise }c_{\mathrm N},c_{\mathrm S}\text{)},
+\end{equation}
+and the operator is the net face-flux divergence,
+\begin{equation}\label{eq:elliptic-op}
+  (L\psib)_{i,j}=
+  \frac{c_{\mathrm E}(\psib_{i,j+1}-\psib_{i,j})-c_{\mathrm W}(\psib_{i,j}-\psib_{i,j-1})}{\Delta x^{2}}
+  +\frac{c_{\mathrm N}(\psib_{i+1,j}-\psib_{i,j})-c_{\mathrm S}(\psib_{i,j}-\psib_{i-1,j})}{\Delta y^{2}}.
+\end{equation}
+\codref{chronos\_esm/ocean/solver.py}{\code{\_varcoef\_faces}, \code{\_elliptic\_op}, \code{solve\_elliptic\_varcoef}}
+
+Two design choices deserve emphasis because they are easy to get wrong. First, the faces are
+\emph{not} masked: an ocean cell adjacent to land still couples to the land cell, which is
+pinned to $\psib=0$ by an identity row in the matrix. This realizes the correct Dirichlet
+(no-streamfunction) coastal condition. Masking the faces instead would impose a Neumann
+(no-flux) condition, which leaves the operator singular up to an additive constant and makes
+the iterative solver diverge --- the source comments call this out explicitly. Second, $c=1/\dep$
+must be regularized to a finite value on land before the solve, since $\dep\to0$ there.
+
+The system is made symmetric positive-definite by solving $-L\psib=-\vort$ on ocean cells and
+the identity $\psib=0$ on land, then inverted with a Jacobi-preconditioned conjugate-gradient
+iteration whose diagonal is $(c_{\mathrm E}+c_{\mathrm W})/\Delta x^2+(c_{\mathrm N}+c_{\mathrm S})/\Delta y^2$.
+The CG loop is written with \code{jax.lax.scan} (not \code{while\_loop}) so that it is
+differentiable in reverse mode --- the solver is exact in $\psib$ and exposes a clean gradient
+$\partial\psib/\partial c$, $\partial\psib/\partial\vort$
+(Chapter~\ref{chap:ch03_differentiable}).
+\codref{chronos\_esm/ocean/solver.py}{\code{solve\_cg}, \code{jacobi\_preconditioner}}
+
+\subsection*{Spherical face-conductance form}
+
+On the lat--lon grid the elliptic operator carries the spherical metric,
+\begin{equation}\label{eq:varcoef-sphere}
+  \frac{1}{\Erad^{2}\cos\lat}
+  \left[\pd{}{\lon}\!\left(\frac{c}{\cos\lat}\pd{\psib}{\lon}\right)
+       +\pd{}{\lat}\!\left(c\cos\lat\,\pd{\psib}{\lat}\right)\right]=\vort .
+\end{equation}
+Discretizing the area-divided form of Eq.~\eqref{eq:varcoef-sphere} directly would yield a
+\emph{non-symmetric} matrix, because the cell area $\Erad^{2}\cos\lat\,\Delta\lon\,\Delta\lat$
+varies with latitude. The code therefore multiplies through by the cell area and works in
+symmetric \emph{face-conductance} form. A conductance is (face coefficient)$\times$(face
+length)$/$(centre-to-centre distance); the Earth radius cancels, leaving
+\begin{equation}
+  C_{\mathrm E}=\bar c_{\mathrm E}\,\frac{\Delta\lat}{\cos\lat\,\Delta\lon},\qquad
+  C_{\mathrm N}=\bar c_{\mathrm N}\,\frac{\cos\lat_{\mathrm N}\,\Delta\lon}{\Delta\lat},
+\end{equation}
+with $\bar c$ the face-averaged coefficient and $\lat_{\mathrm N}$ the north-face latitude
+(symmetrically for W, S). The symmetric operator and right-hand side are
+\begin{equation}\label{eq:sphere-op}
+  (M\psib)_{i,j}=\sum_{\mathrm{faces}}C_{\mathrm{face}}\,(\psib_{i,j}-\psib_{\mathrm{nbr}}),
+  \qquad b=-\vort\,\big(\Erad^{2}\cos\lat\,\Delta\lon\,\Delta\lat\big),
+\end{equation}
+which is exactly $-\,\mathrm{area}\times\diver(c\grad\psib)$ and is SPD, so the same CG applies.
+\codref{chronos\_esm/ocean/solver.py}{\code{\_sphere\_conductances}, \code{\_sphere\_op}, \code{solve\_elliptic\_varcoef\_sphere}}
+
+\begin{remark}
+The factor $1/\cos\lat$ in the zonal conductance blows up at the pole, the same lat--lon
+singularity that destabilized the single-level atmosphere (Chapter~\ref{chap:ch10_atmosphere_singlelevel}).
+The fix is identical in spirit: $\cos\lat$ is floored at \code{cos\_min}$=0.087$
+($\approx\lat=85^\circ$) so the conductance stays finite. This is a deliberate, quantified
+approximation in the polar caps, not a bug.
+\end{remark}
+
+A manufactured-solution test confirms the round trip $\psib\!\to\!\vort\!\to\!\psib$ to
+relative error $<2\times10^{-3}$ (Cartesian, variable $c$) and $<10^{-4}$ (spherical), and that
+the constant-$c$ solver reproduces the plain Poisson solve.
+\codref{tests/test\_barotropic\_gyre.py}{manufactured-solution and Poisson-consistency tests}
+
+\section{The prognostic barotropic vorticity equation}
+
+With the invert in place, the depth-integrated (barotropic) circulation is advanced by a
+\emph{prognostic} relative-vorticity equation rather than diagnosed. In the linear,
+quasi-geostrophic form the model integrates,
+\begin{equation}\label{eq:barotropic}
+  \pd{\vort}{t}=-\beq\,\pd{\psib}{x}-r\,\vort+F+\nu\lap\vort,
+  \qquad \uu=-\pd{\psib}{y},\ \ \vv=\pd{\psib}{x},
+\end{equation}
+where $\beq=\dd \Cor/\dd y$ is the planetary-vorticity gradient, $r$ a linear bottom drag, $\nu$ a
+lateral viscosity, and the forcing is the wind-stress curl
+\begin{equation}
+  F=\frac{1}{\densz\,\dep}\,\big(\curl\boldsymbol{\tau}\big)_z
+   =\frac{1}{\densz\,\dep}\!\left(\pd{\tauy}{x}-\pd{\taux}{y}\right).
+\end{equation}
+The term $-\beq\,\partial\psib/\partial x=-\beq\vv$ is the advection of planetary vorticity by
+the meridional transport --- the source of the $\beta$-effect and of western intensification
+\citep{vallis2017}. Each step is forward Euler in $\vort$, after which $\psib$ is re-diagnosed
+from $\vort=\diver(c\grad\psib)$ using the elliptic invert of the previous section, warm-started
+from the previous $\psib$:
+\begin{equation}
+  \vort^{\,n+1}=\vort^{\,n}+\Delta t\big(-\beq\,\partial_x\psib^{\,n}-r\vort^{\,n}+F+\nu\lap\vort^{\,n}\big),
+  \qquad \psib^{\,n+1}=L^{-1}_{c}\,\vort^{\,n+1}.
+\end{equation}
+\codref{chronos\_esm/ocean/barotropic.py}{\code{step\_barotropic}, \code{velocities\_from\_psi}, \code{wind\_stress\_curl}}
+
+On the sphere the planetary-vorticity term simplifies elegantly. Since $\beq=2\Om\cos\lat/\Erad$
+and $\vv=(\Erad\cos\lat)^{-1}\partial\psib/\partial\lon$, the $\cos\lat$ factors cancel:
+\begin{equation}\label{eq:beta-sphere}
+  \beq\,\vv=\frac{2\Om\cos\lat}{\Erad}\cdot\frac{1}{\Erad\cos\lat}\pd{\psib}{\lon}
+          =\frac{2\Om}{\Erad^{2}}\pd{\psib}{\lon},
+\end{equation}
+so the spherical step advances $\partial_t\vort=-(2\Om/\Erad^{2})\,\partial_\lon\psib-r\vort+F$
+with the spherical curl and metric velocities $\uu=-\Erad^{-1}\partial_\lat\psib$,
+$\vv=(\Erad\cos\lat)^{-1}\partial_\lon\psib$.
+\codref{chronos\_esm/ocean/barotropic.py}{\code{step\_barotropic\_sphere}, \code{velocities\_sphere}, \code{wind\_stress\_curl\_sphere}}
+
+\subsection*{Analytic validation: the Stommel gyre}
+
+At steady state ($\partial_t\vort=0$, $\nu=0$, $c=1$) Eq.~\eqref{eq:barotropic} reduces to the
+Stommel balance \citep{stommel1961},
+\begin{equation}\label{eq:stommel}
+  r\lap\psib+\beq\,\pd{\psib}{x}=F .
+\end{equation}
+Away from the western wall the friction term is negligible and the interior obeys the Sverdrup
+relation $\beq\,\partial_x\psib=F$, i.e. $\vv=F/\beq$. The return flow is collected into a thin
+western boundary layer of width
+\begin{equation}\label{eq:wbc}
+  \wbc=\frac{r}{\beq},
+\end{equation}
+which is what produces western intensification (a strong, narrow Gulf-Stream-like jet on the
+west, weak broad return flow in the interior). The validation spins the gyre up from rest under
+a single-gyre wind-stress curl and checks both signatures: the meridional jet $|\vv|=|\partial_x\psib|$
+peaks in the western third of the basin, and the interior $\partial_x\psib$ matches $F/\beq$ to
+better than $35\%$ (Cartesian) and $45\%$ (spherical). With $r=5\times10^{-6}\,\mathrm{s^{-1}}$
+and $\beq\approx2\times10^{-11}\,\mathrm{m^{-1}s^{-1}}$ this gives $\wbc\approx250\,\mathrm{km}$, a
+few grid cells --- just resolved.
+\codref{tests/test\_barotropic\_gyre.py}{\code{test\_stommel\_gyre\_sverdrup\_and\_western\_intensification}, spherical variant}
+
+\begin{example}[Sverdrup transport from the wind]
+For the subtropical North Atlantic, a curl of order
+$(\curl\boldsymbol\tau)_z\sim-2\times10^{-7}\,\mathrm{N\,m^{-3}}$ over
+$\beq\approx2\times10^{-11}\,\mathrm{m^{-1}s^{-1}}$ gives an interior southward transport per unit
+width $\vv\dep=(\curl\boldsymbol\tau)_z/(\densz\beq)\sim-10\,\mathrm{m^2\,s^{-1}}$. Integrated across
+an ocean width of $\sim6000\,\mathrm{km}$ this is $\mathcal O(30)\Sv$, the right order for the
+wind-driven gyre --- and the same $30\Sv$ must return in the western boundary current. The model
+reproduces this partition; verify it yourself in Exercise~\ref{ex:sverdrup}.
+\end{example}
+
+\section{The prognostic baroclinic momentum equation}
+
+The barotropic core fixes the gyre circulation but not the overturning, which is set by
+\emph{density gradients} acting through the vertical structure of the flow. This is the role of
+the baroclinic momentum core. The continuous equation, in the hydrostatic, linear-drag form the
+code integrates, is
+\begin{equation}\label{eq:momentum}
+  \pd{\uvec}{t}+\Cor\,\kvec\times\uvec
+  =-\frac{1}{\densz}\grad\pres-r\,\uvec+\nu\lap\uvec,
+  \qquad \pd{\pres}{z}=-\dens\,\grav ,
+\end{equation}
+with $\pres$ the hydrostatic pressure. The Coriolis term $\Cor\,\kvec\times\uvec$ is the
+load-bearing balance: away from boundaries and friction, Eq.~\eqref{eq:momentum} at steady state
+is geostrophy, $\Cor\,\kvec\times\uvec=-\densz^{-1}\grad\pres$, whose vertical derivative is
+\emph{thermal wind},
+\begin{equation}\label{eq:thermal-wind}
+  \Cor\,\pd{\vv}{z}=\frac{\grav}{\densz}\,\pd{\dens}{x},\qquad
+  \Cor\,\pd{\uu}{z}=-\frac{\grav}{\densz}\,\pd{\dens}{y}.
+\end{equation}
+Equation~\eqref{eq:thermal-wind} is precisely how density drives the flow: a horizontal density
+gradient is balanced by a vertical shear of the horizontal velocity. The interim diagnostic core
+imposes Eq.~\eqref{eq:thermal-wind} algebraically; the prognostic core lets it \emph{emerge} as
+the steady limit of Eq.~\eqref{eq:momentum}, so the same density field also drives the
+ageostrophic, overturning component through the friction and time-tendency terms.
+
+\subsection*{Discrete pressure-gradient force}
+
+The hydrostatic pressure is the running vertical integral of density from the surface down,
+\begin{equation}
+  \pres(z)=\grav\!\int_{z}^{0}\!\dens\,\dd z'\ \longrightarrow\
+  \pres_{k}=\grav\sum_{k'\le k}\dens_{k'}\,\Delta z_{k'}
+  \quad(\text{a }\code{cumsum}\text{ from the surface}),
+\end{equation}
+defined up to an irrelevant surface constant. The horizontal pressure-gradient acceleration is
+$-\densz^{-1}\grad\pres$, with centred differences (periodic in $x$, one-sided at the $y$-edges).
+\codref{chronos\_esm/ocean/momentum.py}{\code{hydrostatic\_pressure}, \code{pressure\_gradient\_accel}}
+
+\subsection*{Semi-implicit Coriolis}
+
+The one numerical subtlety is the Coriolis term. An \emph{explicit} treatment of $\Cor\,\kvec\times\uvec$
+is unconditionally unstable --- it rotates the velocity vector by a finite angle each step and the
+amplitude grows without bound for any $\Delta t$. The code therefore treats Coriolis
+\emph{implicitly}, which (with all other forcing collected into $F_u,F_v$) is a $2\times2$ rotation
+solve:
+\begin{equation}\label{eq:coriolis-impl}
+  \frac{\uu'-\uu}{\Delta t}=\Cor\,\vv'+F_u,\quad
+  \frac{\vv'-\vv}{\Delta t}=-\Cor\,\uu'+F_v
+  \ \Longrightarrow\
+  \begin{cases}
+    \uu'=\dfrac{r_u+\Delta t\,\Cor\,r_v}{1+(\Delta t\,\Cor)^2},\\[2.2ex]
+    \vv'=\dfrac{r_v-\Delta t\,\Cor\,r_u}{1+(\Delta t\,\Cor)^2},
+  \end{cases}
+\end{equation}
+where $r_u=\uu+\Delta t\,F_u$, $r_v=\vv+\Delta t\,F_v$. The denominator $1+(\Delta t\,\Cor)^2$ is the
+key: it is $\ge1$ for every $\Delta t$, so the update is a contraction and is stable for arbitrarily
+large $\Delta t\,\Cor$. The full step assembles $F_u=a_x-r\uu+\nu\lap\uu$ from the pressure-gradient
+acceleration $a_x$, linear drag, and optional viscosity, then applies Eq.~\eqref{eq:coriolis-impl}.
+\codref{chronos\_esm/ocean/momentum.py}{\code{coriolis\_semi\_implicit}, \code{step\_momentum}}
+
+\begin{lstlisting}[caption={Semi-implicit Coriolis: the $1+(\Delta t f)^2$ denominator makes it stable for any timestep.}]
+ru = u + dt * Fu;  rv = v + dt * Fv
+d  = 1.0 + (dt * f)**2
+u_new = (ru + dt*f*rv) / d
+v_new = (rv - dt*f*ru) / d
+\end{lstlisting}
+
+\subsection*{Analytic validation: thermal wind}
+
+The momentum core is spun up from rest under a fixed, horizontally-varying density field and the
+emergent vertical shear is compared with the thermal-wind prediction of Eq.~\eqref{eq:thermal-wind}.
+In the interior the model shear matches analytic thermal wind to relative error $<12\%$, and a
+separate test confirms the semi-implicit Coriolis stays bounded ($|\uu|<5\,\mathrm{m\,s^{-1}}$) at a
+timestep that would explode under explicit Coriolis.
+\codref{tests/test\_momentum.py}{\code{test\_thermal\_wind\_balance}, \code{test\_coriolis\_semi\_implicit\_stable}}
+
+\begin{proposition}[Density drives a clean overturning]
+Couple the baroclinic shear of Eq.~\eqref{eq:thermal-wind} to mass continuity. A meridional
+density (hence buoyancy) contrast sets, via thermal wind, a sheared meridional flow; continuity
+closes it in the vertical, producing an overturning cell whose strength scales monotonically with
+the density contrast. Because the velocities here are \emph{prognostic} solutions of
+Eq.~\eqref{eq:momentum}, the map (density)$\to$(overturning) is a genuine, differentiable function
+of the dynamics, so $\partial(\mathrm{AMOC})/\partial\dens\neq0$ for the right physical reason ---
+the precondition for a clean, rather than closure-imposed, AMOC bifurcation
+(Chapter~\ref{chap:ch17_amoc_tipping}). Contrast this with \citet{marotzke1991}-style box models,
+where the overturning--density relation is \emph{postulated}.
+\end{proposition}
+
+\section{Status: validated standalone, not yet wired in}
+
+To be unambiguous: the three components above (\code{solver.py}, \code{barotropic.py},
+\code{momentum.py}) are validated against the Stommel/Sverdrup gyre balance, manufactured elliptic
+solutions, and thermal-wind balance, and every piece is differentiable end-to-end (the gyre
+amplitude has a finite, nonzero gradient with respect to the wind-stress amplitude; the momentum
+solution with respect to the density forcing). They are \textbf{not} called by the live ocean driver
+\code{veros\_driver} or by \code{main.step\_coupled}. The coupled model still uses the diagnostic
+thermal-wind velocities plus the interim box overturning closure of
+Chapter~\ref{chap:ch08_ocean_overturning}. Wiring the prognostic core into the live model ---
+replacing the algebraic inversion with the time-integrated barotropic$+$baroclinic split, on the
+real bathymetric $c=1/\dep$ over the spherical grid --- is the next major ocean milestone. Until
+then this chapter documents a tested, trustworthy laboratory, not a production path.
+
+The differentiability is not incidental. Because both inverts and both time-steppers are written in
+pure \jax{} with \code{lax.scan} loops, the entire (density$\to$velocity$\to$transport) chain admits
+reverse-mode gradients, which is what will let later chapters fit the core to observations and probe
+the tipping manifold (Chapters~\ref{chap:ch15_differentiable_applications},
+\ref{chap:ch17_amoc_tipping}). For the GM/Redi eddy parameterization that the prognostic core will
+ultimately interact with, see Chapter~\ref{chap:ch05_ocean_mixing} and
+\citet{gentmcwilliams1990,griffies2004}.
+
+\section*{Exercises}
+
+\begin{exercise}[Western boundary-layer width]
+Using \code{spin\_up\_gyre} from \codref{chronos\_esm/ocean/barotropic.py}{barotropic gyre},
+spin up the Stommel gyre for three values of the bottom drag, $r\in\{2.5,5,10\}\times10^{-6}\,\mathrm{s^{-1}}$,
+holding $\beq$ fixed. Locate the column of peak $|\vv|=|\partial_x\psib|$ and estimate the boundary-layer
+width in each case. Verify that it scales as $\wbc=r/\beq$ (Eq.~\ref{eq:wbc}). At what $r$ does
+$\wbc$ shrink below one grid cell, and what happens to the solution then?
+\end{exercise}
+
+\begin{exercise}[Sverdrup balance in the interior]\label{ex:sverdrup}
+For the spun-up gyre, plot $\partial_x\psib$ along a mid-basin latitude and overlay $F/\beq$.
+Confirm the Sverdrup balance holds in the interior and fails inside $\wbc$ of the west wall. By how
+much does the basin-integrated interior (Sverdrup) transport differ from the western boundary-current
+return transport? They should be equal and opposite; explain any residual in terms of the friction and
+discretization.
+\end{exercise}
+
+\begin{exercise}[Thermal wind from a front]
+With \code{spin\_up} from \codref{chronos\_esm/ocean/momentum.py}{baroclinic momentum}, impose a
+density field with a single meridional front (e.g. a $\tanh$ in $y$, uniform in $x$) and integrate to
+steady state. Diagnose the vertical shear $\partial\uu/\partial z$ and compare it with
+$-\,(\grav/\densz\Cor)\,\partial\dens/\partial y$ from Eq.~\eqref{eq:thermal-wind}. Then double the
+front strength and confirm the shear --- and the implied overturning --- doubles. Why is this the
+mechanism a box model cannot capture from first principles \citep{marotzke1991}?
+\end{exercise}
+
+\begin{exercise}[Why explicit Coriolis explodes]
+Disable the semi-implicit solve and step $\uu,\vv$ with an \emph{explicit} Coriolis term,
+$\uu'=\uu+\Delta t(\Cor\vv+F_u)$, $\vv'=\vv+\Delta t(-\Cor\uu+F_v)$. Show analytically that the
+amplification factor of the unforced rotation is $\sqrt{1+(\Delta t\Cor)^2}>1$, so the kinetic energy
+grows every step regardless of $\Delta t$. Then show the semi-implicit update of
+Eq.~\eqref{eq:coriolis-impl} has amplification exactly $1$ for the unforced case. Confirm numerically
+with \code{test\_coriolis\_semi\_implicit\_stable} as a starting point.
+\end{exercise}

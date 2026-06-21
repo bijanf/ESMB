@@ -1,4 +1,440 @@
-\chapter{The Ocean: Numerics and Solvers}
-\label{chap:ch06_ocean_numerics}
+\chapter{The Ocean: Numerics and Solvers}\label{chap:ch06_ocean_numerics}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (kept minimal; used only in this chapter) -------------------
+\providecommand{\rdrag}{r}              % linear (Rayleigh) drag coefficient
+\providecommand{\Hcol}{H_{\mathrm{col}}} % wet-column depth
+\providecommand{\softp}{\operatorname{softplus}}
+
+Chapter~\ref{chap:ch04_ocean_equations} laid out the continuous primitive
+equations the ocean component aspires to solve, and Chapter~\ref{chap:ch05_ocean_mixing}
+filled in the subgrid closures (isopycnal/Gent--McWilliams mixing, vertical
+diffusivity). This chapter is about the \emph{discretisation} that actually runs:
+how one ocean time step is assembled in code, which terms are stepped
+prognostically and which are diagnosed, and the linear-algebra machinery (a
+differentiable conjugate-gradient elliptic solver) underneath it.
+
+The central, load-bearing fact of this chapter --- stated plainly so the reader is
+never misled --- is that in the current model \emph{only the tracers are
+prognostic}. Temperature $\Temp$, salinity $\Salt$, and dissolved inorganic carbon
+are advanced in time by Runge--Kutta integration of an advection--diffusion
+equation. The velocity field $(\uu,\vv,\ww)$ is \emph{diagnosed} every step from
+the density and wind-stress fields via geostrophy, thermal wind, a flat-bottom
+barotropic streamfunction, and continuity. There is no prognostic momentum
+equation: the model never integrates $\partial\uvec/\partial t$. This is a
+deliberate, honest simplification with real consequences for the overturning
+circulation, and it is precisely what motivates the prognostic-momentum core
+developed in Chapter~\ref{chap:ch07_ocean_prognostic_core}. The whole step lives in
+one \jax-jitted function.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean} --- the entire ocean time step}
+
+\section{Anatomy of one ocean time step}
+
+A single call to \code{step\_ocean} executes, in order:
+(1)~update density from the equation of state;
+(2)~build the diagnostic horizontal velocity from wind stress (barotropic) plus
+thermal wind (baroclinic), then correct its net transport;
+(3)~diagnose the vertical velocity from continuity under a rigid lid;
+(4)~advance the tracers one step with RK4;
+(5)~apply salinity sponges, hard physical clips, and a global-mean conservation
+renormalisation. Steps~(2)--(3) are pure diagnostics recomputed from scratch each
+step; only step~(4) carries state forward in time. The ocean time step is
+$\Delta t = 900\,\mathrm{s}$ (15 minutes).
+\codref{chronos\_esm/config.py}{\code{DT\_OCEAN}}
+
+\subsection{Equation of state}
+Density is a linear function of potential temperature and salinity,
+\begin{equation}
+  \dens(\Temp,\Salt) = \densz - \alpha\,(\Temp-\Temp_0) + \beta_S\,(\Salt-\Salt_0),
+  \label{eq:eos}
+\end{equation}
+with $\densz = 1025\ \mathrm{kg\,m^{-3}}$, thermal expansion $\alpha = 0.2\
+\mathrm{kg\,m^{-3}\,K^{-1}}$, haline contraction $\beta_S = 0.8\
+\mathrm{kg\,m^{-3}\,psu^{-1}}$, and reference state $(\Temp_0,\Salt_0)=(283.15\
+\mathrm{K},\,35\ \mathrm{psu})$. This is the simplest seawater EOS; it omits the
+pressure dependence and the nonlinear cabbeling/thermobaricity terms of a full
+TEOS-10 formulation \citep{griffies2004}, but it keeps the density a smooth,
+exactly differentiable function of the prognostic tracers --- which matters because
+the entire diagnostic velocity, and hence the gradient $\partial(\text{AMOC})/
+\partial(\text{density})$, flows back through \eqref{eq:eos}.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{equation\_of\_state}}
+
+\section{The diagnostic velocity field}
+
+The horizontal velocity is split, in the classical way, into a depth-independent
+\emph{barotropic} part and a depth-varying \emph{baroclinic} part,
+$\uvec = \uvec_{\mathrm{bt}} + \uvec_{\mathrm{bc}}$.
+
+\subsection{Barotropic streamfunction: a Stommel-style balance}
+
+For the barotropic flow the model does not integrate a momentum equation; it solves
+a steady, linearly damped vorticity balance in the spirit of \citet{stommel1961}.
+Taking the curl of a wind-driven, bottom-drag-balanced depth-integrated momentum
+equation and writing the transport as a streamfunction $\psib$, with
+$U_{\mathrm{bt}}=-\partial\psib/\partial y$, $V_{\mathrm{bt}}=\partial\psib/\partial x$,
+gives a Poisson problem
+\begin{equation}
+  \lap\psib \;=\; \frac{(\curl\boldsymbol{\tau})_z}{\densz\,\dep\,r_{\mathrm{bt}}},
+  \qquad
+  (\curl\boldsymbol{\tau})_z = \pd{\tau_y}{x} - \pd{\tau_x}{y},
+  \label{eq:psi-rhs}
+\end{equation}
+where $\boldsymbol{\tau}=(\tau_x,\tau_y)$ is the surface wind stress, $\dep=\sum_k
+\Delta z_k$ the total depth, and $r_{\mathrm{bt}}=1/(25\times86400\,\mathrm{s})$ a
+tuned 25-day linear drag. The wind-stress curl is evaluated with centred
+differences (\code{jnp.roll}), and \eqref{eq:psi-rhs} is solved by the
+conjugate-gradient Poisson solver of \S\ref{sec:cg} with the previous step's
+$\psib$ as a warm start. The barotropic velocity is then recovered by centred
+differencing of $\psib$:
+\begin{equation}
+  U_{\mathrm{bt}} = -\frac{\psib_{j+1}-\psib_{j-1}}{2\,\Delta y},
+  \qquad
+  V_{\mathrm{bt}} = \frac{\psib_{i+1}-\psib_{i-1}}{2\,\Delta x}.
+\end{equation}
+\codref{chronos\_esm/ocean/veros\_driver.py}{step 3, \code{solve\_poisson\_2d} call + $\psib$ differencing}
+
+\begin{remark}[Flat bottom]
+The Laplacian in \eqref{eq:psi-rhs} is constant-coefficient: it implicitly assumes a
+\emph{flat bottom} (depth $\dep$ pulled out of the divergence). Real bathymetry
+enters the tracer transport through wet-cell masks but \emph{not} into the
+streamfunction operator. This mismatch is the source of the spurious net transport
+corrected in \S\ref{sec:corrector}, and the variable-coefficient
+$\diver(\dep^{-1}\grad\psib)$ operator that fixes it properly is exactly the
+JEBAR-type solver discussed in \S\ref{sec:varcoef} and built upon in
+Chapter~\ref{chap:ch07_ocean_prognostic_core}.
+\end{remark}
+
+\subsection{Baroclinic flow: hydrostatic pressure and damped thermal wind}
+
+The baroclinic shear comes from the horizontal density gradient. The model first
+forms the hydrostatic pressure anomaly by integrating the density anomaly down from
+the surface,
+\begin{equation}
+  \pres'(z) = \grav \int_0^{z}\big(\dens-\densz\big)\dd z'
+  \;\approx\; \grav\sum_{k'\le k}\big(\dens_{k'}-\densz\big)\,\Delta z_{k'},
+  \label{eq:hydro}
+\end{equation}
+a cumulative sum over levels (\code{jnp.cumsum}). Rather than the bare geostrophic
+balance (which is singular at the equator where $\Cor\to 0$), the model uses a
+\emph{Rayleigh-damped} geostrophy --- the steady, linearly-drag-balanced momentum
+equation $\Cor\,\kvec\times\uvec + \rdrag\,\uvec = -\densz^{-1}\grad\pres'$ ---
+which inverts to
+\begin{align}
+  \uu_{\mathrm{geo}} &= -\,\frac{\rdrag\,\partial_x\pres' + \Cor\,\partial_y\pres'}
+                                {\densz\,(\Cor^2+\rdrag^2)},\\
+  \vv_{\mathrm{geo}} &= \phantom{-}\frac{\Cor\,\partial_x\pres' - \rdrag\,\partial_y\pres'}
+                                {\densz\,(\Cor^2+\rdrag^2)},
+  \label{eq:damped-geo}
+\end{align}
+with $\Cor = 2\Om\sin\lat$. The denominator $\Cor^2+\rdrag^2$ never vanishes, so the
+equatorial singularity of pure geostrophy is removed by the drag $\rdrag$; the
+Coriolis parameter is additionally floored at $|\Cor|=10^{-5}\,\mathrm{s^{-1}}$ for
+safety. To split off the depth-mean (which the barotropic streamfunction already
+carries), the wet-column average is subtracted:
+\begin{equation}
+  \uvec_{\mathrm{bc}} = \big(\uvec_{\mathrm{geo}} - \overline{\uvec}_{\mathrm{geo}}\big)\,m_C,
+  \qquad
+  \overline{\uvec}_{\mathrm{geo}} = \frac{1}{\Hcol}\sum_k \uvec_{\mathrm{geo},k}\,\Delta z_k\,m_{C,k},
+  \label{eq:bc-anom}
+\end{equation}
+where $m_C\in\{0,1\}$ is the 3-D wet-cell mask (MITgcm-style \code{hFac} rule: a
+cell face is open only if both adjacent centres are wet) and $\Hcol=\sum_k\Delta
+z_k\,m_{C,k}$ the per-column wet depth. The full diagnostic velocity is
+$\uvec = \uvec_{\mathrm{bt}} + \uvec_{\mathrm{bc}}$, masked to wet cells.
+\codref{chronos\_esm/ocean/veros\_driver.py}{step 4, hydrostatic pressure + damped thermal wind + wet-column anomaly}
+
+\begin{remark}[Why this is only diagnostic, and why it matters]
+Equations~\eqref{eq:damped-geo}--\eqref{eq:bc-anom} give a velocity that is
+\emph{algebraically slaved} to the instantaneous density field. There is no time
+derivative of momentum, no advection of momentum, no JEBAR/bottom-pressure-torque
+coupling between topography and the flow. The thermal-wind shear is local in
+latitude and carries essentially no \emph{net} meridional overturning to a fixed
+section: a direct test gives $\partial(\text{AMOC at }26.5^\circ\mathrm{N})/
+\partial(\text{subpolar salt})\approx 0$. Closing a realistic Atlantic overturning
+therefore needs an extra mechanism (\S\ref{sec:thc} and
+Chapter~\ref{chap:ch08_ocean_overturning}) and, ultimately, prognostic momentum
+(Chapter~\ref{chap:ch07_ocean_prognostic_core}).
+\end{remark}
+
+\subsection{Per-latitude barotropic net-transport corrector}\label{sec:corrector}
+
+A flat-bottom velocity streamfunction applied over \emph{variable} bathymetry is
+inconsistent: the depth-integrated meridional transport is $V_{\mathrm{bt}}\Hcol$,
+but $\partial(\psib\Hcol)/\partial x \neq \Hcol\,\partial\psib/\partial x$ when
+$\Hcol$ varies in $x$. The leftover divergence shows up as a large spurious
+\emph{net} meridional transport --- order $\pm 350\Sv$ at some latitudes, where a
+closed ocean basin requires $\approx 0$. With that much fictitious net flow, no
+clean overturning cell can survive. As a first correction (it is honestly only a
+first one), the model removes the net transport latitude by latitude: subtract a
+latitude-uniform meridional velocity so that the zonally- and vertically-integrated
+transport vanishes at every $\lat$,
+\begin{equation}
+  \vv \;\leftarrow\; \Big(\vv - \frac{\displaystyle\sum_{x,z}\vv\,\Delta z\,m_C}
+                               {\displaystyle\sum_{x,z}\Delta z\,m_C}\Big)\,m_C ,
+  \label{eq:corrector}
+\end{equation}
+($\Delta x$ is uniform in $x$, so it cancels in the ratio). This drives the net
+per-latitude transport to $\approx 0\Sv$ and is stable in long runs. It is a
+\emph{patch}, not a cure: a proper per-basin / C-grid transport streamfunction (the
+variable-coefficient solve of \S\ref{sec:varcoef}) is the fuller fix.
+\codref{chronos\_esm/ocean/veros\_driver.py}{``Barotropic mass-conservation corrector'' block}
+
+\subsection{Thermohaline overturning closure}\label{sec:thc}
+
+Because the diagnosed thermal wind carries no net overturning, a depth-integral-zero
+Atlantic overturning velocity $\vv_{\mathrm{thc}}$ is added as an interim,
+box-model-style closure in the spirit of \citet{marotzke1991}. Its strength scales
+with the subpolar-minus-subtropical upper-ocean density contrast, so denser
+(colder/saltier) subpolar water drives a stronger cell:
+\begin{equation}
+  \vv_{\mathrm{thc}} = k_{\mathrm{vel}}\;\softp\!\Big(\frac{\Delta\dens_{\mathrm{c}}}{\Delta\dens_{\mathrm{scale}}}\Big)\,G(z)\,m_{\mathrm{Atl}},
+  \qquad
+  \Delta\dens_{\mathrm{c}} = \Delta\dens + (\gamma_h-1)\,\beta_S\,\Delta\Salt,
+  \label{eq:thc}
+\end{equation}
+where $G(z)$ is a fixed vertical shape that is $+1$ in the upper limb and negative
+below, with $\sum_k G_k\Delta z_k = 0$ (so the closure carries \emph{no} net
+transport and survives the corrector \eqref{eq:corrector}). The softplus keeps
+$\vv_{\mathrm{thc}}\ge 0$ and differentiable; $\gamma_h$ (\code{haline\_gain})
+amplifies the haline term to lift the salt-advection feedback gain above unity,
+making the AMOC bistable for the tipping experiments of
+Chapter~\ref{chap:ch17_amoc_tipping}. This finally gives density a working pathway
+to the overturning ($\partial(\text{AMOC})/\partial(\text{density})\neq 0$,
+sign-correct). The closure and its feedback are derived in full in
+Chapter~\ref{chap:ch08_ocean_overturning}.
+\codref{chronos\_esm/ocean/overturning.py}{\code{thc\_overturning\_velocity}}
+
+\section{Vertical velocity from continuity (rigid lid)}\label{sec:w}
+
+An overturning cell only transports heat and salt if $\ww$ actually advects
+tracers, so $\ww$ must be consistent with the same horizontal flow that does the
+advecting (including the Gent--McWilliams bolus velocity, $\uvec_{\mathrm{eff}} =
+\uvec + \uvec_{\mathrm{bolus}}$). The hydrostatic continuity equation,
+\begin{equation}
+  \pd{\ww}{z} = -\diver\uvec_{\mathrm{eff}} = -\Big(\pd{\uu_{\mathrm{eff}}}{x}+\pd{\vv_{\mathrm{eff}}}{y}\Big),
+  \label{eq:continuity}
+\end{equation}
+is integrated \emph{upward} from a rigid floor ($\ww=0$ at the bottom). For the
+column to be closed at \emph{both} ends --- a rigid lid means no tracer is advected
+through the ocean surface either --- the depth-mean horizontal divergence is removed
+first (a rigid-lid projection):
+\begin{equation}
+  \diver\uvec_{\mathrm{eff}} \;\leftarrow\; \diver\uvec_{\mathrm{eff}}
+       - \frac{1}{\Hcol}\sum_k (\diver\uvec_{\mathrm{eff}})_k\,\Delta z_k ,
+  \qquad
+  \ww_{\mathrm{if},k} = -\!\!\sum_{k'\ge k}(\diver\uvec_{\mathrm{eff}})_{k'}\,\Delta z_{k'} .
+  \label{eq:w-project}
+\end{equation}
+After projection the discrete 3-D flow $(\uvec_{\mathrm{eff}},\ww)$ is exactly
+nondivergent, so the \emph{advective}-form vertical advection conserves the tracer
+mean. This projection is not cosmetic: without it the residual column divergence
+piles into the surface cell and leaks the global mean at roughly $+0.25\
+\mathrm{K\,yr^{-1}}$ of spurious heating, because the advective form (unlike flux
+form) has no compensating compression term to absorb it. The interface vertical
+velocity $\ww_{\mathrm{if}}$ is masked so that interior interfaces are open only
+where both adjacent centres are wet, and the surface and floor interfaces are closed.
+\codref{chronos\_esm/ocean/veros\_driver.py}{``Vertical velocity for tracer advection'' block}
+
+\begin{remark}[Two vertical velocities]
+The model computes $\ww$ twice. The version above ($\ww_{\mathrm{if}}$ from
+$\uvec_{\mathrm{eff}}$) is the one that advects tracers in the RK4. A separate,
+purely diagnostic $\ww$ is also stored in the returned state, computed from the
+final $(\uu,\vv)$ with the same upward continuity integral but \emph{without} the
+rigid-lid projection and with no $\cos\lat$ metric term. The stored field is for
+inspection only; the tracer transport uses the projected one.
+\end{remark}
+
+\section{Tracer time stepping: RK4 advection--diffusion}
+
+The prognostic tracers $\Temp,\Salt,\mathrm{DIC}$ obey
+\begin{equation}
+  \Dt{C} = \underbrace{-\,\uvec_{\mathrm{eff}}\!\cdot\!\grad_h C}_{\text{horiz.\ advection}}
+           \;-\; \ww\,\pd{C}{z}
+           \;+\; \grad_h\!\cdot\!(\kappa_h\grad_h C)
+           \;+\; \pd{}{z}\!\Big(\kappa_z\,\pd{C}{z}\Big)
+           \;+\; F_{\mathrm{surf}}\,\delta_{k0},
+  \label{eq:tracer}
+\end{equation}
+written so that all terms appear as a single tendency $\mathcal{T}(C)$. The
+right-hand side is built from four masked operators:
+
+\begin{itemize}
+\item \textbf{Horizontal advection} is first-order \emph{upwind}: the upstream
+difference is selected by the sign of $\uu_{\mathrm{eff}},\vv_{\mathrm{eff}}$
+(\code{jnp.where}). Closed faces return the centre value (zero gradient), so no flux
+crosses a coast.
+\item \textbf{Horizontal diffusion} is a 5-point Laplacian with coefficient
+$\kappa_h$ in the interior and a large $2\times10^4\,\mathrm{m^2\,s^{-1}}$ near the
+poles (a numerical sponge against polar grid-convergence noise; see
+Chapter~\ref{chap:ch05_ocean_mixing}).
+\item \textbf{Vertical advection} $-\ww\,\partial_z C$ is upwind on the sign of the
+cell-centred $\ww$, in the \emph{same advective form} as the horizontal term. Mixing
+advective horizontal with flux-form vertical introduces a spurious $-C\,\partial_z
+\ww$ source that blows the temperature up; keeping both advective avoids it. The
+vertical CFL is tiny ($|\ww|\Delta t/\Delta z\sim 10^{-3}$), so explicit upwind is
+comfortably stable.
+\item \textbf{Vertical diffusion} uses the stability-dependent $\kappa_z$ of
+Chapter~\ref{chap:ch05_ocean_mixing}, with zero flux through dry interfaces and the
+floor.
+\item \textbf{Surface forcing} $F_{\mathrm{surf}}$ enters only the top wet cell:
+$F_\Temp = Q/(\densz c_p\Delta z_0)$ with $c_p=3985\,\mathrm{J\,kg^{-1}\,K^{-1}}$,
+a virtual-salt term for freshwater, and an optional subpolar freshwater
+\emph{hosing} (Sverdrups) added directly so it bypasses the coupler's ocean-mean
+balancing --- the bifurcation forcing of Chapter~\ref{chap:ch17_amoc_tipping}.
+\end{itemize}
+
+This tendency is integrated with the classical fourth-order Runge--Kutta scheme,
+\begin{align}
+  C^{n+1} &= C^{n} + \frac{\Delta t}{6}\,(k_1 + 2k_2 + 2k_3 + k_4),\\
+  k_1 &= \mathcal{T}(C^n),\quad
+  k_2 = \mathcal{T}\!\big(C^n+\tfrac{\Delta t}{2}k_1\big),\quad
+  k_3 = \mathcal{T}\!\big(C^n+\tfrac{\Delta t}{2}k_2\big),\quad
+  k_4 = \mathcal{T}\!\big(C^n+\Delta t\,k_3\big),
+  \label{eq:rk4}
+\end{align}
+applied simultaneously to $(\Temp,\Salt,\mathrm{DIC})$, with every tendency frozen
+to zero in dry cells. RK4 is fourth-order accurate and has a comfortable stability
+region for the advection--diffusion operator at $\Delta t=900\,\mathrm{s}$; it is
+also smooth, so reverse-mode AD through the whole step is clean.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{tendencies}, \code{\_horiz}, \code{\_vadv}, \code{\_vdiff} + the RK4 combination}
+
+\subsection{Post-step stabilisers, clips, and conservation}
+
+After the RK4 update the model applies, in order: an optional biharmonic
+($\nabla^4$) Shapiro filter (off by default, a light 2-grid-point cleanup; the
+physical Laplacian diffusion is the primary noise control); a two-tier salinity
+relaxation (a strong 6-month high-latitude sponge poleward of $65^\circ$ plus a weak
+3-year global relaxation toward $35\,\mathrm{psu}$); hard physical clips
+$\Salt\in[30,38]\,\mathrm{psu}$, $\Temp\in[250,320]\,\mathrm{K}$ and a
+$271.35\,\mathrm{K}$ ($-1.8^\circ\mathrm{C}$) freezing floor standing in for absent
+sea-ice latent heat; and finally a volume-weighted global-mean salinity
+renormalisation back to $34.7\,\mathrm{psu}$,
+\begin{equation}
+  \Salt \;\leftarrow\; \Big(\Salt - \big(\langle\Salt\rangle_{\mathrm{wet}}
+        - 34.7\big)\Big)\,m_C ,
+\end{equation}
+which removes slow numerical/brine drift as a uniform additive shift, leaving the
+spatial \emph{gradient} structure (which drives the circulation) untouched. The
+clips use \jax's straight-through subgradient: gradient $1$ in the interior, $0$ at
+a boundary; in normal runs the clips are not hit, so the differentiability of the
+step is preserved in practice.
+\codref{chronos\_esm/ocean/veros\_driver.py}{Shapiro filter, salinity sponges, clips, global-mean renorm}
+
+\section{The conjugate-gradient elliptic solver}\label{sec:cg}
+
+The barotropic streamfunction \eqref{eq:psi-rhs} (and, in
+Chapter~\ref{chap:ch07_ocean_prognostic_core}, the variable-coefficient vorticity
+inversion) requires solving a large sparse linear system $A\mathbf{x}=\mathbf{b}$
+every step. Because the solver sits \emph{inside} the differentiated time step, it
+must itself be differentiable --- ruling out \code{scipy.sparse.linalg.cg}. The
+model uses a hand-written, \jax-native preconditioned conjugate gradient (CG).
+
+For a symmetric positive-definite $A$, CG generates iterates that minimise the
+$A$-norm of the error over an expanding Krylov subspace. With Jacobi (diagonal)
+preconditioner $M\approx\operatorname{diag}(A)^{-1}$ the recurrence is
+\begin{align}
+  \alpha_k &= \frac{\mathbf{r}_k^{\!\top}\mathbf{z}_k}{\mathbf{p}_k^{\!\top}A\mathbf{p}_k},
+  &\mathbf{x}_{k+1} &= \mathbf{x}_k + \alpha_k\mathbf{p}_k,
+  &\mathbf{r}_{k+1} &= \mathbf{r}_k - \alpha_k A\mathbf{p}_k,\notag\\
+  \mathbf{z}_{k+1} &= M\mathbf{r}_{k+1},
+  &\beta_k &= \frac{\mathbf{r}_{k+1}^{\!\top}\mathbf{z}_{k+1}}{\mathbf{r}_k^{\!\top}\mathbf{z}_k},
+  &\mathbf{p}_{k+1} &= \mathbf{z}_{k+1} + \beta_k\mathbf{p}_k.
+  \label{eq:cg}
+\end{align}
+
+The implementation has two design choices worth highlighting:
+\begin{itemize}
+\item \textbf{Fixed-length \code{scan}, not \code{while\_loop}.} \jax's
+\code{while\_loop} is not reverse-mode differentiable, so the loop runs a fixed
+\code{max\_iter} steps via \code{jax.lax.scan}, and once the residual drops below
+$\mathrm{tol}\cdot\|\mathbf{b}\|$ each further iteration is a no-op (the update is
+masked back to the converged state with \code{jnp.where}). This keeps the solver
+both differentiable and statically shaped.
+\item \textbf{Matrix-free linear operator.} $A$ is never assembled; it is a function
+$\mathbf{x}\mapsto A\mathbf{x}$. For the 2-D Poisson solve the operator is the
+5-point Laplacian with periodic boundaries in $x$ (\code{jnp.roll}) and Dirichlet
+$\psib=0$ in $y$ and on land. Land is handled by an \emph{identity-row} trick: on a
+land cell the operator returns $\mathbf{x}$ itself, so $b=0$ there forces $\psib=0$
+without making the matrix singular. The sign is flipped to $-\lap$ so $A$ is positive
+definite, and the Jacobi diagonal is the constant $2/\Delta x^2 + 2/\Delta y^2$.
+\end{itemize}
+A short excerpt shows the differentiable masked update at the heart of the loop:
+\begin{lstlisting}[language=Python]
+def scan_body(state, _):
+    x, r, p, rz_old, r_norm, it = state
+    converged = r_norm <= tol_abs
+    new_state = body_fun(state)          # one CG step (Eq. for CG)
+    out = jax.tree.map(                   # freeze once converged -> no-op
+        lambda old, new: jnp.where(converged, old, new), state, new_state)
+    return out, None
+\end{lstlisting}
+\codref{chronos\_esm/ocean/solver.py}{\code{solve\_cg}, \code{solve\_poisson\_2d}, \code{jacobi\_preconditioner}}
+
+\subsection{Variable-coefficient (JEBAR-ready) operators}\label{sec:varcoef}
+
+The same CG kernel backs two further elliptic solvers built for the prognostic core
+of Chapter~\ref{chap:ch07_ocean_prognostic_core}: a Cartesian
+$\diver(c\,\grad\psib)=\text{rhs}$ and its spherical counterpart
+\begin{equation}
+  \frac{1}{\Erad^2\cos\lat}\Big[\pd{}{\lon}\Big(\frac{c}{\cos\lat}\,\pd{\psib}{\lon}\Big)
+  + \pd{}{\lat}\Big(c\cos\lat\,\pd{\psib}{\lat}\Big)\Big] = \text{rhs}.
+  \label{eq:sphere-elliptic}
+\end{equation}
+With $c=\dep^{-1}$ over real bathymetry this is precisely the topographic / JEBAR
+operator a barotropic-vorticity ocean needs; with $c=\text{const}$ it reduces to the
+Poisson solve above. The spherical version is discretised in symmetric
+\emph{face-conductance} form (multiplying each cell equation by its area
+$\Erad^2\cos\lat\,\Delta\lon\,\Delta\lat$) so the matrix stays SPD even as the cell
+area varies with latitude, and a polar floor $\cos\lat\ge 0.087$ avoids the
+$1/\cos\lat$ blow-up at the lat--lon pole singularity. Face coefficients are the
+arithmetic mean of adjacent cells and are \emph{not} masked, so ocean cells couple to
+land cells pinned to $\psib=0$ --- the correct Dirichlet streamfunction boundary
+(masking the faces would impose Neumann and make the operator singular). Both solvers
+are differentiable in $c$ and in the right-hand side.
+\codref{chronos\_esm/ocean/solver.py}{\code{solve\_elliptic\_varcoef}, \code{solve\_elliptic\_varcoef\_sphere}}
+
+\section{Honest summary of the numerics}
+
+Tracers are the only prognostic ocean variables; they are advanced by RK4 on an
+upwind-advection / Laplacian-diffusion operator that is carefully made
+divergence-consistent and mass-conserving. The velocity that does the advecting is
+\emph{diagnosed} each step from density (damped thermal wind) and wind stress
+(flat-bottom Stommel streamfunction), then patched with a per-latitude net-transport
+corrector and an explicit thermohaline overturning closure to give density a working
+pathway to the AMOC. The diagnostic-velocity design is differentiable and stable, but
+it is fundamentally limited: it has no momentum memory, no topographic vorticity
+torque, and no self-consistent overturning. Removing these limitations is the job of
+the prognostic-momentum core in Chapter~\ref{chap:ch07_ocean_prognostic_core}, which
+reuses the variable-coefficient CG solver of \S\ref{sec:varcoef}.
+
+\begin{exercise}[Net-transport corrector]
+Disable the per-latitude corrector \eqref{eq:corrector} (set the subtracted term to
+zero in a copy of \code{step\_ocean}) and run a short spin-up. Diagnose the
+zonally-/vertically-integrated meridional transport as a function of latitude and
+confirm it reaches order $\pm 10^2\Sv$. Re-enable the corrector and verify it drops to
+$\approx 0\Sv$. Why does a closed basin require zero net transport at every latitude?
+\end{exercise}
+
+\begin{exercise}[Rigid-lid projection and tracer conservation]
+Remove the depth-mean divergence subtraction in \eqref{eq:w-project} so that
+$\ww_{\mathrm{if}}$ is integrated up from the floor without projection. Run a
+multi-decade tracer-only experiment and measure the drift in global-mean $\Temp$.
+Compare against the documented $\sim +0.25\ \mathrm{K\,yr^{-1}}$ leak. Explain why the
+advective form of vertical advection (rather than flux form) makes this projection
+necessary.
+\end{exercise}
+
+\begin{exercise}[CG convergence and warm starts]
+Instrument \code{solve\_poisson\_2d} to record the residual norm versus iteration for
+the barotropic solve. Compare convergence when starting from $\psib=0$ versus warm
+starting from the previous step's $\psib$ (as \code{step\_ocean} does). How many
+iterations does the warm start save once the model is near equilibrium, and why?
+\end{exercise}
+
+\begin{exercise}[Density sensitivity of the AMOC]
+Using \jax's \code{jax.grad}, compute $\partial(\text{AMOC at }26.5^\circ\mathrm{N})/
+\partial(\text{subpolar salinity})$ for the diagnostic thermal wind alone
+($k_{\mathrm{vel}}=0$ in \eqref{eq:thc}) and again with the thermohaline closure
+active. Confirm that the first is $\approx 0$ and the second is nonzero and
+sign-correct. What does this tell you about which term actually couples density to the
+overturning in this model?
+\end{exercise}

@@ -1,4 +1,422 @@
-\chapter{Sea Ice Thermodynamics}
-\label{chap:ch11_seaice}
+\chapter{Sea Ice Thermodynamics}\label{chap:ch11_seaice}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal, chapter-scoped) -----------------------
+\providecommand{\hice}{h}              % ice thickness
+\providecommand{\Aice}{A}              % ice concentration
+\providecommand{\Tsi}{T_{s}}          % ice surface temperature
+\providecommand{\Tfr}{T_{f}}           % freezing point of seawater
+\providecommand{\Lf}{L_{f}}            % latent heat of fusion
+\providecommand{\kice}{k_{i}}          % thermal conductivity of ice
+\providecommand{\rhoice}{\rho_{i}}     % ice density
+\providecommand{\Fnet}{F_{\mathrm{net}}}
+
+Sea ice is the climate system's most leveraged component per unit mass.
+A thin film of frozen seawater---typically $1$--$3\,\mathrm{m}$ thick---sits
+between a cold polar atmosphere and an ocean held at its freezing point, and it
+controls the heat, freshwater, and momentum exchanged across that interface. Two
+feedbacks make it dynamically central. First, the \emph{ice--albedo feedback}:
+open water absorbs roughly $90\%$ of incident shortwave radiation, bare ice
+roughly $30\%$, so a small retreat of the ice edge warms the surface and
+promotes further retreat. Second, the \emph{insulation feedback}: ice is a poor
+conductor, so a growing ice cover throttles the ocean-to-atmosphere heat loss
+that drives convection and, ultimately, the deep-water formation discussed in
+Chapter~\ref{chap:ch08_ocean_overturning}. Sea ice also rejects brine as it
+freezes and releases freshwater as it melts, coupling directly to the salinity
+budget and hence to the overturning circulation studied in
+Chapter~\ref{chap:ch17_amoc_tipping}.
+
+\model{} represents these processes with a \emph{Semtner zero-layer}
+thermodynamic model \citep{semtner1976}: the simplest scheme that captures the
+surface energy balance, conductive growth, and the albedo/insulation feedbacks
+without resolving the internal temperature profile of the ice or its dynamics
+(drift, ridging, rheology). This chapter derives the governing equations, then
+shows exactly which discrete equations the code integrates, where each
+approximation, clamp, and limiter lives, and where the scheme departs from
+observations. The two source modules are
+\codref{chronos\_esm/ice/thermodynamics.py}{surface energy balance \& albedo}
+and \codref{chronos\_esm/ice/driver.py}{growth/melt, frazil, fluxes, state}.
+
+\begin{remark}
+``Zero-layer'' means the ice slab has \emph{no} prognostic heat capacity: heat
+conducts through it instantaneously and linearly. The full Semtner 1976 model
+also offers three-layer and zero-layer variants with a snow layer and brine heat
+storage; \model{} implements the bare zero-layer core (no snow, no internal heat
+reservoir). This is honest to keep in mind: the model cannot represent the
+thermal-inertia lag of thick multiyear ice.
+\end{remark}
+
+%====================================================================
+\section{State variables and the freezing point}
+%====================================================================
+
+The prognostic state per ocean grid cell is the triple
+\codref{chronos\_esm/ice/driver.py}{\code{IceState}}
+\begin{equation}
+  \bigl(\hice,\ \Aice,\ \Tsi\bigr),
+\end{equation}
+the grid-cell mean ice \emph{thickness} $\hice\,[\mathrm{m}]$, the fractional
+ice \emph{concentration} $\Aice\in[0,1]$, and the ice \emph{surface
+temperature} $\Tsi\,[^\circ\mathrm{C}]$. The model is initialised ice-free
+($\hice=\Aice=0$, $\Tsi=\Tfr$) and forms ice dynamically.
+
+Seawater freezes below $0^\circ\mathrm{C}$ because dissolved salt depresses the
+freezing point. \model{} uses a constant
+\begin{equation}
+  \Tfr = -1.8\,^\circ\mathrm{C},
+  \label{eq:tfreeze}
+\end{equation}
+the standard value for ocean salinity near $34$--$35\,\mathrm{psu}$. This is an
+approximation: the true freezing point is salinity-dependent,
+$\Tfr \approx -0.054\,\Salt$, so Eq.~\eqref{eq:tfreeze} is exact only near
+$33\,\mathrm{psu}$ and biased by up to $\pm 0.1\,\mathrm{K}$ across the realistic
+salinity range---negligible for the energy budget but worth noting for the
+brackish Baltic or the salty subtropics. The constant is \code{T\_FREEZE} in
+\code{thermodynamics.py}.
+
+%====================================================================
+\section{Surface energy balance}
+%====================================================================
+
+Over an ice surface the skin temperature $\Tsi$ adjusts so that the net heat
+flux into the surface vanishes (an infinitesimally thin skin cannot store
+energy). The continuous balance, all fluxes positive \emph{into} the surface,
+is
+\begin{equation}
+  \Fnet(\Tsi) =
+    \underbrace{(1-\alpha)\,S^{\downarrow}}_{\text{absorbed SW}}
+    + \underbrace{L^{\downarrow}}_{\text{down LW}}
+    - \underbrace{\varepsilon\sigma (\Tsi+T_0)^4}_{\text{up LW}}
+    + \underbrace{\frac{\kice}{\hice}\,(\Tfr - \Tsi)}_{\text{conduction}}
+    + \underbrace{C_b\,(T_a - \Tsi)}_{\text{turbulent}}
+  = 0,
+  \label{eq:ebalance}
+\end{equation}
+where $\alpha$ is the surface albedo, $S^{\downarrow}$ and $L^{\downarrow}$ are
+the downward shortwave and longwave fluxes $[\mathrm{W\,m^{-2}}]$,
+$\varepsilon=0.97$ is the emissivity, $\sigma=5.67\times10^{-8}\,
+\mathrm{W\,m^{-2}\,K^{-4}}$ the Stefan--Boltzmann constant,
+$T_0=273.15\,\mathrm{K}$, $T_a$ the air temperature, and $\kice=2.03\,
+\mathrm{W\,m^{-1}\,K^{-1}}$ the conductivity of ice. The conduction term is the
+zero-layer heart of the model: it linearises the temperature profile across the
+slab between the freezing ocean at the base ($\Tfr$) and the radiating skin
+($\Tsi$), so the conductive flux is simply $\kice\,(\Tfr-\Tsi)/\hice$.
+
+The turbulent (sensible $+$ latent) fluxes are bulk-linearised to
+$C_b(T_a-\Tsi)$ with a lumped exchange coefficient $C_b = 10\,
+\mathrm{W\,m^{-2}\,K^{-1}}$. This is a deliberate simplification: it absorbs the
+sensible and latent heat into one temperature-difference term and omits the
+wind-speed and humidity dependence a full bulk formula carries (contrast the
+coupler bulk fluxes in Chapter~\ref{chap:ch13_coupler_fluxes}).
+
+\paragraph{Albedo.} The albedo is not a step function but a doubly-smooth
+sigmoid blend, chosen for differentiability (see
+Chapter~\ref{chap:ch03_differentiable}). Writing
+$s(x)=(1+e^{-x})^{-1}$ for the logistic function,
+\codref{chronos\_esm/ice/thermodynamics.py}{\code{compute\_albedo}}
+\begin{align}
+  m  &= s\!\left(\frac{\Tsi+0.5}{0.5}\right),
+      &\alpha_{\mathrm{ice}} &= (1-m)\,\alpha_{i} + m\,\alpha_{m}, \\
+  f_{\mathrm{thin}} &= s\!\left(\frac{0.5-\hice}{0.1}\right),
+      &\alpha &= (1-f_{\mathrm{thin}})\,\alpha_{\mathrm{ice}}
+                 + f_{\mathrm{thin}}\,\alpha_{\mathrm{ocean}},
+  \label{eq:albedo}
+\end{align}
+with $\alpha_i=0.7$ (cold bare ice), $\alpha_m=0.5$ (melting ice/melt ponds),
+and $\alpha_{\mathrm{ocean}}=0.1$ (open water). The first sigmoid melts the
+albedo down as $\Tsi \to 0^\circ\mathrm{C}$ over a $0.5\,\mathrm{K}$ width; the
+second blends toward the ocean value for thin ice ($\hice \lesssim 0.5\,
+\mathrm{m}$), so a thin, broken cover is not given the full reflectivity of a
+thick floe. Both transitions are smooth and therefore differentiable---a hard
+threshold would zero the gradient $\partial\alpha/\partial\hice$ used by the
+adjoint applications of Chapter~\ref{chap:ch15_differentiable_applications}.
+
+\paragraph{Solving for $\Tsi$.} Equation~\eqref{eq:ebalance} is nonlinear in
+$\Tsi$ through the quartic longwave term, so the code takes a fixed number of
+Newton steps---three---rather than iterating to a tolerance. A fixed step count
+keeps the solver a static, differentiable computational graph (\jax{} can trace
+and back-propagate through it). With
+$\Fnet'(\Tsi) = -4\varepsilon\sigma(\Tsi+T_0)^3 - \kice/\hice - C_b$,
+\codref{chronos\_esm/ice/thermodynamics.py}{\code{solve\_surface\_temp}}
+\begin{equation}
+  \Tsi^{(n+1)} = \Tsi^{(n)}
+      - \frac{\Fnet(\Tsi^{(n)})}{\Fnet'(\Tsi^{(n)}) - 10^{-5}},
+  \qquad n=0,1,2,
+  \label{eq:newton}
+\end{equation}
+seeded with $\Tsi^{(0)}=T_a$. The $-10^{-5}$ guard keeps the denominator away
+from zero. The thickness entering $\kice/\hice$ is floored at
+$\hice_{\mathrm{safe}}=\max(\hice,\,0.1\,\mathrm{m})$ to avoid the singular
+conduction of vanishing ice. Finally the skin temperature is capped at the
+melting point,
+\begin{equation}
+  \Tsi \leftarrow \min(\Tsi,\ 0\,^\circ\mathrm{C}),
+  \label{eq:tcap}
+\end{equation}
+and $\Fnet$ is re-evaluated at the capped $\Tsi$. This cap is the mechanism
+that distinguishes growth from melt: if the radiative balance would drive
+$\Tsi>0$, the surface cannot warm past melting, and the leftover positive
+$\Fnet$ becomes melt energy (Section~\ref{sec:growth}).
+
+\begin{remark}
+Three Newton steps from $\Tsi^{(0)}=T_a$ is usually enough because the air
+temperature is a good first guess and the quartic is gently curved over the
+relevant range. It is \emph{not} guaranteed to converge under extreme forcing;
+the melt cap~\eqref{eq:tcap} and the downstream clamps
+(Section~\ref{sec:growth}) provide the safety net that an exact solve would
+otherwise give. This trades a little physical fidelity for a fixed, fast,
+differentiable graph.
+\end{remark}
+
+%====================================================================
+\section{Ice growth and melt}\label{sec:growth}
+%====================================================================
+
+The slab thickness changes through three pathways, all phrased as a Stefan
+condition---heat exchanged at a phase boundary converts to a thickness rate via
+the latent heat of fusion $\Lf = 3.34\times10^5\,\mathrm{J\,kg^{-1}}$ and ice
+density $\rhoice = 917\,\mathrm{kg\,m^{-3}}$:
+\begin{equation}
+  \dt{\hice} = \underbrace{\frac{\kice(\Tfr-\Tsi)/\hice_{\mathrm{safe}}}
+                                {\rhoice \Lf}}_{\text{bottom growth}}
+             - \underbrace{\frac{Q_{o}}{\rhoice \Lf}}_{\text{bottom melt}}
+             - \underbrace{\frac{\max(\Fnet,0)}{\rhoice \Lf}}_{\text{top melt}}.
+  \label{eq:dhdt}
+\end{equation}
+Each term has a clear physical reading.
+
+\paragraph{Bottom (congelation) growth.} When the surface is cold ($\Tsi<0$)
+the energy balance is satisfied and $\Fnet\approx 0$; the ice grows from below
+because the conductive flux $\kice(\Tfr-\Tsi)/\hice$ carries the ocean's latent
+heat away through the slab to the cold sky. Thicker ice conducts less, so growth
+self-limits as $\hice^{-1}$---the classic $\sqrt{t}$ thickening law of Stefan.
+
+\paragraph{Top melt.} When the radiative balance would push $\Tsi$ above
+$0^\circ\mathrm{C}$, the cap~\eqref{eq:tcap} holds it at melting and the residual
+$\max(\Fnet,0)>0$ is spent melting ice from the top.
+
+\paragraph{Bottom melt by ocean heat.} If the ocean mixed layer is above
+freezing, it delivers heat to the ice base. \model{} parameterises this ocean
+heat flux as a relaxation of the mixed layer's excess temperature toward
+$\Tfr$,
+\codref{chronos\_esm/ice/driver.py}{ocean heat flux, \code{step\_ice}}
+\begin{equation}
+  Q_{o} = \frac{\rho_w c_w\,\max(T_{\mathrm{sst}}-\Tfr,0)\,H_{\mathrm{ml}}}
+               {\tau_{\mathrm{mix}}},
+  \label{eq:ohf}
+\end{equation}
+with $\rho_w=1025\,\mathrm{kg\,m^{-3}}$, $c_w=3985\,\mathrm{J\,kg^{-1}\,K^{-1}}$,
+mixed-layer depth $H_{\mathrm{ml}}=50\,\mathrm{m}$, and exchange timescale
+$\tau_{\mathrm{mix}}=10\,\mathrm{days}$. This yields $O(10\,
+\mathrm{W\,m^{-2}})$ for a few tenths of a degree of excess heat, in the observed
+polar range, but the fixed $H_{\mathrm{ml}}$ and $\tau_{\mathrm{mix}}$ are
+crude---there is no prognostic mixed layer here.
+
+\paragraph{Discrete update.} The driver integrates Eq.~\eqref{eq:dhdt} with one
+explicit Euler step at the ocean timestep $\Delta t = 900\,\mathrm{s}$
+(\code{DT\_OCEAN}):
+\begin{equation}
+  \hice^{n+1} = \hice^{n} + \Delta t\,\dt{\hice}.
+\end{equation}
+
+%====================================================================
+\section{Frazil: new-ice formation}
+%====================================================================
+
+Where there is no ice yet but the ocean is supercooled
+($T_{\mathrm{sst}}<\Tfr$), \model{} forms new ice (\emph{frazil}) by converting
+the heat deficit of the mixed layer directly into thickness. The supercooling is
+clamped to $2\,\mathrm{K}$ before conversion, then the new ice is rate-limited to
+$0.1\,\mathrm{m}$ per step,
+\codref{chronos\_esm/ice/driver.py}{frazil block, \code{step\_ice}}
+\begin{align}
+  \Delta T_{sc} &= \min\!\bigl(\max(\Tfr - T_{\mathrm{sst}},0),\ 2\,\mathrm{K}\bigr),\\
+  \hice_{\mathrm{new}} &= \min\!\left(
+        \frac{\rho_w c_w\,\Delta T_{sc}\,H_{\mathrm{ml}}}{\rhoice \Lf},\
+        0.1\,\mathrm{m}\right),
+  \label{eq:frazil}
+\end{align}
+which is added to $\hice^{n+1}$. The two limiters are numerical hygiene, not
+physics: without them a single cold step over a $50\,\mathrm{m}$ mixed layer
+could dump several metres of ice instantaneously (a $5\,\mathrm{K}$ deficit
+$\times\,50\,\mathrm{m}$ is $\sim 6\,\mathrm{m}$ of ice), destabilising the
+coupled run. The comments in the source record that the supercooling clamp was
+tightened from $5\,\mathrm{K}$ to $2\,\mathrm{K}$ for exactly this reason. The
+trade-off is honest: real frazil in a strongly supercooled lead would form
+faster than $0.1\,\mathrm{m}/900\,\mathrm{s}$, so the model lags rapid opening
+events.
+
+After growth, melt, and frazil, the thickness is clamped to a physically
+realistic ceiling and floor,
+\begin{equation}
+  \hice^{n+1} \leftarrow \max\!\bigl(\min(\hice^{n+1},\ 5\,\mathrm{m}),\ 0\bigr),
+  \label{eq:hclamp}
+\end{equation}
+and masked to ocean cells ($\hice \leftarrow \hice\cdot\text{mask}$, land $=0$).
+The $5\,\mathrm{m}$ cap is a guard against an earlier failure mode in which
+unbounded conductive growth produced $\sim 39\,\mathrm{m}$ ice; $5\,\mathrm{m}$
+is at the upper end of multiyear Arctic ice. Capping thickness this way
+suppresses pressure ridges and the thickest deformed ice, a known low bias of
+the scheme.
+
+%====================================================================
+\section{Concentration}
+%====================================================================
+
+The zero-layer model carries no ice dynamics, so concentration is not advected
+or ridged; it is diagnosed from thickness by a smooth saturating map,
+\codref{chronos\_esm/ice/driver.py}{concentration, \code{step\_ice}}
+\begin{equation}
+  \Aice = \tanh\!\left(\frac{\hice}{0.5\,\mathrm{m}}\right).
+  \label{eq:conc}
+\end{equation}
+A cell with $\hice\gtrsim 1\,\mathrm{m}$ is essentially fully covered
+($\Aice\to1$), while thin ice gives partial cover. This is a Hibler-style
+parameterisation in spirit but far simpler: there is no separate open-water
+(lead) fraction equation and no thermodynamic redistribution. Because $\Aice$ is
+a monotone function of $\hice$, the model cannot represent thick, low-concentration
+fields (broken pack) or thin, fully consolidated new ice. Treat $\Aice$ here as a
+diagnostic of how ``complete'' the cover is, not an independent dynamical
+variable.
+
+%====================================================================
+\section{How ice modifies the ocean--atmosphere fluxes}
+%====================================================================
+
+The reason a thermodynamic ice model matters to the rest of \model{} is the heat
+and freshwater it hands to the ocean. \code{step\_ice} returns the pair
+$(Q_{\mathrm{ocn}},\,F_{\mathrm{fw}})$.
+
+\paragraph{Heat flux to the ocean.} Two ice processes exchange heat with the
+ocean below:
+\codref{chronos\_esm/ice/driver.py}{flux block, \code{step\_ice}}
+\begin{equation}
+  Q_{\mathrm{ocn}} = \underbrace{-\,\frac{\kice(\Tfr-\Tsi)}{\hice_{\mathrm{safe}}}}
+                        _{\text{conductive extraction}}
+                   + \underbrace{\frac{\hice_{\mathrm{new}}\,\rhoice \Lf}{\Delta t}}
+                        _{\text{frazil latent release}}.
+  \label{eq:qocn}
+\end{equation}
+Congelation growth \emph{removes} heat from the ocean--ice interface (the first,
+negative term: the ocean must give up latent heat to freeze), whereas frazil
+formation \emph{releases} latent heat back to the mixed layer as the supercooled
+water freezes (the second, positive term). The sign convention is that
+$Q_{\mathrm{ocn}}$ is energy delivered to the ocean. Crucially, while ice is
+present the ocean is insulated from the atmospheric radiative and turbulent
+fluxes---that masking is applied in the coupler
+(Chapter~\ref{chap:ch13_coupler_fluxes}), and Eq.~\eqref{eq:qocn} is the
+\emph{only} thermal channel left open between ocean and the surface there. This
+is the insulation feedback in code form.
+
+\paragraph{Freshwater flux.} Ice growth concentrates the seawater it leaves
+behind (brine rejection raises ocean salinity); melt does the reverse. The model
+expresses this as a freshwater flux proportional to the thickness tendency,
+\begin{equation}
+  F_{\mathrm{fw}} = -\,\rhoice\,\frac{\hice^{n+1}-\hice^{n}}{\Delta t}
+  \qquad [\mathrm{kg\,m^{-2}\,s^{-1}}].
+  \label{eq:fw}
+\end{equation}
+Growth ($\hice$ increasing) gives $F_{\mathrm{fw}}<0$: freshwater is locked into
+the ice, leaving the ocean saltier. Melt ($\hice$ decreasing) gives
+$F_{\mathrm{fw}}>0$: meltwater freshens the surface. This coupling to the
+salinity field is precisely the high-latitude freshwater forcing that the
+overturning circulation is sensitive to
+(Chapters~\ref{chap:ch08_ocean_overturning} and~\ref{chap:ch17_amoc_tipping}).
+
+\begin{remark}[Honest accounting note]
+Equation~\eqref{eq:fw} converts \emph{all} of the net thickness change---including
+the frazil term~\eqref{eq:frazil}---into a freshwater flux, while the heat
+flux~\eqref{eq:qocn} accounts for frazil latent heat separately. Because frazil
+freezing also rejects brine, treating its mass as freshwater here is consistent;
+but note that the scheme uses pure-ice density $\rhoice$ and assumes the ice is
+salt-free (zero ice salinity). Real sea ice retains $\sim 4$--$8\,\mathrm{psu}$
+of brine, so the model slightly overstates the freshwater (and brine-rejection)
+signal per metre of ice. The bias is second-order for the energy budget but
+relevant for precise salinity tendencies.
+\end{remark}
+
+%====================================================================
+\section{Summary of the time step}
+%====================================================================
+
+Per ocean step $\Delta t$, \code{step\_ice} executes, in order: (1) solve the
+surface energy balance for $\Tsi$ by three Newton iterations and cap at melting
+[Eqs.~\eqref{eq:ebalance}--\eqref{eq:tcap}]; (2) form the bottom-growth,
+top-melt, and ocean-heat-melt terms and Euler-step the thickness
+[Eq.~\eqref{eq:dhdt}]; (3) add rate-limited frazil where the ocean is supercooled
+[Eq.~\eqref{eq:frazil}]; (4) clamp thickness to $[0,5]\,\mathrm{m}$ and mask land
+[Eq.~\eqref{eq:hclamp}]; (5) diagnose concentration [Eq.~\eqref{eq:conc}]; and
+(6) return the ocean heat and freshwater fluxes
+[Eqs.~\eqref{eq:qocn}--\eqref{eq:fw}]. The scheme is deliberately minimal: it
+omits snow, internal heat storage, ice dynamics/advection, ridging, a prognostic
+lead fraction, and a salinity-dependent freezing point. Within those limits it
+faithfully reproduces the two feedbacks that make sea ice climatically
+important---albedo and insulation---and remains end-to-end differentiable.
+
+\begin{table}[t]
+\centering
+\caption{Physical constants in the \model{} sea-ice thermodynamics
+(\code{thermodynamics.py}, \code{driver.py}).}
+\begin{tabular}{lll}
+\toprule
+Symbol & Value & Meaning \\
+\midrule
+$\rhoice$            & $917\,\mathrm{kg\,m^{-3}}$              & ice density \\
+$\Lf$                & $3.34\times10^{5}\,\mathrm{J\,kg^{-1}}$ & latent heat of fusion \\
+$\kice$              & $2.03\,\mathrm{W\,m^{-1}\,K^{-1}}$      & ice thermal conductivity \\
+$\Tfr$               & $-1.8\,^\circ\mathrm{C}$                & freezing point of seawater \\
+$\varepsilon$        & $0.97$                                  & ice emissivity \\
+$C_b$                & $10\,\mathrm{W\,m^{-2}\,K^{-1}}$        & bulk turbulent coefficient \\
+$\alpha_i,\alpha_m,\alpha_{\mathrm{ocean}}$ & $0.7,\,0.5,\,0.1$ & cold/melt/ocean albedo \\
+$\tau_{\mathrm{mix}}$ & $10\,\mathrm{days}$                    & ice--ocean exchange timescale \\
+$H_{\mathrm{ml}}$    & $50\,\mathrm{m}$                        & assumed mixed-layer depth \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%====================================================================
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+%====================================================================
+
+\begin{exercise}[The Stefan thickening law]
+Set the ocean heat flux $Q_o=0$ and the surface fluxes so that $\Fnet=0$
+(perpetual polar night, $\Tsi$ fixed at some $T_s<\Tfr$ by strong longwave
+cooling). Equation~\eqref{eq:dhdt} then reduces to
+$\dot{\hice}=\kice(\Tfr-T_s)/(\rhoice\Lf\,\hice)$. Integrate analytically to show
+$\hice(t)=\sqrt{2\kice(\Tfr-T_s)t/(\rhoice\Lf)}$. Now run \code{step\_ice} in a
+single-column driver with constant forcing and $\hice^0=0.1\,\mathrm{m}$,
+$T_s=-20^\circ\mathrm{C}$, and compare the simulated $\hice(t)$ to the
+$\sqrt{t}$ law. At what thickness does the $5\,\mathrm{m}$ clamp
+[Eq.~\eqref{eq:hclamp}] start to distort the curve, and how many days does that
+take?
+\end{exercise}
+
+\begin{exercise}[Albedo feedback and differentiability]
+Using Eq.~\eqref{eq:albedo}, plot $\alpha$ as a function of $\hice$ at fixed
+$\Tsi=-5^\circ\mathrm{C}$ and as a function of $\Tsi$ at fixed
+$\hice=2\,\mathrm{m}$. Then use \jax{}'s \code{jax.grad} on
+\code{compute\_albedo} to obtain $\partial\alpha/\partial\hice$ and
+$\partial\alpha/\partial\Tsi$. Where are the gradients largest, and why would a
+hard ($\tanh\!\to\!$ step) threshold break the adjoint applications of
+Chapter~\ref{chap:ch15_differentiable_applications}?
+\end{exercise}
+
+\begin{exercise}[The insulation feedback in the coupled model]
+Insulation enters through the conduction term $\kice/\hice$. Run a short coupled
+simulation, then artificially \emph{double} $\kice$ in \code{thermodynamics.py}
+and rerun from the same initial state. Predict, then verify, the sign of the
+change in (i) equilibrium ice thickness, (ii) the conductive heat flux to the
+ocean $Q_{\mathrm{ocn}}$ [Eq.~\eqref{eq:qocn}], and (iii) high-latitude ocean
+convection. Explain why more conductive ice can paradoxically be \emph{thinner}
+ice.
+\end{exercise}
+
+\begin{exercise}[Brine rejection and the overturning]
+The freshwater flux~\eqref{eq:fw} ties sea-ice growth to ocean salinity. Estimate
+the brine flux from freezing $1\,\mathrm{m}$ of ice over a winter in a
+$3.75^\circ$ T31 polar cell, expressing it as an equivalent salinity tendency for
+a $50\,\mathrm{m}$ mixed layer. Then discuss qualitatively how the zero-ice-salinity
+assumption (Remark, Section~6) biases this estimate, and connect it to the
+high-latitude freshwater sensitivity of the AMOC in
+Chapter~\ref{chap:ch17_amoc_tipping}.
+\end{exercise}

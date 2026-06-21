@@ -1,4 +1,307 @@
 \chapter{The Ocean: Overturning and the Thermohaline Circulation}
 \label{chap:ch08_ocean_overturning}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal; not in the shared preamble) ---
+\providecommand{\vthc}{\vv_{\mathrm{thc}}}          % thermohaline overturning velocity
+\providecommand{\kvel}{k_{\mathrm{vel}}}            % overturning-strength gain
+\providecommand{\drho}{\Delta\dens}                 % subpolar-minus-subtropical density contrast
+\providecommand{\dS}{\Delta\Salt}                   % subpolar-minus-subtropical salinity contrast
+\providecommand{\hgain}{\gamma_{\mathrm{S}}}        % haline_gain
+\providecommand{\bS}{\beta_{\mathrm{S}}}            % haline contraction coefficient
+
+The Atlantic Meridional Overturning Circulation (AMOC) is the global ocean's
+single most consequential dynamical mode: a basin-scale conveyor that carries
+warm, salty surface water poleward, sinks it in the subpolar North Atlantic to
+form North Atlantic Deep Water (NADW), and returns it equatorward at depth.
+Its existence and strength depend on a competition between thermal and haline
+buoyancy forcing, and \citet{stommel1961} showed in a famous two-box model that
+this competition admits \emph{multiple stable equilibria} -- a strong, salt-driven
+``on'' state and a weak, fresh-capped ``off'' state. \citet{marotzke1991}
+sharpened this into the salt-advection feedback that underlies the modern picture
+of AMOC tipping. This chapter documents how \model{} represents that physics, and
+the chapter is deliberately honest about what the representation is: an
+\emph{interim, mechanistic closure}, not a prognostic-momentum overturning.
+
+\section{Why a closure is needed}
+
+\model{}'s ocean (Chapters~\ref{chap:ch04_ocean_equations}--\ref{chap:ch06_ocean_numerics})
+diagnoses horizontal velocities from the density field via a thermal-wind /
+geostrophic balance. That balance is \emph{local in latitude}: it relates the
+vertical shear of $\uvec$ to the local horizontal density gradient, but it does
+not constrain the basin-integrated, depth-overturning streamfunction that reaches
+$26.5^{\circ}\mathrm{N}$. The practical symptom is that the sensitivity of the
+diagnosed AMOC to a subpolar buoyancy perturbation is essentially zero,
+\begin{equation}
+  \pd{\Psi_{\mathrm{AMOC}}(26.5^{\circ}\mathrm{N})}{\Salt_{\mathrm{subpolar}}} \approx 0,
+  \label{eq:dpsi-zero}
+\end{equation}
+so the diagnostic ocean carries no coherent overturning response to forcing and
+cannot host an AMOC bifurcation. The prognostic-momentum core that would close
+this honestly (a variable-coefficient JEBAR barotropic-vorticity solver plus a
+$\partial\uvec/\partial t$ equation) is the subject of Chapter~\ref{chap:ch07_ocean_prognostic_core}
+and is future work. In the interim we install the cheapest \emph{differentiable}
+change that makes Eq.~\eqref{eq:dpsi-zero} nonzero and sign-correct, so that the
+tipping experiments of Chapter~\ref{chap:ch17_amoc_tipping} can be run at all.
+
+\begin{remark}
+The closure prescribes the vertical \emph{shape} of the overturning cell (as a
+box model does) but makes its \emph{strength} and, crucially, its \emph{sensitivity}
+to density physical. It is set to zero by $\kvel=0$, which recovers the pure
+diagnostic ocean.
+\codref{chronos\_esm/ocean/overturning.py}{module docstring: rationale and scope}
+\end{remark}
+
+\section{A density-driven, depth-integral-zero overturning velocity}
+
+The closure adds a meridional overturning velocity $\vthc(z,\lat,\lon)$ confined
+to the Atlantic basin. Two design constraints fix its form.
+
+\paragraph{(i) It must carry no net meridional transport.}
+The model's barotropic corrector (Chapter~\ref{chap:ch07_ocean_prognostic_core})
+removes any depth-uniform meridional flow per latitude, so a closure velocity
+with a nonzero depth integral would simply be annihilated. We therefore require
+\begin{equation}
+  \int_{-\dep}^{0} \vthc \dd z = 0
+  \qquad\Longleftrightarrow\qquad
+  \sum_{k} \vthc^{(k)}\,\Delta z_k = 0 ,
+  \label{eq:depthzero}
+\end{equation}
+which guarantees $\vthc$ drives only \emph{overturning} (and the associated
+vertical velocity $\ww$ and tracer transport), never net throughflow.
+
+\paragraph{(ii) Its strength must scale with the subpolar buoyancy excess.}
+Deep-water formation is gated by how much denser the subpolar convection region
+is than the subtropics. \model{} reads an upper-ocean density contrast
+\begin{equation}
+  \drho \;=\; \langle\dens\rangle_{\mathrm{subpolar}} - \langle\dens\rangle_{\mathrm{subtropical}},
+  \label{eq:drho}
+\end{equation}
+where $\langle\cdot\rangle$ denotes an area- and depth-weighted mean over Atlantic
+ocean cells in a latitude band ($45$--$65^{\circ}\mathrm{N}$ for subpolar,
+$10$--$30^{\circ}\mathrm{N}$ for subtropical) and over the convection layer
+$z \ge -h_{\mathrm{c}}$. A salinity contrast $\dS$ is read the same way.
+
+\subsection{Vertical shape}
+
+Let the depth-mid coordinates be $z_k$ and define the upper-limb indicator
+$\mathbb{1}_{\mathrm{up}}(z) = 1$ for $z \ge -h_{\mathrm{up}}$ and $0$ below, with
+$h_{\mathrm{up}}$ the limb thickness (\code{upper\_depth\_m}, default $1100\,\mathrm{m}$).
+Writing $d_{\mathrm{up}}=\sum_k \mathbb{1}_{\mathrm{up}}(z_k)\,\Delta z_k$ and
+$d_{\mathrm{dn}}=\dep-d_{\mathrm{up}}$, the dimensionless shape
+\begin{equation}
+  G(z) \;=\; \mathbb{1}_{\mathrm{up}}(z)
+            \;-\;\bigl(1-\mathbb{1}_{\mathrm{up}}(z)\bigr)\,\frac{d_{\mathrm{up}}}{d_{\mathrm{dn}}}
+  \label{eq:Gshape}
+\end{equation}
+is $+1$ in the upper limb and negative below, and is constructed so that
+$\sum_k G(z_k)\,\Delta z_k = 0$ exactly, satisfying Eq.~\eqref{eq:depthzero}.
+\codref{chronos\_esm/ocean/overturning.py}{\code{thc\_overturning\_velocity}: \code{G = upper - (1-upper)*(up\_d/dn\_d)}}
+
+\subsection{Strength, contrast and the haline amplification}
+
+The overturning amplitude is a smooth, one-sided ($\ge 0$) function of a
+haline-amplified contrast,
+\begin{align}
+  \mathrm{contrast} &= \drho + (\hgain - 1)\,\bS\,\dS , \label{eq:contrast}\\
+  A &= \kvel \,\softplus\!\left(\frac{\mathrm{contrast}}{\Delta\dens_{\mathrm{scale}}}\right),
+        \qquad \softplus(x) = \ln(1+e^{x}), \label{eq:amp}
+\end{align}
+with $\bS \approx 0.78\ \mathrm{kg\,m^{-3}\,psu^{-1}}$ the haline contraction
+coefficient $\partial\dens/\partial\Salt$ of the equation of state near
+$35\,\mathrm{psu}$, $\Delta\dens_{\mathrm{scale}}$ the contrast scale
+(\code{drho\_scale}, default $0.1\,\mathrm{kg\,m^{-3}}$), and $\kvel$ the velocity
+gain. The full overturning velocity is then
+\begin{equation}
+  \vthc(z,\lat,\lon) \;=\; A\;G(z)\;\mathcal{M}_{\mathrm{Atl}}(\lat,\lon)\,\mathcal{M}_{\mathrm{ocn}},
+  \label{eq:vthc}
+\end{equation}
+where $\mathcal{M}_{\mathrm{Atl}}$ is the Atlantic basin mask
+($280$--$360^{\circ}\mathrm{E}\cup 0$--$20^{\circ}\mathrm{E}$, $34^{\circ}\mathrm{S}$--$80^{\circ}\mathrm{N}$)
+and $\mathcal{M}_{\mathrm{ocn}}$ the wet-cell mask.
+\codref{chronos\_esm/ocean/overturning.py}{\code{amp = k\_vel*jax.nn.softplus(contrast/drho\_scale)}; \code{v\_thc = amp*G*atl*maskC}}
+
+The $\softplus$ rectifier replaces a hard $\max(0,\cdot)$: it is everywhere
+differentiable, so $\partial A/\partial(\text{state})$ exists for the gradient-based
+calibration and bifurcation diagnostics that motivate the whole model, yet it
+saturates to a linear ramp for large positive contrast (denser subpolar water
+$\Rightarrow$ stronger AMOC) and decays smoothly toward zero for negative contrast
+(a fresh/warm subpolar cap $\Rightarrow$ collapsed cell).
+
+\begin{example}[Reading the knobs]
+With $\hgain=1$ the haline term in Eq.~\eqref{eq:contrast} vanishes and the
+strength depends on the \emph{total} density contrast only -- the conservative
+default. Setting $\kvel=0$ removes the closure entirely. Raising $\kvel$ scales
+the cell strength linearly in the linear regime of $\softplus$; $\Delta\dens_{\mathrm{scale}}$
+sets how sharply strength turns on with contrast.
+\end{example}
+
+\subsection{Two decoupled depth scales}
+
+A subtlety that matters for tipping: the depth over which the cell \emph{flows}
+($h_{\mathrm{up}}$, the limb thickness in Eq.~\eqref{eq:Gshape}) is decoupled
+from the depth over which the gating \emph{contrast} is read
+($h_{\mathrm{c}}=$~\code{contrast\_depth\_m}, default equal to $h_{\mathrm{up}}$).
+Physically, deep-water formation responds to the buoyancy of the \emph{upper few
+hundred metres} of the convection region, so a shallow $h_{\mathrm{c}}\sim300\,\mathrm{m}$
+is the correct choice -- and it is also the numerically consequential one. A
+surface-trapped freshwater anomaly averaged over $0$--$1100\,\mathrm{m}$ is diluted
+roughly $20\times$ and barely equilibrates within a decadal hold; averaged over
+$0$--$300\,\mathrm{m}$ it is diluted only $\sim6\times$ and flushes in a few years.
+The shallow contrast layer thus gives a surface hosing far more leverage on the
+contrast, which is exactly the control variable in the bifurcation study.
+\codref{chronos\_esm/ocean/overturning.py}{\code{upper\_depth\_m} (shape) vs \code{contrast\_depth\_m} (gating)}
+
+\section{The salt-advection feedback (\texorpdfstring{$\hgain$}{haline\_gain})}
+
+The closure is not merely diagnostic: because $\vthc$ advects the prognostic
+salinity field, it carries salt poleward in its upper limb. A stronger AMOC
+therefore makes the subpolar Atlantic saltier and denser, which by
+Eqs.~\eqref{eq:contrast}--\eqref{eq:amp} strengthens the AMOC further. This is
+precisely the \citet{stommel1961}/\citet{marotzke1991} salt-advection feedback,
+realised here through the model's own tracer transport rather than imposed.
+
+The loop gain is tunable through $\hgain$ (\code{haline\_gain}). When $\hgain>1$
+the contrast in Eq.~\eqref{eq:contrast} weights the subpolar salinity excess
+\emph{above} its raw density contribution, $\bS\dS$, by the extra factor
+$(\hgain-1)\bS\dS$. This amplifies the overturning's sensitivity to the salinity
+contrast specifically, raising the feedback-loop gain above unity and turning the
+monostable diagnostic AMOC into a \emph{bistable, tip-capable} one. The bifurcation
+that results -- the hysteresis loop swept by a slowly varied freshwater hosing -- is
+the object of study in Chapter~\ref{chap:ch17_amoc_tipping}.
+
+\begin{remark}
+Because the feedback runs through the model's prognostic salinity, the sign of
+$\partial\Psi_{\mathrm{AMOC}}/\partial\Salt_{\mathrm{subpolar}}$ is now positive
+(saltier subpolar $\Rightarrow$ stronger AMOC), repairing
+Eq.~\eqref{eq:dpsi-zero}. $\hgain$ controls only \emph{how strong} that feedback
+is, i.e.\ whether the system is monostable or bistable.
+\end{remark}
+
+\section{Subpolar freshwater hosing}
+
+The standard AMOC-bifurcation forcing is a freshwater ``hosing'' of the subpolar
+North Atlantic surface. \model{} implements it as a virtual surface-salinity
+tendency. Spreading a freshwater volume flux of $Q_{\mathrm{fw}} = H_{\mathrm{Sv}}\times10^{6}\,\mathrm{m^{3}\,s^{-1}}$
+($H_{\mathrm{Sv}}$ in Sverdrups) uniformly over the subpolar Atlantic surface
+region $\mathcal{R}$ (band $45$--$65^{\circ}\mathrm{N}$, area $\mathcal{A}=\sum_{\mathcal{R}}\Delta x\,\Delta y$,
+surface-layer thickness $\Delta z_0$) dilutes a reference salinity $\Salt_{\mathrm{ref}}=35\,\mathrm{psu}$,
+giving the virtual salt-removal rate
+\begin{equation}
+  \left.\pd{\Salt}{t}\right|_{\mathrm{hose}}
+   = -\,\frac{Q_{\mathrm{fw}}\,\Salt_{\mathrm{ref}}}{\mathcal{A}\,\Delta z_0}
+     \quad \text{on } \mathcal{R},\qquad 0 \text{ elsewhere.}
+  \label{eq:hosing}
+\end{equation}
+\codref{chronos\_esm/ocean/overturning.py}{\code{subpolar\_hosing\_salt\_tendency}: \code{-(hosing\_sv*1e6*s\_ref)/(area*dz0)}}
+
+Freshening lowers the subpolar density, weakens the contrast $\drho$ in
+Eq.~\eqref{eq:drho}, and so weakens the AMOC through Eq.~\eqref{eq:amp}; the
+salt-advection feedback then either damps the perturbation (monostable regime) or
+amplifies it past a saddle-node (bistable regime). Eq.~\eqref{eq:hosing} is
+differentiable in $H_{\mathrm{Sv}}$ -- so $\partial\Psi_{\mathrm{AMOC}}/\partial H_{\mathrm{Sv}}$
+is available by automatic differentiation -- and $H_{\mathrm{Sv}}=0$ is an exact
+no-op.
+
+\section{Diagnosing the overturning streamfunction}
+
+The overturning is reported as the meridional streamfunction in depth--latitude
+space. For the global MOC,
+\begin{equation}
+  \Psi(\lat,z) \;=\; \int_{-\dep}^{z}\!\!\int_{\lon_{\mathrm w}}^{\lon_{\mathrm e}}
+                     \vv(\lon,\lat,z')\,\dd x \dd z',
+  \label{eq:moc}
+\end{equation}
+discretised as a longitudinal transport sum followed by a vertical cumulative sum,
+$\Psi_{jk} = \sum_{i}\vv_{ijk}\,\Delta x_j$ accumulated over $z$, reported in
+Sverdrups ($1\Sv = 10^{6}\,\mathrm{m^{3}\,s^{-1}}$).
+\codref{chronos\_esm/ocean/diagnostics.py}{\code{compute\_moc}}
+
+\subsection{The Atlantic basin section and the barotropic correction}
+
+For the AMOC the integral in Eq.~\eqref{eq:moc} is restricted to wet Atlantic
+cells. But the model's coarse longitude-box ``Atlantic'' is open at its southern
+edge and to throughflow, so the raw $\vv$ contains a large depth-uniform
+(barotropic) component -- the wind-driven gyre / ACC passing \emph{through} the box --
+which would otherwise swamp the diagnostic at the level of $\sim-200\Sv$. Two
+steps fix this: (i) restrict the section to \code{atlantic\_mask}~$\cap$~\code{ocean\_mask};
+and (ii) remove the section depth-mean transport at each latitude,
+\begin{equation}
+  \widehat{V}(\lat) = \frac{1}{\dep}\sum_{k}\Bigl(\sum_i \vv_{ijk}\,\Delta x_j\Bigr)\Delta z_k,
+  \qquad
+  V'_{jk} = \Bigl(\sum_i \vv_{ijk}\Delta x_j\Bigr) - \widehat{V}(\lat),
+  \label{eq:barotropic}
+\end{equation}
+so the corrected section carries zero net meridional transport and the
+streamfunction closes at the bottom. The depth-integral-zero construction of
+$\vthc$ in Eq.~\eqref{eq:depthzero} is what lets the closure survive this
+correction intact.
+\codref{chronos\_esm/ocean/diagnostics.py}{\code{compute\_amoc}, \code{remove\_barotropic}}
+
+\subsection{Sign convention}
+
+The AMOC streamfunction is accumulated as a \emph{positive} cumulative sum,
+\begin{equation}
+  \Psi_{\mathrm{AMOC}}(\lat,z) = \frac{1}{10^{6}}\sum_{k'\le k} V'_{jk'}\,\Delta z_{k'} \;[\Sv],
+  \label{eq:amoc-sign}
+\end{equation}
+following the RAPID convention: \textbf{positive $\Psi$ is the AMOC}, i.e.\ northward
+NADW in the upper limb with an equatorward deep return. The upper-cell strength at
+$26.5^{\circ}\mathrm{N}$ is then $\max_z \Psi_{\mathrm{AMOC}}$ and the AABW lower
+cell is $\min_z \Psi_{\mathrm{AMOC}}$.
+\codref{chronos\_esm/ocean/diagnostics.py}{\code{amoc\_sv = cumsum(...)}; \code{upper\_cell\_26N = max}, \code{lower\_cell\_26N = min}}
+
+\begin{remark}[A real sign bug, fixed]
+An earlier version negated Eq.~\eqref{eq:amoc-sign} ($\Psi=-\!\sum$). With that
+sign a physically correct overturning cell is entirely non-positive, so
+$\max_z\Psi$ scored a genuine $\sim15\Sv$ AMOC as $0\Sv$ (and an \emph{anti}-AMOC
+as large positive). Injecting a clean $15\Sv$ cell confirms it:
+$\max(-\!\operatorname{cumsum})=0.0$ while $\max(+\!\operatorname{cumsum})=+15.0$.
+This sign error -- not only the diagnostic-velocity ocean -- is why the AMOC once
+read $\sim0$ / ``incoherent.'' (See \code{tests/test\_amoc\_metric.py}.)
+\end{remark}
+
+\section{Honest limitations}
+
+This closure prescribes the cell's vertical structure and confines it to a fixed
+longitude box; it is therefore not a substitute for prognostic overturning. The
+strength's \emph{magnitude} is a tuning of $\kvel$ rather than an emergent balance,
+and the basin geometry is crude at T31. What the closure does buy -- and all it
+claims to buy -- is a differentiable, sign-correct, physically motivated dependence
+of the overturning on the subpolar buoyancy contrast, with a tunable salt-advection
+feedback. That is exactly the minimal ingredient needed to study AMOC bistability
+and tipping, which we take up in Chapter~\ref{chap:ch17_amoc_tipping}.
+
+\begin{exercise}[Turning the feedback on]
+Using \code{thc\_overturning\_velocity}, hold a fixed density/salinity field and
+sweep \code{haline\_gain} $\in\{1.0, 1.5, 2.0\}$ at fixed $\kvel$. For each, plot
+the overturning amplitude $A$ (Eq.~\ref{eq:amp}) as a function of an imposed
+subpolar salinity contrast $\dS$. Identify which $\hgain$ first produces a
+loop-gain $>1$ (slope of $A$ vs $\dS$ exceeding the contrast restoring rate) and
+relate it to the onset of bistability.
+\end{exercise}
+
+\begin{exercise}[Why depth-integral-zero?]
+Construct a test overturning velocity $\vthc = A\,G(z)$ on the model grid with
+$G$ from Eq.~\eqref{eq:Gshape}, and a second one with $G\to G+c$ for a constant
+$c\ne0$. Pass both through \code{compute\_amoc} with \code{remove\_barotropic=True}.
+Explain quantitatively why the barotropic correction (Eq.~\ref{eq:barotropic})
+leaves the first cell intact but annihilates the constant offset of the second.
+\end{exercise}
+
+\begin{exercise}[The hosing transfer function]
+Apply \code{subpolar\_hosing\_salt\_tendency} for $H_{\mathrm{Sv}}\in[0,0.3]\Sv$
+in a multi-year integration with the closure active ($\kvel>0$,
+$\code{contrast\_depth\_m}=300\,\mathrm{m}$). Plot the equilibrated AMOC upper-cell
+strength (Eq.~\ref{eq:amoc-sign}) against $H_{\mathrm{Sv}}$. Then repeat with
+$\code{contrast\_depth\_m}=1100\,\mathrm{m}$ and explain, using the dilution
+argument of Section~3.4, why the shallow contrast layer gives the hosing far more
+leverage.
+\end{exercise}
+
+\begin{exercise}[Verifying the sign convention by differentiation]
+Compute $\partial\,\Psi_{\mathrm{AMOC}}(26.5^{\circ}\mathrm{N})/\partial H_{\mathrm{Sv}}$
+by automatic differentiation through \code{subpolar\_hosing\_salt\_tendency} and a
+short ocean step. Confirm the sign is negative (freshening weakens the AMOC) and
+contrast it with the result one would get under the buggy $\Psi=-\!\operatorname{cumsum}$
+convention of the final remark.
+\end{exercise}

@@ -1,4 +1,440 @@
-\chapter{The Atmosphere: Single-Level Spectral Model}
-\label{chap:ch10_atmosphere_singlelevel}
+\chapter{The Atmosphere: Single-Level Spectral Model}\label{chap:ch10_atmosphere_singlelevel}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal, chapter-scoped) -----------------------
+\providecommand{\lnps}{\ensuremath{\pi}}   % log surface pressure, pi = ln p_s
+\providecommand{\spechum}{q}               % specific humidity
+\providecommand{\divg}{\delta}             % horizontal divergence
+
+This chapter documents \model's \emph{legacy} atmosphere: a single horizontal
+level (\code{ATMOS\_GRID.nz}\,$=1$), shallow-water-like spectral model integrated
+with forward Euler. It is the atmosphere that produced the validation dashboard in
+the README, and it remains the only atmosphere wired into the coupled time step
+(\code{main.py:step\_coupled}). Its successor --- a multi-level spectral dynamical
+core built on the \dino{} dycore --- is the subject of
+Chapter~\ref{chap:ch09_atmosphere_multilevel}; that core fixes the structural
+limitations we are honest about here (no baroclinic eddies, weak Intertropical
+Convergence Zone). The single-level model is nonetheless worth understanding in
+detail: it is small, fully differentiable, and its design choices are a clinic in
+what one \emph{can} and \emph{cannot} ask of a barotropic atmosphere.
+
+We follow the textbook structure: continuous governing equation first, then the
+discrete form the code actually integrates, including every clamp, filter and
+limiter, with a pointer to the source. The reference for the underlying dynamics
+is \citet{vallis2017}.
+
+\section{State variables and the prognostic--diagnostic split}
+
+The atmospheric state (\codref{chronos\_esm/atmos/dynamics.py}{class
+\code{AtmosState}}) carries six \emph{prognostic} fields, each a single
+horizontal slab on the $\mathrm{nlat}\times\mathrm{nlon}$ lat--lon grid:
+relative vorticity $\vort$, horizontal divergence $\divg$, temperature $T$,
+log surface pressure $\lnps=\ln p_s$, specific humidity $\spechum$, and a carbon
+dioxide concentration field (ppm). Velocity is \emph{not} prognostic; instead the
+model carries $\vort$ and $\divg$ and reconstructs the wind $\uvec=(\uu,\vv)$ each
+step via a Helmholtz (vorticity--divergence) decomposition. The diagnostic fields
+$\uu,\vv$, the streamfunction $\psib$, the velocity potential $\chi$, and the
+static surface geopotential $\phi_s=\grav z_s$ round out the state.
+
+This is the classic vorticity--divergence formulation of a single-layer atmosphere
+\citep[Ch.~5]{vallis2017}. Working in $(\vort,\divg)$ rather than $(\uu,\vv)$ makes
+the rotational and divergent parts of the flow cleanly separable and lets us solve
+two scalar Poisson problems instead of a coupled vector system.
+
+\section{Wind recovery: the Helmholtz decomposition}
+
+By the Helmholtz theorem any horizontal wind field splits into a non-divergent part
+(from a streamfunction $\psib$) and an irrotational part (from a velocity
+potential $\chi$):
+\begin{equation}
+  \uvec = \kvec\times\grad\psib + \grad\chi,
+  \qquad
+  \uu = -\pd{\psib}{y} + \pd{\chi}{x},
+  \qquad
+  \vv = \pd{\psib}{x} + \pd{\chi}{y}.
+  \label{eq:helmholtz}
+\end{equation}
+The potentials are recovered from the prognostic fields by inverting two Poisson
+equations,
+\begin{equation}
+  \lap\psib = \vort, \qquad \lap\chi = \divg.
+  \label{eq:poisson}
+\end{equation}
+The code does exactly this. Before inversion both $\vort$ and $\divg$ are passed
+through a polar filter (below); the inversions in
+Eq.~\eqref{eq:poisson} are solved \emph{directly} by an FFT in longitude combined
+with a tridiagonal (Thomas) solve in latitude, not iteratively.
+
+\codref{chronos\_esm/atmos/spectral.py}{\code{inverse\_laplacian} --- rFFT in
+$x$, batched tridiagonal solve in $y$ for each zonal wavenumber}
+
+\codref{chronos\_esm/atmos/dynamics.py}{\code{step\_atmos} --- \code{psi =
+inverse\_laplacian(vort)}, \code{chi = inverse\_laplacian(div)}, then
+Eq.~\eqref{eq:helmholtz}}
+
+\begin{remark}
+The longitudinal transform is exact (a real FFT), but the meridional direction
+uses fourth-order centred finite differences for gradients and second-order
+differences for the Laplacian. \model{} is therefore a \emph{spectral--finite-
+difference hybrid}, not a true spherical-harmonic model: there is no Legendre
+transform and no triangular truncation. The module docstring is candid that a full
+pure-\jax{} spherical-harmonic transform ``is 1000+ lines'' and was deliberately
+avoided here. This is the single biggest difference from the multi-level
+core of Chapter~\ref{chap:ch09_atmosphere_multilevel}.
+\end{remark}
+
+After the inversion the diagnostic winds from Eq.~\eqref{eq:helmholtz} are clipped
+to $\pm 80\ \mathrm{m\,s^{-1}}$ and polar-filtered. The clip is a safety net, not a
+physical cap: with the wind relaxed toward a $\sim 10\ \mathrm{m\,s^{-1}}$
+climatological jet (Section~\ref{sec:windrelax}) the field should never approach
+$80\ \mathrm{m\,s^{-1}}$, so hitting the clip flags a developing instability rather
+than silently saturating an unphysical jet.
+
+\section{The governing tendencies}
+
+On a single layer the prognostic equations are the shallow-water vorticity and
+divergence equations augmented with thermodynamic and moisture conservation. The
+continuous forms, with $\eta=\vort+\Cor$ the absolute vorticity and
+$\Cor=2\Om\sin\lat$ the Coriolis parameter, are
+\begin{align}
+  \pd{\vort}{t} &= -\uvec\!\cdot\!\grad\eta - \eta\,\divg + \curl\mathbf{F},
+    \label{eq:vort} \\[2pt]
+  \pd{\divg}{t} &= -\diver\!\big(R_d\,T\,\grad\lnps\big) - \lap\phi_s
+                   + \Cor\,\vort + \diver\mathbf{F},
+    \label{eq:div} \\[2pt]
+  \pd{T}{t}    &= -\uvec\!\cdot\!\grad T + Q_T,
+    \label{eq:temp} \\[2pt]
+  \pd{\lnps}{t} &= -\uvec\!\cdot\!\grad\lnps - \divg,
+    \label{eq:lnps} \\[2pt]
+  \pd{\spechum}{t} &= -\uvec\!\cdot\!\grad\spechum + Q_q,
+    \qquad
+  \pd{C}{t} = -\uvec\!\cdot\!\grad C + Q_C,
+    \label{eq:tracers}
+\end{align}
+where $R_d=287\ \mathrm{J\,kg^{-1}\,K^{-1}}$ is the gas constant for dry air,
+$\mathbf{F}$ is the momentum forcing (friction/relaxation, Section~\ref{sec:windrelax}),
+$Q_T,Q_q,Q_C$ are the thermodynamic, moisture and carbon sources, and $C$ is the
+CO$_2$ field. Equation~\eqref{eq:lnps} is the layer continuity equation: surface
+pressure tendency is set by mass convergence $-\divg$ plus advection of $\lnps$.
+
+A few honest remarks on what these are. The pressure-gradient term in
+Eq.~\eqref{eq:div} is written in code as
+$\diver(R_d T\,\grad\lnps) = R_d\big(\grad T\!\cdot\!\grad\lnps + T\,\lap\lnps\big)$
+plus the orographic forcing $-\lap\phi_s$; this is the single-level analogue of the
+geopotential gradient driving the divergent flow. Because there is only one level,
+there is \emph{no} vertical advection, \emph{no} vertical shear, and hence no
+thermal-wind balance --- a fact that drives the central design compromise of
+Section~\ref{sec:windrelax}.
+
+\codref{chronos\_esm/atmos/dynamics.py}{\code{step\_atmos}: \code{dzeta\_dt},
+\code{ddiv\_dt}, \code{dt\_dt}, \code{dlnps\_dt}, \code{dq\_dt}, \code{dco2\_dt}}
+
+The advection operator is implemented in flux-free advective form,
+$\uvec\!\cdot\!\grad f = \uu\,\partial_x f + \vv\,\partial_y f$, with gradients from
+the spectral--FD routine:
+\begin{lstlisting}[caption={Advection and the vorticity tendency (abbreviated).}]
+def advect(f):
+    df_dx, df_dy = spectral.compute_gradients(f, dx, dy)
+    return -(u * df_dx + v * df_dy)
+
+eta = state.vorticity + f_cor              # absolute vorticity
+dzeta_dt = advect(eta) - eta * state.divergence + curl_forcing
+\end{lstlisting}
+
+\section{Forward-Euler time stepping with hyperdiffusion}
+
+The model marches every field with a single forward (explicit) Euler step at
+$\Delta t = \code{DT\_ATMOS}$, adding scale-selective $\nabla^4$ hyperdiffusion and
+a polar-only $\nabla^2$ term. For a generic field $f$ with tendency $G_f$ from
+Eqs.~\eqref{eq:vort}--\eqref{eq:tracers},
+\begin{equation}
+  f^{\,n+1} = f^{\,n} + \Delta t\Big(G_f - \nu_4^{(f)}\,\nabla^4 f^{\,n}
+              + \nu_{\mathrm{pol}}\,\nabla^2 f^{\,n}\Big).
+  \label{eq:euler}
+\end{equation}
+The $\nabla^4$ (bi-Laplacian) operator is the Laplacian applied twice
+(\codref{chronos\_esm/atmos/spectral.py}{\code{compute\_bilaplacian}}); in spectral
+space it damps a mode of wavenumber $k$ as $k^4$, so it bites hard at the grid
+scale ($2\Delta x$ noise) and is essentially invisible to the large-scale
+circulation. The coefficients are deliberately \emph{strong} --- the so-called
+``tank'' values
+$\nu_4^{\vort}=3\times10^{14}$, $\nu_4^{\divg}=6\times10^{14}$,
+$\nu_4^{T}=2\times10^{13}$, with weaker values for $\spechum$, $C$ and $\lnps$
+(all in SI units of $\mathrm{m^4\,s^{-1}}$).
+
+\begin{remark}[The relaxation/diffusion decoupling]
+Why keep diffusion strong when one usually weakens it to ``let the jet develop''?
+Because in this model the jet is \emph{not} developed by the dynamics --- it is
+\emph{set} by the momentum relaxation of Section~\ref{sec:windrelax}. Since
+$\nabla^4$ leaves the large scale untouched, strong hyperdiffusion does not fight
+the relaxed jet; it only kills small-scale noise and buys stability. A
+four-times-weaker setting was found to let a slow eddy instability grow over
+$\sim 25$ days until $|\uu|$ hit the clamp. This decoupling ---
+\emph{relaxation $\to$ realism, hyperdiffusion $\to$ stability} --- is the key
+organising idea of the single-level model. (Contrast the multi-level core, where
+the eddies \emph{are} the physics and diffusion must be weak enough to let them
+grow.)
+\end{remark}
+
+\paragraph{Implicit divergence damping.}
+Linear divergence damping is the standard device for suppressing spurious
+gravity-wave and external-mode noise. The naive explicit form
+$-r\,\divg$ with $r=5\times10^{-2}\ \mathrm{s^{-1}}$ gives
+$\Delta t\,r = 1.5 > 1$, so forward Euler \emph{overshoots} and flips the sign of
+$\divg$ every step --- a $2\Delta t$ oscillation that pumps grid-scale checkerboard
+noise into $\lnps$. The fix is to apply the damping \emph{implicitly}, which is
+unconditionally stable for any rate:
+\begin{equation}
+  \divg^{\,n+1} \;\leftarrow\; \frac{\divg^{\,n+1}}{1 + \Delta t\,r_{\mathrm{div}}},
+  \qquad r_{\mathrm{div}} = 10^{-2}\ \mathrm{s^{-1}}.
+\end{equation}
+This absorbs divergent-mode noise while preserving the large-scale divergent
+(Hadley/Walker) circulation that organises precipitation.
+
+\section{The polar \texorpdfstring{$\Delta x$}{dx}-floor: a stability fix, not a physics choice}
+\label{sec:polardx}
+
+A lat--lon grid has a fatal pathology at the poles: the zonal grid spacing
+\begin{equation}
+  \Delta x(\lat) = \frac{2\pi a\cos\lat}{\mathrm{nlon}}
+\end{equation}
+collapses to $\sim 4\ \mathrm{m}$ on the pole-most rows (where $\cos\lat$ is floored
+to $10^{-5}$ to avoid division by zero). Any zonal structure then makes
+$\partial_x$ and $\partial_x^2$ explode: the $\diver(R_d T\grad\lnps)$ pressure
+term and $\uvec\!\cdot\!\grad\lnps$ advection detonate \emph{at} the poles within a
+few steps. The original symptom was diagnosed precisely: surface pressure swung to
+$100$--$1200$ hPa at $\lat=\pm 90^\circ$ over flat topography, with
+$\sigma(p_s)\sim 150$ hPa against an observed $\sim 12$ hPa.
+
+The fix is to floor the \emph{dynamical} $\Delta x$ at its $80^\circ$ value,
+\begin{equation}
+  \Delta x_{\mathrm{dyn}}(\lat) = \frac{2\pi a}{\mathrm{nlon}}\,
+     \max\!\big(\cos\lat,\;\cos 80^\circ\big),
+  \label{eq:dxfloor}
+\end{equation}
+so the handful of pole-most rows integrate with the $\sim 80^\circ$ metric instead
+of the collapsing one. A separate, identical floor $\Delta x_{\mathrm{diff}}$ is
+applied to the diffusion operators, whose $1/\Delta x^4$ scaling would otherwise
+exceed the explicit stability limit by $\sim 14$ orders of magnitude at the poles.
+The \emph{accurate} $\cos\lat$ is retained for area weighting and the Coriolis
+parameter. This is unapologetically a numerical band-aid for the grid choice; it is
+local to a few rows and does not touch the physics elsewhere.
+
+\codref{chronos\_esm/atmos/dynamics.py}{\code{step\_atmos}: \code{cos\_lat\_dyn},
+\code{cos\_lat\_diff}, and \code{polar\_filter} usage}
+
+The polar \emph{filter} (\codref{chronos\_esm/atmos/spectral.py}{\code{polar\_filter}})
+is the complementary device: it applies a smooth Gaussian taper to zonal modes
+above the CFL cutoff $m_{\max}(\lat)=\tfrac{\mathrm{nlon}}{2}\cos\lat$, always
+preserving at least the zonal mean ($m=0$). It \emph{damps} rather than removes
+high modes --- an earlier hard cutoff killed all polar circulation every step.
+
+\section{Wind relaxation: an eddy-momentum-flux parameterization}
+\label{sec:windrelax}
+
+Here is the central honesty of the chapter. A single-level (barotropic) atmosphere
+has no vertical shear, hence no thermal wind and no baroclinic instability. A
+meridional temperature gradient therefore drives \emph{no} sustained pressure
+gradient: the winds geostrophically adjust toward rest. In diagnosis,
+$|\uu|$ decayed from $10$ to $<1\ \mathrm{m\,s^{-1}}$ and the correlation against
+ERA5 surface wind fell to $\sim 0$. The eddy-momentum-flux convergence that builds
+the real mid-latitude surface westerlies, and the Hadley overturning that drives
+the trades, both live in vertical structure this model does not resolve.
+
+\model{} parameterizes their \emph{net} effect as a Rayleigh relaxation of the wind
+toward an observed zonal-mean surface profile, rather than toward zero:
+\begin{equation}
+  \mathbf{F} = -\frac{\uu - u_{\mathrm{tgt}}(\lat)}{\tau_f}\,\hat{\mathbf{x}}
+               -\frac{\vv}{\tau_f}\,\hat{\mathbf{y}},
+  \qquad \tau_f = 2\ \text{days}.
+  \label{eq:drag}
+\end{equation}
+The target is a three-Gaussian fit to the observed surface wind: mid-latitude
+westerlies, tropical trade easterlies, and weak polar easterlies, with $\lat$ in
+degrees,
+\begin{equation}
+  u_{\mathrm{tgt}}(\lat) =
+     9.0\,e^{-\big(\frac{|\lat|-48}{18}\big)^2}
+   - 5.5\,e^{-\big(\frac{|\lat|-13}{11}\big)^2}
+   - 2.0\,e^{-\big(\frac{|\lat|-80}{10}\big)^2}.
+  \label{eq:utarget}
+\end{equation}
+The friction enters the dynamics through its curl and divergence: $\curl\mathbf{F}$
+forces $\vort$ in Eq.~\eqref{eq:vort} and $\diver\mathbf{F}$ forces $\divg$ in
+Eq.~\eqref{eq:div}.
+
+\codref{chronos\_esm/atmos/dynamics.py}{\code{step\_atmos}: \code{u\_target},
+\code{drag\_u}, \code{drag\_v}, \code{curl\_forcing}, \code{div\_forcing}}
+
+\begin{remark}[Why $\tau_f=2$ days, not 6]
+The relaxed jet in Eq.~\eqref{eq:utarget} has meridional shear that is itself
+barotropically unstable. At a $6$-day timescale, localized eddies grew faster than
+they were damped and $|\uu|$ ran to the clamp by $\sim$ day 14. A $2$-day
+relaxation damps deviations from the target faster than the instability grows,
+pinning the field near the (stable, realistic) climatological jet. So the timescale
+is set by a numerical stability margin, not by an eddy lifetime. This is a
+parameterization in the strictest sense --- if you want \emph{emergent} jets and
+storm tracks, you need the multi-level core (Chapter~\ref{chap:ch18_jets_stormtracks}).
+\end{remark}
+
+\section{Physics: precipitation, radiation, CO\texorpdfstring{$_2$}{2}}
+
+The column physics lives in \code{chronos\_esm/atmos/physics.py} and is written to
+be differentiable end-to-end (smooth or piecewise-linear triggers, no hard
+branches that break the gradient).
+
+\paragraph{Saturation and precipitation.}
+Saturation specific humidity follows Clausius--Clapeyron with the Tetens form,
+\begin{equation}
+  e_s(T) = 611\,\exp\!\Big(\frac{17.27\,(T-273.15)}{(T-273.15)+237.3}\Big),
+  \qquad
+  q_s = 0.622\,\frac{e_s}{p}.
+\end{equation}
+Precipitation uses a relative-humidity threshold $q_c = q_c^{\mathrm{ref}}\,q_s$ and
+a smoothed convective trigger. The intended form is a softplus,
+$P=\softplus\!\big((q-q_c)/\epsilon\big)\,\epsilon/\tau_{\mathrm{conv}}$, but the
+code as shipped uses a rectified-linear (ReLU) trigger,
+\begin{equation}
+  P = \mathrm{ReLU}\!\Big(\frac{q-q_c}{\epsilon}\Big)\,
+      \frac{\epsilon}{\tau_{\mathrm{conv}}},
+  \qquad
+  Q_{\mathrm{lat}} = \frac{L_v}{c_p}\,P,
+  \label{eq:precip}
+\end{equation}
+with $\tau_{\mathrm{conv}}=1800\ \mathrm{s}$, $L_v=2.5\times10^6\
+\mathrm{J\,kg^{-1}}$, $c_p=1004\ \mathrm{J\,kg^{-1}\,K^{-1}}$, and
+$q_c^{\mathrm{ref}}=0.4915$, $\epsilon=4.71\times10^{-2}$ both tuned (the
+docstring's stated target was an idealized ITCZ). The smoothing parameter $\epsilon$
+exists precisely so the trigger has a well-defined derivative for the
+differentiable-calibration applications of
+Chapter~\ref{chap:ch15_differentiable_applications}.
+
+\codref{chronos\_esm/atmos/physics.py}{\code{compute\_saturation\_humidity},
+\code{compute\_precipitation}}
+
+\paragraph{Radiation and CO$_2$ forcing.}
+Longwave physics is a Newtonian (Newtonian-cooling) relaxation toward a radiative
+equilibrium profile $T_{\mathrm{eq}}$, plus a column-distributed CO$_2$ forcing:
+\begin{equation}
+  Q_{\mathrm{rad}} = -\frac{T - T_{\mathrm{eq}}}{\tau_{\mathrm{rad}}}
+                     + \frac{F_{\mathrm{CO_2}}}{\mathcal{C}},
+  \qquad
+  F_{\mathrm{CO_2}} = \alpha_{\mathrm{CO_2}}\,\ln\!\frac{C}{C_0}.
+  \label{eq:rad}
+\end{equation}
+The CO$_2$ term is the standard logarithmic radiative-forcing law
+\citep{myhre1998} with $\alpha_{\mathrm{CO_2}}=5.35\ \mathrm{W\,m^{-2}}$ and
+pre-industrial reference $C_0=280$ ppm, divided by a column heat capacity
+$\mathcal{C}=10^7\ \mathrm{J\,m^{-2}\,K^{-1}}$ to convert flux to a heating rate.
+The radiative-equilibrium target $T_{\mathrm{eq}}$ is driven by the (seasonal)
+downward shortwave flux when supplied, $T_{\mathrm{eq}}=245+0.28\,S_\downarrow$
+(clipped to $[180,350]$ K), or otherwise by an annual-mean profile
+$T_{\mathrm{eq}}=315-60\sin^2\!\lat$ scaled as $(S_0/1361)^{1/4}$.
+
+\codref{chronos\_esm/atmos/physics.py}{\code{compute\_radiative\_forcing},
+\code{compute\_solar\_insolation}, \code{compute\_albedo}}
+
+\begin{remark}[An aggressive cooling timescale]
+The implemented $\tau_{\mathrm{rad}}=1$ day is far shorter than the $\sim 20$-day
+radiative damping the module constant \code{RAD\_COOL\_RATE} advertises. The
+comment is explicit about why: the single-level dynamics mix heat \emph{faster}
+than a realistic radiative relaxation could maintain the equator--pole gradient, so
+the cooling rate is cranked up to force the gradient by brute relaxation. This is a
+symptom of the missing vertical structure, not a free physical choice --- and it is
+one more reason this model's tropical SST and ITCZ are biased (cold tongue, weak
+equatorial rain).
+\end{remark}
+
+\paragraph{Surface fluxes.}
+Sensible and latent heat use bulk aerodynamic formulae,
+$\mathrm{SH}=\rho_a c_p C_h\,|\uvec|\,(T_s-T_a)$ and
+$\mathrm{LH}=\rho_a L_v C_e\,|\uvec|\,(q_s-q_a)\,\beta$, with a gustiness floor
+$|\uvec|\ge 1\ \mathrm{m\,s^{-1}}$ and a cap $|\uvec|\le 25\ \mathrm{m\,s^{-1}}$ to
+forestall a wind-evaporation-feedback (WISHE) runaway, and an evaporation
+efficiency $\beta$ ($1$ over ocean, $<1$ over land).
+\codref{chronos\_esm/atmos/physics.py}{\code{compute\_surface\_fluxes}}
+
+\section{Conservation fixers, clamps, and limiters}
+
+Forward Euler conserves neither energy nor enstrophy, so over century-scale runs
+tiny per-step errors compound. The code applies a \emph{gentle} energy fixer that
+nudges temperature to offset the spurious change in total energy
+$E=\int(\tfrac12|\uvec|^2+c_p T)\cos\lat\,\dd A$,
+$T \leftarrow T - \alpha\,\delta T$ with $\alpha=0.01$ (reduced from $0.1$ once the
+polar instability was removed). An enstrophy fixer exists analogously.
+\codref{chronos\_esm/atmos/dynamics.py}{\code{apply\_energy\_fixer},
+\code{apply\_enstrophy\_fixer}}
+
+For robustness the integrator also imposes physics-stability clamps each step:
+$\spechum\in[0,0.05]$, $T\in[150,350]$ K, $|\vort|,|\divg|\le 5\times10^{-4}\
+\mathrm{s^{-1}}$, $\lnps\in[9.2,11.7]$ (i.e.\ $p_s\in[100,1200]$ hPa), and
+$C\in[0,10^6]$ ppm. Moisture and temperature \emph{tendencies} are also throttled
+(e.g.\ $|Q_T|\le 5\times10^{-3}\ \mathrm{K\,s^{-1}}$) to damp rain/heating shocks.
+These are safety rails: in a healthy run none should be active, and a clamp that
+\emph{is} hit is a diagnostic that something upstream is wrong.
+
+\section{Honest limitations}
+
+The single-level model reproduces a respectable zonal-mean climate --- after the v3
+overhaul, $\sigma(p_s)$ ratio improved from $14.7$ to $2.1$, the $p_s$ bias from
+$-71.8$ to $+2.9$ hPa, and surface-wind correlation against ERA5 from $-0.08$ to
+$0.72$. But two limitations are structural, not tuning issues:
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{No baroclinic eddies, hence no synoptic systems.} A barotropic
+    layer cannot extract available potential energy from the temperature gradient.
+    The mid-latitude $p_s$ and meridional-wind pattern correlations are
+    $\sim 0$; the surface westerlies are \emph{imposed}
+    (Eq.~\eqref{eq:utarget}), not earned. Storm tracks require the multi-level core
+    (Chapter~\ref{chap:ch18_jets_stormtracks}).
+  \item \textbf{A weak ITCZ.} With one level there is no Hadley overturning to
+    converge moisture at the equator; precipitation is too dry and rains in the
+    subtropics rather than at the equator. The aggressive radiative cooling and
+    cold tropical SST compound this (Chapter~\ref{chap:ch19_tropics_monsoon}).
+\end{enumerate}
+Both are the explicit motivation for the multi-level dynamical core of
+Chapter~\ref{chap:ch09_atmosphere_multilevel}. The single-level model remains the
+production atmosphere for coupled runs because it is cheap, stable, and
+differentiable; it is best read as a deliberately minimal baseline against which the
+multi-level core's gains are measured.
+
+\section*{Exercises}
+
+\begin{exercise}
+Using \code{step\_atmos}, initialize the atmosphere from \code{init\_atmos\_state},
+set the momentum-forcing timescale $\tau_f$ in Eq.~\eqref{eq:drag} to
+$\infty$ (i.e.\ remove the relaxation by zeroing \code{drag\_u}, \code{drag\_v}),
+and integrate for 30 days from a $10\cos\lat\ \mathrm{m\,s^{-1}}$ jet. Plot the
+zonal-mean $\uu$ each 5 days. Confirm the prediction of Section~\ref{sec:windrelax}:
+the barotropic layer spins down toward rest. Roughly what $e$-folding time do you
+measure, and how does it compare with $\tau_f=2$ days?
+\end{exercise}
+
+\begin{exercise}
+Reproduce the polar blow-up of Section~\ref{sec:polardx}. Temporarily replace
+$\Delta x_{\mathrm{dyn}}$ in Eq.~\eqref{eq:dxfloor} by the bare
+$2\pi a\cos\lat/\mathrm{nlon}$ (no floor), integrate from rest with flat
+topography, and record $\sigma(p_s)$ at the pole rows versus the floored run. How
+many steps until $p_s$ leaves the $[100,1200]$ hPa clamp? This is a hands-on
+demonstration of why a lat--lon dynamical core needs a polar treatment.
+\end{exercise}
+
+\begin{exercise}
+The CO$_2$ forcing in Eq.~\eqref{eq:rad} is logarithmic
+\citep{myhre1998}. Holding all dynamics fixed, drive
+\code{compute\_radiative\_forcing} with $C\in\{280,560,1120\}$ ppm and verify that
+each doubling adds a constant $\alpha_{\mathrm{CO_2}}\ln 2\approx 3.7\
+\mathrm{W\,m^{-2}}$ to $F_{\mathrm{CO_2}}$. Then use \jax's \code{jax.grad} to
+compute $\partial T_{\mathrm{eq,column}}/\partial C$ at $C=400$ ppm --- this is the
+kind of exact sensitivity that motivates the differentiable applications of
+Chapter~\ref{chap:ch15_differentiable_applications}.
+\end{exercise}
+
+\begin{exercise}
+The precipitation trigger Eq.~\eqref{eq:precip} ships as a ReLU even though the
+docstring describes a softplus. (a) Show analytically that
+$\softplus(x)\to\mathrm{ReLU}(x)$ as the softplus sharpness increases, and that the
+two differ by at most $\ln 2$ at $x=0$. (b) Swap the ReLU for a true softplus in
+\code{compute\_precipitation}, run a short integration, and report the change in
+global-mean precipitation and in the smoothness of $\partial P/\partial q$ near the
+threshold. Which form is friendlier to gradient-based calibration, and why might
+the ReLU still have been chosen?
+\end{exercise}

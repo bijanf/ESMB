@@ -1,4 +1,338 @@
-\chapter{The Ocean: Subgrid Physics and Mixing}
-\label{chap:ch05_ocean_mixing}
+\chapter{The Ocean: Subgrid Physics and Mixing}\label{chap:ch05_ocean_mixing}
 
-\emph{[This chapter is under construction.]}
+% Local symbols used only in this chapter (kept minimal; not in the preamble).
+\providecommand{\Sslope}{\mathbf{S}}          % isopycnal slope vector (S_x, S_y)
+\providecommand{\kgm}{\kappa_{\mathrm{gm}}}    % Gent-McWilliams thickness diffusivity
+\providecommand{\kiso}{\kappa_{\mathrm{iso}}} % Redi isopycnal diffusivity
+\providecommand{\kh}{\kappa_{h}}              % horizontal (Laplacian) tracer diffusivity
+\providecommand{\kv}{\kappa_{z}}             % vertical tracer diffusivity
+
+A model run at the T31 ocean grid of \model{} ($\approx 3.75^\circ$, see
+Chapter~\ref{chap:ch04_ocean_equations}) cannot resolve the mesoscale eddy
+field: the first baroclinic Rossby radius in the mid-latitude ocean is
+$\mathcal{O}(20\text{--}50)\,\mathrm{km}$, an order of magnitude below a grid box.
+The eddies are nonetheless dynamically essential---they flatten isopycnals, set
+the stratification, and carry a large fraction of the meridional heat transport.
+This chapter documents how the unresolved physics is \emph{parameterized}: the
+Gent--McWilliams (GM) bolus advection \citep{gentmcwilliams1990}, along-isopycnal
+(Redi) mixing, horizontal and vertical diffusion, the smooth convective
+adjustment, and the Shapiro/biharmonic filter used purely for numerical hygiene.
+Throughout, the governing continuous form precedes the discrete operator that the
+code actually integrates, with the source pinned by a \emph{Code} marker. The
+canonical reference for the rotated tracer-mixing tensor is \citet{griffies2004};
+the GM closure is \citet{gentmcwilliams1990}; the standard textbook treatment is
+\citet{vallis2017}.
+
+\begin{remark}
+All operators below are written in \jax{} and are differentiable. Where a naive
+formulation would introduce a non-smooth $\max$, hard clip, or \code{where} step
+(zero gradient outside the bound), the code substitutes a smooth surrogate so that
+$\partial(\text{output})/\partial(\text{parameter})$ stays well defined---this is a
+deliberate design choice, not an accident (Chapter~\ref{chap:ch03_differentiable}).
+\end{remark}
+
+\section{Isopycnal slopes}
+
+Both GM and Redi act \emph{along} surfaces of constant density. The local slope of
+those surfaces, relative to the geopotential, is the slope vector
+$\Sslope = (S_x, S_y)$ with
+\begin{equation}
+S_x = -\frac{\partial_x \dens}{\partial_z \dens}, \qquad
+S_y = -\frac{\partial_y \dens}{\partial_z \dens},
+\label{eq:slope}
+\end{equation}
+where $\dens$ is the in-situ density and $z$ increases downward, so a statically
+stable column has $\partial_z\dens>0$. Each gradient is a centred finite
+difference; the horizontal differences use \code{jnp.roll} (periodic in $\lon$),
+and the vertical gradient is taken at interfaces and averaged back to cell centres
+using the centre-to-centre spacing $\tfrac12(\Delta z_k + \Delta z_{k+1})$.
+\codref{chronos\_esm/ocean/mixing.py}{\code{compute\_isopycnal\_slopes}}
+
+The denominator is regularized to keep the slope finite in weakly stratified
+columns:
+\begin{equation}
+\partial_z\dens \;\longmapsto\;
+\begin{cases}
+\partial_z\dens, & |\partial_z\dens| \ge \varepsilon,\\[2pt]
+\operatorname{sign}(\partial_z\dens)\,\varepsilon, & |\partial_z\dens| < \varepsilon,
+\end{cases}
+\qquad \varepsilon = 10^{-8}\,\mathrm{kg\,m^{-4}}.
+\label{eq:slope-floor}
+\end{equation}
+This is an honest approximation: in a near-neutral or unstably stratified column
+the ``isopycnal'' slope is not physically meaningful, and \eqref{eq:slope-floor}
+simply prevents a blow-up while convective adjustment (\S\ref{sec:convect}) handles
+the genuine instability.
+
+\section{The slope limiter}
+
+Steep isopycnals near the surface mixed layer and at boundary currents produce very
+large $|\Sslope|$, which would make the GM and Redi terms numerically explosive.
+The standard remedy is to taper the slope. \model{} replaces the conventional hard
+clip $|\Sslope|\le S_{\max}$ with a \emph{smooth, differentiable} soft clip:
+\begin{equation}
+\widetilde{S} \;=\; \frac{S}{\sqrt{1 + (S/S_{\max})^2}},
+\qquad S_{\max} = 10^{-2},
+\label{eq:limiter}
+\end{equation}
+applied component-wise to $S_x,S_y$. As $S\to0$, $\widetilde S\to S$ (no distortion
+of gentle slopes); as $S\to\pm\infty$, $\widetilde S\to \pm S_{\max}$ (bounded). Crucially,
+$\mathrm{d}\widetilde S/\mathrm{d}S>0$ everywhere, so the limiter never zeroes the
+gradient---a hard clip would, breaking adjoint sensitivity through steep regions.
+\codref{chronos\_esm/ocean/mixing.py}{\code{slope\_limiter}}
+
+\section{Gent--McWilliams bolus transport}
+
+The GM parameterization \citep{gentmcwilliams1990} represents the eddy-induced
+(``bolus'') transport as an extra advective velocity $\uvec^\star=(u^\star,v^\star,w^\star)$
+that adiabatically flattens isopycnals, extracting available potential energy as a
+mesoscale eddy field would. With a thickness diffusivity $\kgm$ the eddy streamfunction
+is $\boldsymbol{\Psi}=\kgm\,\Sslope$, and the bolus velocity is its curl:
+\begin{align}
+u^\star &= \partial_z\!\left(\kgm\,\widetilde S_x\right), &
+v^\star &= \partial_z\!\left(\kgm\,\widetilde S_y\right), \label{eq:gm-uv}\\
+w^\star &= -\left[\partial_x\!\left(\kgm\,\widetilde S_x\right) + \partial_y\!\left(\kgm\,\widetilde S_y\right)\right].
+\label{eq:gm-w}
+\end{align}
+By construction $\diver\uvec^\star=0$, so GM transports tracers without creating or
+destroying mass.
+
+In the code, the horizontal bolus fluxes $F_x=\kgm\widetilde S_x$, $F_y=\kgm\widetilde S_y$
+are interpolated to vertical interfaces and set to zero at the surface and floor
+(no bolus flux through the boundaries); the vertical derivative
+\eqref{eq:gm-uv} is then a centred difference over the layer thickness $\Delta z_k$:
+\begin{equation}
+u^\star_k = \frac{F_x^{\,k+1/2} - F_x^{\,k-1/2}}{\Delta z_k}, \qquad
+F_x^{\,k+1/2} = \tfrac12\big(F_x^{k}+F_x^{k+1}\big),
+\label{eq:gm-disc}
+\end{equation}
+and likewise for $v^\star$.
+\codref{chronos\_esm/ocean/mixing.py}{\code{compute\_gm\_bolus\_velocity}}
+
+\begin{remark}[Honest limitation: $w^\star$ is not formed here]
+The function returns $w^\star\equiv 0$. The vertical bolus velocity is \emph{not}
+diagnosed from \eqref{eq:gm-w} in \code{mixing.py}; instead the bolus velocity is
+\emph{added to the resolved flow}---$\uvec_{\mathrm{eff}}=\uvec+\uvec^\star$ with
+$u^\star,v^\star$ from \eqref{eq:gm-disc}---and $w$ is recovered from continuity of
+that combined field, so the three-dimensional transport that advects tracers is
+nondivergent by construction.
+\codref{chronos\_esm/ocean/veros\_driver.py}{$\uvec_{\mathrm{eff}}=\uvec+\uvec^\star$; $w$ from $\diver\uvec_{\mathrm{eff}}=0$}
+This is consistent but means GM enters the model as a velocity, not as a skew-flux on
+each tracer separately---adequate for a coarse climate run, but not the full
+Griffies skew-diffusion form.
+\end{remark}
+
+The diffusivity $\kgm$ defaults to $1000\,\mathrm{m^2\,s^{-1}}$ in physics mode
+(versus $3000$ in the legacy ``tank'' configuration; see the parameter table in
+Appendix~\ref{chap:appB_parameters} and the discussion in CLAUDE-context Phase~6).
+It is masked to zero in the five polar rows at each end of the grid,
+$\kgm^{\mathrm{eff}} = \kgm\,\chi_{\mathrm{int}}$, where $\chi_{\mathrm{int}}=0$ for
+$j<5$ or $j\ge n_y-5$ and $1$ otherwise, because the slope estimate degrades where
+the grid converges.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{kappa\_gm\_eff = kappa\_gm * interior\_mask\_3d}}
+
+\section{Along-isopycnal (Redi) mixing tensor}
+
+Diffusion of heat and salt in the ocean interior is overwhelmingly \emph{along}
+isopycnals, not across them; diapycnal mixing is weaker by $\mathcal{O}(10^7)$.
+The Redi tensor rotates an isotropic diffusivity $\kiso$ into the local isopycnal
+plane. In the small-slope approximation \citep{griffies2004},
+\begin{equation}
+\mathbf{K} \;=\; \frac{\kiso}{1+S^2}
+\begin{pmatrix}
+1 & 0 & \widetilde S_x\\
+0 & 1 & \widetilde S_y\\
+\widetilde S_x & \widetilde S_y & S^2
+\end{pmatrix},
+\qquad S^2 = \widetilde S_x^{\,2} + \widetilde S_y^{\,2},
+\label{eq:redi}
+\end{equation}
+so the diffusive tracer flux is $\mathbf{F} = -\mathbf{K}\,\grad C$ for a tracer $C$.
+The diagonal $(1,1)$ block gives near-horizontal diffusion; the off-diagonal
+$\widetilde S_x,\widetilde S_y$ couple horizontal gradients to the vertical flux (so
+mixing follows the tilted surface); and the $(3,3)$ entry $\propto S^2$ is the small
+residual along-slope vertical component. The prefactor $1/(1+S^2)$ is the small-slope
+normalization. The tensor is assembled exactly as \eqref{eq:redi} (symmetric,
+built from the limited slopes).
+\codref{chronos\_esm/ocean/mixing.py}{\code{rotate\_tensor}}
+
+\section{Horizontal and vertical diffusion as integrated}\label{sec:hdiff}
+
+While \code{rotate\_tensor} provides the full Redi operator, the tracer time-stepper
+in the active driver uses a \emph{simpler} along-axis diffusion: a horizontal
+Laplacian with coefficient $\kh$ plus a vertical diffusion with the convective
+$\kv$ of \S\ref{sec:convect}. This is an honest simplification---it is robust on the
+coarse grid and the dominant interior balance there is set by GM, not Redi---and it
+is what the model integrates today.
+
+The horizontal operator combines upwind advection by $\uvec_{\mathrm{eff}}$ with a
+five-point Laplacian,
+\begin{equation}
+\mathcal{H}(C) = -\big(u_{\mathrm{eff}}\,\partial_x C + v_{\mathrm{eff}}\,\partial_y C\big)
++ \kh\!\left(\frac{C_E - 2C + C_W}{\Delta x^2} + \frac{C_N - 2C + C_S}{\Delta y^2}\right),
+\label{eq:hdiff}
+\end{equation}
+where face neighbours $C_{E,W,N,S}$ revert to the centre value across any \emph{closed}
+(land/floor) face, enforcing a no-flux boundary with no exchange into dry cells.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{\_horiz}, \code{\_nbrs}}
+The effective coefficient is $\kh=500\,\mathrm{m^2\,s^{-1}}$ in the interior but is
+forced up to $2\times10^4\,\mathrm{m^2\,s^{-1}}$ in the polar rows,
+$\kh^{\mathrm{eff}} = 2\!\times\!10^4\,\chi_{\mathrm{pole}} + \kh\,\chi_{\mathrm{int}}$,
+to damp grid-scale noise where the meridian convergence is worst.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{diff\_coef = 20000.*pole\_mask + kappa\_h*interior\_mask}}
+
+Vertical diffusion is flux-form across interfaces,
+\begin{equation}
+\mathcal{V}(C)_k = \frac{1}{\Delta z_k}\Big(\mathcal{F}^{k-1/2} - \mathcal{F}^{k+1/2}\Big),
+\qquad
+\mathcal{F}^{k+1/2} = -\,\kv^{\,k+1/2}\,\frac{C_{k+1}-C_k}{\tfrac12(\Delta z_k+\Delta z_{k+1})},
+\label{eq:vdiff}
+\end{equation}
+with $\mathcal{F}=0$ at the surface and floor interfaces. The whole tracer update
+($\mathcal{H}+\mathcal{V}$ plus vertical advection and surface fluxes) is advanced by
+RK4 with a $\Delta t=900\,\mathrm{s}$ ocean step.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{\_vdiff}; RK4 \code{tendencies}}
+
+\section{Smooth convective adjustment}\label{sec:convect}
+
+When a column becomes statically unstable ($\partial_z\dens<0$, denser water over
+lighter) the ocean overturns and mixes rapidly. The classical implementation is a
+hard switch---set $\kv$ to a huge value wherever $\Delta\dens<0$. \model{} rejects
+this for two reasons documented in the source: (i) a $0/1$ switch fires patchily
+column-by-column and produces grid-scale SST noise that grows toward the poles, and
+(ii) a large $\kv$ at the thin surface layer violates the explicit-diffusion
+stability limit $\kv\Delta t/\Delta z^2 \le \mathcal{O}(1)$.
+
+Instead the diffusivity \emph{ramps smoothly} with the degree of instability
+$I = \max(-\Delta\dens,\,0)$ at each interface:
+\begin{equation}
+\kv = \kappa_{\mathrm{bg}} + (\kappa_{\mathrm{cv}}-\kappa_{\mathrm{bg}})
+\Big(1 - e^{-I/I_0}\Big),
+\label{eq:convect-ramp}
+\end{equation}
+with background $\kappa_{\mathrm{bg}}=10^{-5}\,\mathrm{m^2\,s^{-1}}$, convective
+ceiling $\kappa_{\mathrm{cv}}=10\,\mathrm{m^2\,s^{-1}}$, and instability scale
+$I_0=0.02\,\mathrm{kg\,m^{-3}}$. The factor $1-e^{-I/I_0}$ runs continuously from $0$
+(stable) to $1$ (strongly unstable), so neighbouring columns receive
+continuously-varying mixing and the operator is smooth (AD-friendly).
+
+Each interface is then capped at its local explicit-stability limit, using the
+thinner of the two adjacent layers,
+\begin{equation}
+\kv \;\longmapsto\; \min\!\left(\kv,\ 0.45\,\frac{\big(\min(\Delta z_k,\Delta z_{k+1})\big)^2}{\Delta t}\right),
+\label{eq:convect-cap}
+\end{equation}
+so thin surface layers stay numerically stable while thick abyssal layers can still
+mix strongly---genuine deep convection is preserved.
+\codref{chronos\_esm/ocean/mixing.py}{\code{compute\_vertical\_diffusivity}}
+
+\begin{example}[Why the cap matters]
+With $\Delta t=900\,\mathrm{s}$ and a surface layer $\Delta z_0 = 10\,\mathrm{m}$,
+the cap is $0.45\cdot 10^2/900 = 0.05\,\mathrm{m^2\,s^{-1}}$---two hundred times
+\emph{smaller} than $\kappa_{\mathrm{cv}}=10$. Without \eqref{eq:convect-cap} the
+explicit scheme would amplify a surface perturbation each step. For a deep layer
+$\Delta z=500\,\mathrm{m}$ the cap is $0.45\cdot 500^2/900\approx 125\,\mathrm{m^2\,s^{-1}}\gg\kappa_{\mathrm{cv}}$,
+so deep convection is untouched. The single line \eqref{eq:convect-cap} thus reconciles
+surface stability with deep mixing.
+\end{example}
+
+\section{The Shapiro / biharmonic filter}\label{sec:shapiro}
+
+Centred advection on a C-grid admits a $2\Delta x$ ``checkerboard'' mode that carries
+no physical signal but is invisible to Laplacian diffusion at large scales. \model{}
+removes it with a scale-selective \emph{biharmonic} (Shapiro) filter applied to the
+new $\Temp$ and $\Salt$ after each RK4 update:
+\begin{equation}
+C \;\longmapsto\; C - \frac{\sigma}{16}\,\lap\!\big(\lap C\big),
+\label{eq:shapiro}
+\end{equation}
+where $\lap$ is the five-point Laplacian and $\sigma$ is \code{shapiro\_strength}.
+The eigenvalue of $\lap$ for a pure $2\Delta x$ mode is $-4$ per direction, so the
+$2\Delta x$ checkerboard has $\lap\lap$-eigenvalue $\approx 16$ and the choice $\sigma=0.25$
+\emph{exactly} annihilates it in one pass, while resolved gradients (small
+$\lap\lap$) are nearly untouched.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{compute\_shapiro\_filter}}
+
+\begin{remark}[An honest correction to the legacy default]
+An earlier $\nabla^2$ form ($C+\tfrac{\sigma}{4}\lap C$) applied every step was a
+strong low-pass smoother that erased real SST/SSS structure---the WOA initial
+gradients collapsed toward uniform within days. The biharmonic form
+\eqref{eq:shapiro} is far gentler and is \textbf{off by default}
+($\sigma=0$): the primary grid-noise control is the physical Laplacian diffusion
+($\kh$ on tracers, $A_h$ on momentum, with $A_h=2\times10^5\,\mathrm{m^2\,s^{-1}}$).
+The biharmonic filter is a light $2\Delta x$ cleanup to be switched on only if
+checkerboarding reappears. Biharmonic momentum mixing ($A_b$, \code{kappa\_bi}) is
+likewise available and defaults to zero.
+\end{remark}
+
+\section{Parameter summary}
+
+Table~\ref{tab:mix-params} collects the diffusivities and their roles. Physics-mode
+values (the realistic configuration) are shown; the legacy ``tank'' values appear in
+Appendix~\ref{chap:appB_parameters}.
+
+\begin{table}[ht]
+\centering
+\caption{Mixing and filter parameters (physics mode).}
+\label{tab:mix-params}
+\begin{tabular}{lll}
+\toprule
+Symbol & Value & Role \\
+\midrule
+$\kgm$ & $1000\ \mathrm{m^2\,s^{-1}}$ & GM thickness (bolus) diffusivity \\
+$\kiso$ & set by caller & Redi isopycnal diffusivity (tensor form) \\
+$\kh$ & $500\ \mathrm{m^2\,s^{-1}}$ & horizontal tracer Laplacian (interior) \\
+$\kh^{\mathrm{pole}}$ & $2\times10^4\ \mathrm{m^2\,s^{-1}}$ & polar-row tracer diffusion \\
+$\kappa_{\mathrm{bg}}$ & $10^{-5}\ \mathrm{m^2\,s^{-1}}$ & background vertical diffusivity \\
+$\kappa_{\mathrm{cv}}$ & $10\ \mathrm{m^2\,s^{-1}}$ & convective ceiling \\
+$I_0$ & $0.02\ \mathrm{kg\,m^{-3}}$ & convective ramp scale \\
+$A_h$ & $2\times10^5\ \mathrm{m^2\,s^{-1}}$ & horizontal momentum viscosity \\
+$\sigma$ & $0$ (default) & biharmonic (Shapiro) filter strength \\
+$S_{\max}$ & $10^{-2}$ & slope-limiter ceiling \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The eddy heat transport that GM supplies is the quantity tied most directly to the
+overturning (Chapter~\ref{chap:ch08_ocean_overturning}) and to AMOC stability
+(Chapter~\ref{chap:ch17_amoc_tipping}); because every operator here is
+differentiable, $\partial(\text{AMOC})/\partial\kgm$ is computable by the adjoint,
+which the calibration applications of Chapter~\ref{chap:ch15_differentiable_applications}
+exploit.
+
+\section*{Exercises}
+
+\begin{exercise}[Limiter versus hard clip]
+Implement both the smooth limiter \eqref{eq:limiter} and a hard clip
+$\widetilde S=\operatorname{clip}(S,-S_{\max},S_{\max})$ in a small \jax{} script and use
+\code{jax.grad} to plot $\mathrm{d}\widetilde S/\mathrm{d}S$ for $S\in[-3S_{\max},3S_{\max}]$.
+Confirm that the hard clip has zero gradient for $|S|>S_{\max}$ while
+\eqref{eq:limiter} stays strictly positive. Explain, in terms of the adjoint, why a
+4D-Var sensitivity through a steep western-boundary current would be lost with the hard clip.
+\end{exercise}
+
+\begin{exercise}[GM flattens isopycnals]
+Initialize a two-layer channel with tilted isopycnals (constant $S_x$) and integrate
+the ocean with $\kgm\in\{0,500,2000\}\,\mathrm{m^2\,s^{-1}}$, all other terms off.
+Measure the e-folding time of the slope. Verify it scales as
+$\tau\sim L^2/\kgm$ for a slope of horizontal scale $L$, and discuss why
+$\kgm=3000$ (tank mode) overflattens the stratification relative to $\kgm=1000$.
+\end{exercise}
+
+\begin{exercise}[Convective cap by layer thickness]
+Using \eqref{eq:convect-cap} with $\Delta t = 900\,\mathrm{s}$, tabulate the capped
+$\kv$ for layer thicknesses $\Delta z\in\{5,10,50,200,500\}\,\mathrm{m}$ and the ramp
+value of \eqref{eq:convect-ramp} for $I\in\{0,0.01,0.05,0.2\}\,\mathrm{kg\,m^{-3}}$.
+Identify the thickness at which the convective ceiling $\kappa_{\mathrm{cv}}=10$ stops
+being the binding constraint. Why does this design let deep convection coexist with a
+stable thin surface layer?
+\end{exercise}
+
+\begin{exercise}[Is the filter eating the signal?]
+Run the ocean for 30 days from a WOA initial state with the biharmonic filter at
+$\sigma\in\{0,0.25,1.0\}$ and compute the global SST pattern correlation against the
+WOA field. Show that $\sigma=0.25$ removes a $2\Delta x$ checkerboard you inject by hand
+while leaving the large-scale pattern correlation essentially unchanged, and that
+large $\sigma$ degrades it---motivating the default $\sigma=0$ and reliance on physical
+$\kh$.
+\end{exercise}

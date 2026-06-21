@@ -1,4 +1,401 @@
-\chapter{Mathematical and Numerical Preliminaries}
-\label{chap:ch02_preliminaries}
+\chapter{Mathematical and Numerical Preliminaries}\label{chap:ch02_preliminaries}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal; not in the shared preamble) -------------------
+\providecommand{\Cou}{C}        % Courant number
+\providecommand{\nlat}{N_\lat}  % number of latitude rows
+\providecommand{\nlon}{N_\lon}  % number of longitude columns
+
+This chapter assembles the mathematical scaffolding the rest of the book stands on: the
+spherical geometry every component shares, the discrete grids on which the continuous fields
+live, the metric factors that the curvature of the sphere forces into every gradient and
+divergence, the distinction between \emph{prognostic} variables (which the model time-steps) and
+\emph{diagnostic} ones (which it reconstructs each step), and the family of time-integration
+schemes the code actually uses --- with their stability limits stated honestly. Wherever a
+quantity appears in the source it is pinned to its location with a code reference. The notation
+fixed here is used unchanged throughout Parts~II--V.
+
+\section{Spherical coordinates and the metric}
+
+\model{} lives on a sphere of radius $\Erad$ (\code{EARTH\_RADIUS} $=6.371\times10^{6}\,\mathrm{m}$)
+rotating at rate $\Om$ (\code{OMEGA} $=7.2921\times10^{-5}\,\mathrm{rad\,s^{-1}}$). A point is
+addressed by longitude $\lon\in[0,2\pi)$, latitude $\lat\in[-\pi/2,\pi/2]$, and a vertical
+coordinate (geometric depth $z$ in the ocean, a terrain-following $\sigma$ coordinate in the
+multi-level atmosphere). The horizontal velocity is $\uvec=(\uu,\vv)$, with $\uu$ eastward and
+$\vv$ northward, and $\ww$ is the vertical component.
+
+\codref{chronos\_esm/config.py}{physical constants $\Erad,\Om,\grav$ and grid sizes}
+
+The essential complication of a sphere is that the zonal arc length shrinks toward the poles.
+An eastward displacement $\dd\lon$ subtends a physical distance $\Erad\cos\lat\,\dd\lon$, whereas
+a northward displacement $\dd\lat$ always subtends $\Erad\,\dd\lat$. The line element is
+\begin{equation}
+  \dd s^2 = \Erad^2\cos^2\!\lat\;\dd\lon^2 \;+\; \Erad^2\,\dd\lat^2 \;+\; \dd z^2 .
+  \label{eq:line-element}
+\end{equation}
+Every horizontal differential operator inherits the $\cos\lat$ factor from
+\eqref{eq:line-element}. For a scalar $f$ and horizontal vector $\uvec$,
+\begin{align}
+  \grad f &= \left(\frac{1}{\Erad\cos\lat}\pd{f}{\lon},\;\frac{1}{\Erad}\pd{f}{\lat}\right),
+  \label{eq:sph-grad}\\
+  \diver\uvec &= \frac{1}{\Erad\cos\lat}\left[\pd{\uu}{\lon}
+     + \pd{(\vv\cos\lat)}{\lat}\right],
+  \label{eq:sph-div}\\
+  \lap f &= \frac{1}{\Erad^2\cos^2\!\lat}\pdd{f}{\lon}
+     + \frac{1}{\Erad^2\cos\lat}\pd{}{\lat}\!\left(\cos\lat\,\pd{f}{\lat}\right).
+  \label{eq:sph-lap}
+\end{align}
+The $\cos\lat$ in the denominators is the source of the polar singularity that haunts every
+latitude--longitude model: as $\lat\to\pm\pi/2$, a fixed zonal grid increment maps to a vanishing
+physical distance, so $\partial/\partial\lon$ and $\partial^2/\partial\lon^2$ amplify any
+small-scale zonal structure without bound. Section~\ref{sec:metric-discrete} shows exactly how
+the two grids of \model{} cope --- one by capping the metric, the other by working in a basis in
+which the singularity never appears.
+
+The planetary rotation enters through the Coriolis parameter
+\begin{equation}
+  \Cor = 2\Om\sin\lat, \qquad \beq \equiv \pd{\Cor}{y} = \frac{2\Om\cos\lat}{\Erad},
+  \label{eq:coriolis}
+\end{equation}
+the second of which is the $\beta$ that controls Rossby propagation and the western
+intensification of ocean gyres. In the ocean driver $\Cor$ is built directly from a uniform
+latitude vector, \code{f\_cor = 2*OMEGA*sin(lat\_rad)}, and is floored away from zero near the
+equator (to $|\Cor|\ge 10^{-5}\,\mathrm{s^{-1}}$) so that the geostrophic/Stommel division by
+$\Cor$ stays finite there.
+
+\codref{chronos\_esm/ocean/veros\_driver.py}{$\Cor$ from latitude, equatorial floor in \code{step\_ocean}}
+
+\section{The model grids}
+
+\model{} runs at spectral truncation \textbf{T31} by default, an option set by the environment
+variable \code{CHRONOS\_RESOLUTION} (\code{T31} or \code{T63}). At T31 the horizontal grid is
+$\nlon\times\nlat = 96\times48$, i.e.\ a nominal $3.75^\circ$ spacing.
+
+\codref{chronos\_esm/config.py}{\code{RESOLUTION}, \code{NLAT=48}, \code{NLON=96}}
+
+\subsection{The ocean grid: latitude--longitude, $z$-level}
+
+The ocean is discretized on a regular latitude--longitude mesh with $96$ cells in longitude and
+$48$ in latitude, the row centres laid out by \code{linspace(-90, 90, ny)}. Longitude spacing is
+uniform, $\Delta\lon = 2\pi/\nlon$; the corresponding physical zonal spacing is latitude
+dependent,
+\begin{equation}
+  \Delta x(\lat) = \Erad\cos\lat\,\Delta\lon, \qquad
+  \Delta y = \frac{\pi\,\Erad}{\nlat}\;\;(\text{uniform}),
+  \label{eq:ocean-dxdy}
+\end{equation}
+exactly the metric of \eqref{eq:line-element}. The driver receives $\Delta x$ as an array (it
+varies down the column) and $\Delta y$ as a scalar.
+
+Vertically the ocean carries $N_z=15$ levels on a \emph{stretched} grid, not a uniform one. A
+uniform $5000/15\approx 333\,\mathrm{m}$ surface layer would give the sea surface an enormous
+heat capacity and a sluggish response to fluxes, because surface forcing is applied as
+$\text{flux}/(\dens_0 c_p\,\Delta z_0)$. Instead the interfaces are placed at
+\begin{equation}
+  z_i = \dep_{\mathrm{tot}}\left(\frac{i}{N_z}\right)^{\!s}, \quad i=0,\dots,N_z,\qquad
+  \dep_{\mathrm{tot}}=5000\,\mathrm{m},\;\; s=1.7,
+  \label{eq:ocean-vgrid}
+\end{equation}
+so that $\Delta z_k = z_{k+1}-z_k$ grows from a thin ($\approx 50\,\mathrm{m}$) surface layer to
+a thick abyssal one, with layer-centre depths $\tfrac12(z_k+z_{k+1})$ used as the coordinate onto
+which the World Ocean Atlas initial state is interpolated.
+
+\codref{chronos\_esm/config.py}{\code{\_ocean\_vertical\_grid}, \code{OCEAN\_DZ}, \code{OCEAN\_DEPTH\_CENTERS}}
+
+\begin{remark}
+The ocean driver computes horizontal derivatives with plain centred differences of the form
+$(\code{roll}(F,-1)-\code{roll}(F,1))/(2\Delta x)$ and treats $\Delta x,\Delta y$ as local
+Cartesian spacings; the spherical \emph{convergence-of-meridians} term in the divergence,
+$\partial(\vv\cos\lat)/\partial\lat$ of \eqref{eq:sph-div}, is approximated by the Cartesian
+$\partial\vv/\partial\lat$ (no explicit $\cos\lat$ metric in the meridional divergence). This is a
+known simplification; the diagnostic vertical velocity comment in the source flags it explicitly.
+It is acceptable at this resolution but is one of the contributors to the spurious net meridional
+transport that the per-latitude corrector of Chapter~\ref{chap:ch08_ocean_overturning} removes.
+\end{remark}
+
+\subsection{The atmosphere grids: spectral on a Gaussian mesh}
+
+The atmosphere is \emph{spectral}: prognostic fields are represented not by their grid-point
+values but by coefficients in a basis of spherical harmonics $Y_l^m(\lat,\lon)$, and the
+``T31'' label is the triangular truncation total wavenumber $l\le 31$. Two atmospheres coexist
+in the code.
+
+\paragraph{Single-level (legacy).} The barotropic model in
+\code{atmos/dynamics.py} is a hybrid pseudo-spectral scheme: it takes the FFT in longitude (exact
+for the periodic direction) and uses fourth-order finite differences in latitude. Its grid is the
+same regular $96\times48$ latitude--longitude mesh as the ocean, with the metric of
+\eqref{eq:ocean-dxdy}.
+
+\codref{chronos\_esm/atmos/spectral.py}{\code{compute\_gradients} --- FFT in $\lon$, 4th-order FD in $\lat$}
+
+\paragraph{Multi-level (active).} The production atmosphere is Google's differentiable \dino{}
+dycore (the engine behind NeuralGCM, \citealp{kochkov2024neuralgcm}), run at T31 with $24$
+$\sigma$-levels and full spherical-harmonic transforms. Its horizontal grid is a \emph{Gaussian}
+mesh: the latitude rows sit at the roots of the Legendre polynomial $P_{\nlat}(\sin\lat)$, chosen
+so that Gauss--Legendre quadrature integrates the truncated harmonics exactly. Grid$\to$spectral
+and spectral$\to$grid maps are \code{coords.horizontal.to\_modal} /
+\code{to\_nodal}, and the eastward/northward winds are recovered from the modal state as
+\begin{equation}
+  \uu = \frac{(\widehat{\uu\cos\lat})_{\,0}}{\cos\lat}, \qquad
+  \vv = \frac{(\widehat{\uu\cos\lat})_{\,1}}{\cos\lat},
+  \label{eq:dino-uv}
+\end{equation}
+i.e.\ the dycore carries the momentum-like quantity $\uvec\cos\lat$ (regular at the poles) and
+divides out $\cos\lat$ only for diagnostics --- the spectral route never divides by $\cos\lat$
+internally, which is precisely why it has no polar instability.
+
+\codref{chronos\_esm/atmos/dino\_atmos.py}{T31, $24$ $\sigma$-levels; \code{compute\_diagnostic\_state} for $\uu,\vv$}
+
+\subsection{Metric terms in the discrete code}\label{sec:metric-discrete}
+
+The single-level model must build the metric by hand. It forms the per-row zonal spacing
+$\Delta x(\lat)=2\pi\Erad\cos\lat/\nlon$ and $\Delta y=\pi\Erad/\nlat$ directly. The polar
+catastrophe implicit in the $1/\cos\lat$ factors of \eqref{eq:sph-grad}--\eqref{eq:sph-lap} is
+dealt with by a hard floor on the cosine used in the \emph{dynamics}: rather than letting $\Delta x\to 0$ (it reaches $\approx 4\,\mathrm{m}$ in
+the polar row when $\cos\lat$ is floored to $10^{-5}$), the metric is capped at its $80^\circ$
+value,
+\begin{equation}
+  \cos\lat\big|_{\mathrm{dyn}} = \max\!\big(\cos\lat,\;\cos 80^\circ\big),
+  \qquad \Delta x = \frac{2\pi\Erad\,\cos\lat\big|_{\mathrm{dyn}}}{\nlon},
+  \label{eq:cos-floor}
+\end{equation}
+so the handful of pole-most rows integrate with the (still small) $80^\circ$ metric instead of
+detonating. A separate, slightly different floor is applied to the diffusion $\Delta x$ so the
+explicit hyperdiffusion stencil $\propto 1/\Delta x^4$ stays inside its stability bound. This is a
+pragmatic fix, not a clean discretization: without it the mean sea-level pressure blew up at the
+poles to $\sigma\sim 150\,\mathrm{hPa}$ against an observed $\sim 12\,\mathrm{hPa}$. The \dino{}
+atmosphere needs no such floor because, as in \eqref{eq:dino-uv}, the singular $1/\cos\lat$ is
+never formed.
+
+\codref{chronos\_esm/atmos/dynamics.py}{\code{cos\_lat\_dyn}/\code{cos\_lat\_diff} floors in \code{step\_atmos}}
+
+\section{Prognostic and diagnostic variables}\label{sec:prog-diag}
+
+A central organizing idea is the split between \textbf{prognostic} variables --- those that carry
+a time derivative and are advanced by the integrator --- and \textbf{diagnostic} variables ---
+those reconstructed each step from the prognostic state by solving a (usually elliptic) balance.
+The split is not cosmetic: it is what makes a step well-posed, and it determines what must be
+saved in a checkpoint to restart bit-for-bit.
+
+In the ocean, the \code{OceanState} carries eight fields, but only the three tracers are truly
+prognostic in the time-stepping sense. Temperature $\Temp$, salinity $\Salt$, and dissolved
+inorganic carbon are advanced by an explicit Runge--Kutta step (Section~\ref{sec:time}); density,
+the velocities $(\uu,\vv,\ww)$, and the barotropic streamfunction $\psib$ are \emph{diagnosed}
+each step from the tracers via the equation of state, thermal wind, continuity, and a Stommel
+balance respectively. Table~\ref{tab:prog-diag} summarizes the split.
+
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{OceanState}; tracers stepped, $\uvec,\ww,\dens,\psib$ diagnosed}
+
+\begin{table}[ht]
+\centering
+\caption{Prognostic vs.\ diagnostic variables in the ocean and the active atmosphere.}
+\label{tab:prog-diag}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Component & Prognostic (time-stepped) & Diagnostic (reconstructed) \\
+\midrule
+Ocean & $\Temp,\;\Salt,\;\text{DIC}$ & $\dens,\;\uu,\;\vv,\;\ww,\;\psib$ \\
+Atmosphere (\dino) & $\vort,\;\delta,\;T',\;\ln p_s$, humidity & $\uu,\vv$ (from \eqref{eq:dino-uv}), $\Temp$, geopotential \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The diagnostic velocities follow from the linear equation of state
+\begin{equation}
+  \dens = \densz - \alpha(\Temp-\Temp_0) + \beta(\Salt-\Salt_0),
+  \quad \densz=1025,\;\alpha=0.2,\;\beta=0.8,
+  \label{eq:eos}
+\end{equation}
+followed by a thermal-wind/geostrophic relation for the baroclinic shear and a Stommel
+streamfunction for the barotropic flow; these are derived in
+Chapters~\ref{chap:ch04_ocean_equations} and~\ref{chap:ch06_ocean_numerics}. Because the
+velocities are diagnostic, a restart need only store the tracers (plus $\psib$ as a warm start for
+the elliptic solve); the rest is rebuilt on the first step. The same logic governs \dino{}
+checkpoints, whose prognostic modal state is vorticity $\vort$, divergence $\delta$, temperature
+variation $T'$, and log surface pressure $\ln p_s$; $\uu,\vv$ are diagnostic. (A subtle
+consequence: restoring \code{sim\_time=None} on resume is mandatory, because the ImEx integrator
+adds a tendency \emph{array} to the clock and a stored scalar would break that add.)
+
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{equation\_of\_state} --- linear EOS, $\alpha,\beta$}
+
+\section{Time-integration schemes}\label{sec:time}
+
+\model{} uses different time integrators in different components, each chosen for the stiffness
+and conservation demands of the equations it solves. We state each in the canonical
+$\dt{\boldsymbol\Phi}=\mathcal{R}(\boldsymbol\Phi)$ form, where $\boldsymbol\Phi$ is the
+prognostic state and $\mathcal{R}$ its tendency.
+
+\subsection{Forward Euler --- the single-level atmosphere}
+
+The legacy barotropic atmosphere advances with the simplest possible scheme,
+\begin{equation}
+  \boldsymbol\Phi^{n+1} = \boldsymbol\Phi^{n} + \Delta t\,\mathcal{R}(\boldsymbol\Phi^{n}),
+  \label{eq:forward-euler}
+\end{equation}
+with $\Delta t_{\mathrm{atmos}} = 30\,\mathrm{s}$ (\code{DEFAULT\_DT\_ATMOS}). Forward Euler is
+first-order accurate and only conditionally stable: for an oscillatory mode it is
+\emph{unconditionally} amplifying in the strict linear sense, but at this tiny step the per-step
+growth on the fastest physical waves is negligible. The relevant constraint is the
+gravity-wave Courant number
+\begin{equation}
+  \Cou = \frac{c\,\Delta t}{\Delta x_{\min}}, \qquad c=\sqrt{\grav\dep},
+  \label{eq:cfl}
+\end{equation}
+which at $\Delta t=30\,\mathrm{s}$ and the metric of \eqref{eq:cos-floor} is $\Cou\sim 0.06$ ---
+far inside the stability region --- so the dominant error is dissipative drift, not blow-up.
+Stability of the single-level model is bought elsewhere: by strong $\nabla^4$ hyperdiffusion that
+damps the small scales (Chapter~\ref{chap:ch10_atmosphere_singlelevel}) and by velocity clamps
+($|\uu|\le 80\,\mathrm{m\,s^{-1}}$) that act as a tripwire flagging instability rather than as
+physics.
+
+\codref{chronos\_esm/atmos/dynamics.py}{\code{step\_atmos} --- forward Euler, $\nabla^4$ filter, $80\,\mathrm{m\,s^{-1}}$ clamp}
+
+\begin{remark}
+A semi-implicit option exists but is \emph{not wired in}: \code{solve\_helmholtz} in
+\code{atmos/spectral.py} solves $(\lap-\gamma)x=b$ via FFT-in-$\lon$ plus a tridiagonal solve in
+$\lat$, with $\gamma=\Delta t^2 R T_0$ the implicit gravity-wave coupling. It would be needed only
+if $\Delta t$ were raised enough to make $\Cou$ approach unity; at $30\,\mathrm{s}$ it buys
+nothing, so the live path stays explicit. The book documents it (Chapter~\ref{chap:ch06_ocean_numerics})
+because the same Helmholtz machinery underlies the elliptic solves elsewhere.
+\end{remark}
+
+\subsection{Fourth-order Runge--Kutta --- ocean tracers}
+
+The ocean tracers are advanced with the classical four-stage Runge--Kutta scheme,
+\begin{equation}
+\begin{aligned}
+  k_1 &= \mathcal{R}(\boldsymbol\Phi^n), &
+  k_2 &= \mathcal{R}\!\big(\boldsymbol\Phi^n+\tfrac{\Delta t}{2}k_1\big), \\
+  k_3 &= \mathcal{R}\!\big(\boldsymbol\Phi^n+\tfrac{\Delta t}{2}k_2\big), &
+  k_4 &= \mathcal{R}\!\big(\boldsymbol\Phi^n+\Delta t\,k_3\big),
+\end{aligned}
+\qquad
+  \boldsymbol\Phi^{n+1}=\boldsymbol\Phi^n+\frac{\Delta t}{6}\big(k_1+2k_2+2k_3+k_4\big),
+  \label{eq:rk4}
+\end{equation}
+applied jointly to $(\Temp,\Salt,\text{DIC})$ with $\Delta t_{\mathrm{ocean}}=900\,\mathrm{s}$
+(\code{DT\_OCEAN}, $15$ minutes). RK4 is fourth-order accurate and has a comfortably large stable
+region; the binding constraint here is again advective CFL, $|\uvec|\Delta t/\Delta x\lesssim 1$,
+easily satisfied by the slow ocean currents. The tendency $\mathcal{R}$ combines upwind horizontal
+advection, upwind vertical advection (whose vertical Courant number $|\ww|\Delta t/\Delta z\sim
+10^{-3}$ is tiny), Laplacian diffusion, and surface fluxes injected into the top wet cell.
+
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{tendencies}, the four-stage RK4 update in \code{step\_ocean}}
+
+After the RK4 update the tracers pass through three post-processing operators that are \emph{not}
+part of the differential equation but are essential for a multi-century integration: an optional
+scale-selective $\nabla^4$ Shapiro-type filter (off by default, removing only the $2\Delta x$
+checkerboard mode); hard physical clamps $\Salt\in[30,38]\,\mathrm{psu}$, $\Temp\in[250,320]\,
+\mathrm{K}$, and a sea-ice freezing floor $\Temp\ge 271.35\,\mathrm{K}$; and an additive
+global-mean salinity renormalization to $34.7\,\mathrm{psu}$. The clamps are honest band-aids ---
+the book quantifies where they bite (rarely, in well-tuned runs) in Chapter~\ref{chap:ch16_climatology}.
+
+\subsection{Semi-implicit / ImEx --- the multi-level atmosphere}
+
+The \dino{} dycore solves the dry primitive equations with an \emph{implicit--explicit}
+Runge--Kutta scheme (specifically the strong-stability three-stage ImEx-RK of the dycore,
+\code{imex\_rk\_sil3}). The state is split into a stiff linear part $L\boldsymbol\Phi$ --- the
+fast gravity- and acoustic-like waves carried by the divergence/pressure/temperature coupling ---
+and a slow nonlinear part $N(\boldsymbol\Phi)$:
+\begin{equation}
+  \dt{\boldsymbol\Phi} = \underbrace{L\,\boldsymbol\Phi}_{\text{implicit}}
+  \;+\; \underbrace{N(\boldsymbol\Phi)}_{\text{explicit}} .
+  \label{eq:imex-split}
+\end{equation}
+Each stage treats $L$ implicitly (solved exactly in spectral space, where $L$ is diagonal in the
+vertical-mode/horizontal-wavenumber basis) and $N$ explicitly. The point of the split is that the
+CFL limit \eqref{eq:cfl} no longer involves the fast gravity-wave speed $c$ (handled implicitly,
+hence unconditionally stable) but only the much slower advective speed, so a far larger step is
+admissible: $\Delta t = 20\,\mathrm{min}$ at T31. After each macro-step a horizontal hyperdiffusion
+filter is applied as a separate operator,
+\begin{equation}
+  \widehat{\boldsymbol\Phi}_l \leftarrow \widehat{\boldsymbol\Phi}_l \,
+  \exp\!\left[-\frac{\Delta t}{\tau}\left(\frac{l(l+1)}{L(L+1)}\right)^{\!p}\right],
+  \label{eq:dino-diffusion}
+\end{equation}
+with diffusion order $p$ and time-scale $\tau=6\,\mathrm{h}$ chosen \emph{weak enough} that the
+T31 baroclinic eddies ($l\sim10$--$15$) are allowed to grow --- a deliberate departure from the
+single-level model, where eddies were spurious and diffusion was kept strong (see the
+decoupling principle discussed in Chapters~\ref{chap:ch09_atmosphere_multilevel}
+and~\ref{chap:ch18_jets_stormtracks}).
+
+\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{imex\_rk\_sil3}, \code{step\_with\_filters}, \code{horizontal\_diffusion\_step\_filter}}
+
+\begin{table}[ht]
+\centering
+\caption{Time integrators used across \model{} (default T31).}
+\label{tab:integrators}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Component & Scheme & Order & $\Delta t$ \\
+\midrule
+Single-level atmosphere & Forward Euler + $\nabla^4$ filter & 1 & $30\,\mathrm{s}$ \\
+Ocean tracers           & Classical RK4                     & 4 & $900\,\mathrm{s}$ \\
+Multi-level atmosphere  & ImEx-RK (\dino{}) + spectral filter & 3 & $20\,\mathrm{min}$ \\
+Coupler exchange        & ---                               & --- & $3600\,\mathrm{s}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The components are synchronized by a coupler that exchanges fluxes every
+$\Delta t_{\mathrm{cpl}}=3600\,\mathrm{s}$ (\code{COUPLING\_INTERVAL}); within a coupling window
+each component sub-cycles at its own step (Table~\ref{tab:integrators}). The coupling itself is a
+loose, first-order-in-time exchange of time-mean surface fields, documented in
+Chapter~\ref{chap:ch13_coupler_fluxes}.
+
+\section{Notation conventions}
+
+We close with the conventions used throughout. Operators $\grad,\diver,\curl,\lap$ are the
+spherical forms \eqref{eq:sph-grad}--\eqref{eq:sph-lap} unless a Cartesian tangent-plane form is
+explicitly noted. The material derivative is
+$\Dt{f}=\pd{f}{t}+\uvec\!\cdot\!\grad f + \ww\,\pd{f}{z}$. Subscripts $0$ denote reference
+constants ($\densz,\Temp_0,\Salt_0$); primes denote departures from a reference or zonal mean
+($T'$). A circumflex $\widehat{(\cdot)}$ denotes a spectral (modal) coefficient. A superscript $n$
+is the time level, so $\boldsymbol\Phi^{n+1}$ is the updated state. Transport is reported in
+Sverdrups, $1\Sv=10^{6}\,\mathrm{m^3\,s^{-1}}$. Units are written in plain roman math, e.g.\
+$\mathrm{m\,s^{-1}}$. Discrete grid operations name the array axes as the code does: for the ocean
+state of shape $(N_z,\nlat,\nlon)$, \code{axis=2} is longitude, \code{axis=1} is latitude, and
+\code{axis=0} is the vertical. Code references appear inline as
+$\hookrightarrow$~\textit{Code:} pointers. Where a smooth surrogate replaces a non-differentiable
+operation (e.g.\ $\softplus$ for a positive part, or a soft clip), it is named at the point of use;
+the rationale is the subject of Chapter~\ref{chap:ch03_differentiable}.
+
+\begin{example}
+At T31 the polar-row physical zonal spacing is $\Delta x = \Erad\cos\lat\,(2\pi/\nlon)$. For the
+row centred near $\lat=86.25^\circ$, $\cos\lat\approx 0.0654$, giving $\Delta x\approx 27\,
+\mathrm{km}$ --- already $15\times$ smaller than the equatorial $\approx 417\,\mathrm{km}$. Push to
+$\lat\to90^\circ$ and $\Delta x\to0$: this is the singularity \eqref{eq:cos-floor} caps, and the
+reason the \dino{} dycore works in the harmonic basis instead.
+\end{example}
+
+\begin{exercise}
+Using \code{config.py}, reconstruct the ocean vertical grid \eqref{eq:ocean-vgrid} for $N_z=15$,
+$\dep_{\mathrm{tot}}=5000\,\mathrm{m}$, $s=1.7$. Tabulate the $15$ layer thicknesses $\Delta z_k$.
+Confirm the surface layer is $\approx 50\,\mathrm{m}$ and the deepest $\approx 900\,\mathrm{m}$.
+Then recompute with $s=1.0$ (uniform) and explain, using
+$\partial\Temp/\partial t\sim\text{flux}/(\dens_0 c_p\Delta z_0)$, why the stretched grid gives a
+more responsive sea surface temperature.
+\end{exercise}
+
+\begin{exercise}
+Evaluate the gravity-wave Courant number \eqref{eq:cfl} for the single-level atmosphere using
+$\dep=10\,\mathrm{km}$, $\grav=9.81\,\mathrm{m\,s^{-2}}$, $\Delta t=30\,\mathrm{s}$, and the
+metric-floored polar $\Delta x$ from \eqref{eq:cos-floor} at $\lat=80^\circ$. How large could
+$\Delta t$ become before $\Cou\to1$? Explain why, despite the headroom, the production atmosphere
+still moved to the ImEx \dino{} dycore rather than simply raising $\Delta t$ here.
+\end{exercise}
+
+\begin{exercise}
+Classify each field of \code{OceanState} (Table~\ref{tab:prog-diag}) as prognostic or diagnostic
+by inspecting \code{step\_ocean}. For a checkpoint that must restart the run, which fields are
+strictly necessary and which can be regenerated on the first step? Verify your answer against the
+checkpoint-restart discussion in Chapter~\ref{chap:ch06_ocean_numerics}.
+\end{exercise}
+
+\begin{exercise}
+The ImEx split \eqref{eq:imex-split} treats the fast linear waves implicitly. Write the linear
+shallow-water gravity-wave system $\partial_t u=-g\partial_x h$, $\partial_t h=-H\partial_x u$ as
+$\dt{\boldsymbol\Phi}=L\boldsymbol\Phi$, find the dispersion relation, and show that a fully
+implicit (backward-Euler) treatment of $L$ is unconditionally stable while forward Euler
+\eqref{eq:forward-euler} is not. Relate this to why \dino{} can take a $20\,\mathrm{min}$ step
+where the explicit single-level model is pinned at $30\,\mathrm{s}$.
+\end{exercise}

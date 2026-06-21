@@ -1,4 +1,261 @@
 \chapter{The Differentiable-Programming Paradigm}
 \label{chap:ch03_differentiable}
 
-\emph{[This chapter is under construction.]}
+% Local minimal symbols (kept local; not redefined in the shared preamble).
+\providecommand{\Mop}{\mathcal{M}}          % the model step operator
+\providecommand{\jac}{\mathbf{J}}           % Jacobian
+\providecommand{\state}{\mathbf{s}}         % model state vector
+\providecommand{\param}{\boldsymbol{\theta}}% parameter / control vector
+\providecommand{\loss}{\mathcal{L}}         % scalar loss / cost
+
+What makes \model{} different from a conventional climate model is not its physics --- the
+governing equations of the next chapters are the same primitive equations every ocean and
+atmosphere model solves --- but the substrate it is written in. The entire model, from the
+spectral atmosphere through the elliptic ocean solver down to the bulk flux formulae, is a
+single \jax{} program \citep{jax2018}. Every floating-point operation is recorded on a
+computation graph, and that graph can be \emph{differentiated}: for any scalar diagnostic
+$\loss$ computed from a multi-decade run we can obtain the exact gradient $\partial\loss/\partial\param$
+with respect to \emph{every} tunable parameter $\param$ at once. This chapter explains what that
+means mathematically, what it costs, and which numerical idioms the model must obey to keep the
+gradient correct. The applications it unlocks --- calibration, sensitivity, and data assimilation
+--- are developed in Chapters~\ref{chap:ch15_differentiable_applications},
+\ref{chap:ch14_forcing_response}, and~\ref{chap:ch17_amoc_tipping}.
+
+\section{The model as a composition of differentiable maps}
+
+A coupled climate model is, formally, a discrete dynamical system. Write the full state as a
+vector $\state\in\mathbb{R}^{N}$ --- in \model{} this is the \code{DinoCoupledState} pytree,
+which carries the \dino{} spectral atmosphere (vorticity, divergence, temperature variation,
+log surface pressure, humidity), the ocean $(\uu,\vv,\ww,\Temp,\Salt,\psib,\dens,\mathrm{DIC})$,
+the land, and the sea-ice fields side by side
+(\codref{chronos\_esm/coupler/dino\_step.py}{\code{DinoCoupledState}}). One coupling interval is
+a map
+\begin{equation}
+  \state_{n+1} = \Mop(\state_n;\,\param,\,c_n),
+  \label{eq:step}
+\end{equation}
+where $\param$ collects static parameters (diffusivities, the haline gain, drag coefficients) and
+$c_n$ collects time-varying forcings (CO$_2$, hosing flux). A run of $K$ intervals is the
+$K$-fold composition $\Mop_K\circ\cdots\circ\Mop_1$, and a scalar diagnostic is
+$\loss(\state_0;\param)=\ell(\state_K)$ for some reduction $\ell$ (e.g.\ the time-mean AMOC at
+$26.5^\circ$N, or a misfit to observations).
+
+Because $\Mop$ is built entirely from primitive \jax{} operations --- additions, multiplications,
+\code{roll}-based stencils, fast spherical-harmonic transforms, \code{lax.scan} loops --- it is a
+\emph{differentiable map} almost everywhere. The chain rule applied to the composition gives the
+exact sensitivity of the whole trajectory,
+\begin{equation}
+  \pd{\loss}{\param}
+  = \pd{\ell}{\state_K}\,
+    \prod_{n=K-1}^{0}\!\left[ \pd{\Mop}{\state_n}\right]\,\pd{\state_0}{\param}
+  \;+\;
+  \sum_{n=0}^{K-1}\!\left(\text{direct }\param\text{-dependence of }\Mop_n\right),
+  \label{eq:chain}
+\end{equation}
+where $\partial\Mop/\partial\state_n$ is the (huge, never-formed) tangent-linear Jacobian of one
+step. The classical climate-science machinery for Eq.~\eqref{eq:chain} --- hand-coding a
+tangent-linear and adjoint model --- is replaced here by automatic differentiation (AD), which
+constructs the same operator from the forward code mechanically and exactly (to machine precision,
+not by finite differences).
+
+\section{Forward mode versus reverse mode}
+
+AD comes in two modes, distinguished by the order in which the Jacobian factors of
+Eq.~\eqref{eq:chain} are multiplied. Let $\jac=\partial\loss/\partial\param$ be conceptually an
+$M\times P$ Jacobian of $M$ outputs in $P$ parameters.
+
+\emph{Forward mode} (\code{jax.jvp}) propagates a perturbation \emph{with} the computation: it
+carries a tangent vector $\dot{\state}$ alongside the state and applies each
+$\partial\Mop/\partial\state$ left-to-right as the model runs. One forward pass yields one
+\emph{column} of $\jac$ --- the directional derivative along one input direction. Its cost scales
+with the number of inputs $P$.
+
+\emph{Reverse mode} (\code{jax.grad}, \code{jax.vjp}) propagates a sensitivity \emph{against} the
+computation: it runs the model forward, stores intermediate values, then sweeps backward applying
+each transposed Jacobian $(\partial\Mop/\partial\state)^{\!\top}$ right-to-left. One reverse pass
+yields one \emph{row} of $\jac$ --- the gradient of one scalar output with respect to \emph{all}
+inputs at once. Its cost scales with the number of outputs $M$.
+
+\begin{proposition}[Why climate calibration uses reverse mode]
+A calibration or data-assimilation objective is a single scalar $\loss$ ($M=1$) depending on many
+parameters ($P\gg1$). Reverse mode delivers the entire gradient $\partial\loss/\partial\param\in
+\mathbb{R}^{P}$ in one backward sweep, at a cost independent of $P$. Forward mode would need $P$
+separate passes. This asymmetry --- cheap gradients of scalars in high-dimensional parameter
+spaces --- is the entire reason a differentiable climate model is worth building.
+\end{proposition}
+
+\begin{remark}
+Finite differences would also estimate $\partial\loss/\partial\param$, but at $P{+}1$ model runs
+and with truncation/round-off error that is fatal for a chaotic, multi-decadal integration.
+Reverse-mode AD gives the \emph{exact} gradient of the discretised model in roughly the cost of a
+handful of forward runs (Section~\ref{sec:costmodel}).
+\end{remark}
+
+\section{The four \jax{} transformations used in the model}
+
+\model{} relies on four composable program transformations \citep{jax2018,kochkov2024neuralgcm}.
+
+\paragraph{\code{jit} (just-in-time compilation).} Traces a Python function once into an
+intermediate representation and compiles it to a single fused kernel (CPU/GPU). In \model{} the
+\emph{entire} coupling interval --- SST regrid, the spectral atmosphere, diagnostics, land, ice,
+bulk fluxes, and the ocean sub-stepping --- is compiled as one program (\code{\_step\_fast}),
+roughly ten times faster than eager dispatch because it avoids re-launching each spectral
+transform and each of the $\sim96$ ocean sub-steps separately
+(\codref{chronos\_esm/coupler/dino\_step.py}{\code{step\_fast}}). Static (non-traced) data ---
+grid metrics, masks, the atmosphere object --- are closed over so the only traced argument is the
+state pytree.
+
+\paragraph{\code{vmap} (vectorising map).} Adds a batch axis to a function without a Python loop.
+The model uses it to extract the diagonal of a linear operator for the Jacobi preconditioner,
+applying the operator to every standard basis vector at once
+(\codref{chronos\_esm/ocean/solver.py}{\code{create\_diagonal\_preconditioner}}). The same
+transform vectorises ensemble runs (perturbed parameters or initial conditions) for free.
+
+\paragraph{\code{lax.scan} (compiled, differentiable loop).} A structured loop with a fixed trip
+count that compiles to one rolled kernel and --- crucially --- has a defined, efficient adjoint.
+The ocean sub-stepping inside one coupling interval is a \code{scan} of length $n_{\mathrm{sub}}$
+(\codref{chronos\_esm/coupler/dino\_step.py}{ocean \code{lax.scan}}); the atmosphere interval is
+an analogous fixed-length iteration of the ImEx Runge--Kutta step
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{\_run\_interval}, \code{ti.repeated}}). Section
+\ref{sec:scancg} explains why \code{scan} (not a \code{while} loop) is mandatory for the iterative
+solvers.
+
+\paragraph{\code{checkpoint}/\code{remat} (gradient checkpointing).} Trades recomputation for
+memory in the backward pass, discussed next.
+
+\section{The cost model of a gradient, and gradient checkpointing}
+\label{sec:costmodel}
+
+Reverse-mode AD must access intermediate values from the forward pass during the backward sweep.
+Naively, every intermediate of a $K$-step run is stored, so memory grows like $\mathcal{O}(K\cdot
+N)$. For a multi-year coupled run this is hopeless: the activations of thousands of spectral
+transforms and ocean sub-steps would exhaust device memory.
+
+\emph{Gradient checkpointing} (rematerialisation) breaks the trade-off. A function wrapped in
+\code{jax.checkpoint} does not store its internal activations; instead it \emph{recomputes} them
+during the backward pass from a saved input. \model{} applies this at two granularities in the
+differentiable step: the atmosphere interval is wrapped
+(\code{\_atmos\_remat = jax.checkpoint(self.atm.\_run\_interval, static\_argnums=(2,))}) and so is
+each ocean sub-step body inside the \code{scan}
+(\codref{chronos\_esm/coupler/dino\_step.py}{\code{\_advance(..., remat=True)}}). The result is the
+standard cost model: with $\sqrt{K}$-spaced checkpoints, memory drops to
+$\mathcal{O}(\sqrt{K}\,N)$ at the price of computing the forward pass roughly twice. As a rule of
+thumb,
+\begin{equation}
+  \text{cost}(\nabla\loss)\ \approx\ 2\text{--}4\times\ \text{cost}(\loss),
+  \label{eq:cheap-gradient}
+\end{equation}
+\emph{independent of the number of parameters} $P$ --- the celebrated ``cheap gradient principle''.
+The fast forward step deliberately omits \code{remat}, because rematerialisation blocks kernel
+fusion and would slow a plain forward run; the model therefore keeps two paths --- a fused
+\code{step\_fast} for control/forced integrations and a remat'd \code{step} for gradients and DA
+(\codref{chronos\_esm/coupler/dino\_step.py}{\code{step} vs \code{step\_fast}}).
+
+\section{Why iterative solvers must be fixed-length scans}
+\label{sec:scancg}
+
+The single most important rule for keeping a physics model differentiable is how its
+\emph{iterative} solvers are written. \model{}'s ocean needs to invert an elliptic
+(streamfunction / barotropic-vorticity) operator each step. The continuous problem is the
+variable-coefficient elliptic equation
+\begin{equation}
+  \diver\!\big(\dep^{-1}\grad\psib\big) = \vort ,
+  \label{eq:elliptic}
+\end{equation}
+with $\dep$ the column depth and $\vort$ the vorticity forcing
+(\codref{chronos\_esm/ocean/solver.py}{module docstring; \code{solve\_elliptic\_varcoef\_sphere}}).
+Discretised in symmetric face-conductance form on the sphere this becomes a sparse symmetric
+positive-definite linear system $A\psib=b$, solved by preconditioned conjugate gradients (CG).
+
+The natural way to write CG is ``iterate \emph{until} the residual norm $\lVert r\rVert$ falls
+below a tolerance.'' In \jax{} that is \code{lax.while\_loop} --- and it is \textbf{not reverse-mode
+differentiable}, because the number of iterations is data-dependent and so the backward pass has no
+fixed graph to transpose. The model therefore writes CG as a \emph{fixed-length} \code{lax.scan} of
+exactly \code{max\_iter} steps, using \code{jnp.where} to turn each iteration into a no-op once
+converged (\codref{chronos\_esm/ocean/solver.py}{\code{solve\_cg}, the \code{scan\_body}
+convergence freeze}):
+\begin{lstlisting}[caption={The AD-safe convergence freeze: a fixed-length scan that stops updating.}]
+def scan_body(state, _):
+    converged = r_norm <= tol_abs
+    new_state = body_fun(state)          # one CG iteration
+    out_state = jax.tree.map(
+        lambda old, new: jnp.where(converged, old, new), state, new_state)
+    return out_state, None               # frozen once converged
+final_state, _ = jax.lax.scan(scan_body, init, None, length=max_iter)
+\end{lstlisting}
+Each iteration applies the operator and updates the search direction with the standard CG
+recurrences --- step length $\alpha=r^{\!\top}z/(p^{\!\top}Ap)$, conjugacy update
+$\beta=r_{\mathrm{new}}^{\!\top}z_{\mathrm{new}}/r^{\!\top}z$, with division guards
+(\code{jnp.where} on tiny denominators) so the graph never produces a \code{NaN} that would
+poison the adjoint (\codref{chronos\_esm/ocean/solver.py}{\code{body\_fun}}). The price is that the
+forward solve always runs \code{max\_iter} iterations (the converged ones are cheap no-ops), but in
+exchange the linear solve has a clean, transposable adjoint and gradients flow through the inverted
+streamfunction. The same fixed-trip-count discipline is what makes the atmosphere's ImEx
+Runge--Kutta interval (\code{ti.repeated(step, n\_steps)}) and the ocean sub-step \code{scan}
+differentiable end-to-end.
+
+\begin{remark}[The adjoint of a linear solve]
+For a converged linear solve $A\psib=b$ one need not differentiate through every CG iteration: the
+implicit-function theorem gives the adjoint directly as a \emph{second} solve with $A^{\!\top}$.
+\model{}'s solver instead differentiates the unrolled fixed-length scan, which is simpler to wire
+and, for the modest \code{max\_iter} used here, comparably cheap. Either way, the
+\code{while}-loop-free structure is what makes an adjoint exist at all.
+\end{remark}
+
+\section{Implications: calibration, sensitivity, data assimilation}
+
+End-to-end differentiability turns the model into an instrument that can be \emph{inverted}, not
+just run forward.
+
+\paragraph{Calibration.} Choosing parameters $\param$ (diffusivities, gains, drag) to minimise a
+misfit $\loss(\param)$ to observations becomes gradient descent: a handful of reverse-mode passes
+deliver $\partial\loss/\partial\param$ for the whole parameter vector at once, replacing parameter
+sweeps that scale exponentially in dimension. Chapter~\ref{chap:ch15_differentiable_applications}
+carries this out; Chapter~\ref{chap:ch17_amoc_tipping} shows the important exception --- a
+\emph{bifurcation} threshold cannot be obtained by differentiating \emph{through} the fold, because
+the trajectory's sensitivity diverges there, and one must instead differentiate the steady-state
+(fold-continuation) condition.
+
+\paragraph{Sensitivity.} The gradient $\partial\loss/\partial\param$ \emph{is} a complete
+sensitivity ranking: it says which parameter each diagnostic actually depends on, and how strongly,
+in one computation rather than one perturbation experiment per parameter. The same machinery gives
+sensitivities to the forcing $c_n$ and to the initial state $\state_0$.
+
+\paragraph{Data assimilation.} Four-dimensional variational assimilation (4D-Var) minimises a
+trajectory-versus-observations cost over the initial state $\state_0$. Its gradient
+$\partial\loss/\partial\state_0$ is exactly the adjoint sweep of Eq.~\eqref{eq:chain} ---
+historically the most expensive code in operational forecasting to write and maintain by hand. In a
+differentiable model it is \code{jax.grad}; the hand-built tangent-linear/adjoint model disappears.
+The standing caveat (developed in the applications chapters) is \emph{chaos}: for a turbulent
+atmosphere the adjoint gradient of a long trajectory grows exponentially and becomes a poor
+descent direction, so the useful differentiable targets are short windows, time-mean statistics, or
+the better-conditioned ocean/coupled steady states.
+
+\begin{exercise}[Forward vs reverse cost]
+A configuration has $P=12$ scalar parameters and you want the gradient of a single time-mean AMOC
+diagnostic. Estimate the number of model evaluations needed by (i) finite differences, (ii)
+forward-mode AD, and (iii) reverse-mode AD. Using Eq.~\eqref{eq:cheap-gradient}, state which is
+cheapest and why the answer is independent of $P$ for reverse mode.
+\end{exercise}
+
+\begin{exercise}[Break the gradient on purpose]
+In \codref{chronos\_esm/ocean/solver.py}{\code{solve\_cg}}, the iteration is a fixed-length
+\code{lax.scan} with a \code{jnp.where} convergence freeze. Explain what would go wrong --- for the
+\emph{gradient}, not the forward solution --- if it were rewritten with \code{lax.while\_loop} that
+exits at the tolerance. Then explain why replacing the \code{jnp.where} freeze with a Python
+\code{if r\_norm <= tol: break} is also not an option inside a jitted scan.
+\end{exercise}
+
+\begin{exercise}[Memory vs compute]
+A differentiable run uses \code{jax.checkpoint} on both the atmosphere interval and each ocean
+sub-step (\codref{chronos\_esm/coupler/dino\_step.py}{\code{\_advance(..., remat=True)}}). For a
+$K$-interval run, write down the forward-pass memory and the wall-clock overhead with and without
+checkpointing, and explain why \code{step\_fast} deliberately omits it.
+\end{exercise}
+
+\begin{exercise}[Sensitivity by AD]
+Using the differentiable \code{step}, compute $\partial(\text{AMOC at }26.5^\circ\text{N})/
+\partial(\code{thc\_haline\_gain})$ and $\partial(\cdot)/\partial(\code{thc\_k\_vel})$ from a short
+coupled run with \code{jax.grad}. Rank the two parameters by magnitude and compare your ranking to
+the fold-continuation result of Chapter~\ref{chap:ch17_amoc_tipping}.
+\end{exercise}

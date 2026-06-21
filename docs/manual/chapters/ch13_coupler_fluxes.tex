@@ -1,4 +1,389 @@
-\chapter{The Coupler and Surface Fluxes}
-\label{chap:ch13_coupler_fluxes}
+\chapter{The Coupler and Surface Fluxes}\label{chap:ch13_coupler_fluxes}
 
-\emph{[This chapter is under construction.]}
+% Local symbols (kept minimal; not provided by the preamble).
+\providecommand{\Cd}{C_{\!D}}        % bulk drag coefficient
+\providecommand{\Ch}{C_{\!H}}        % bulk heat-exchange coefficient
+\providecommand{\Ce}{C_{\!E}}        % bulk moisture-exchange coefficient
+\providecommand{\Lvap}{L_v}          % latent heat of vaporization (chapter-local; \Lvap is taken by ch09)
+\providecommand{\qsat}{q_{\mathrm{sat}}}
+\providecommand{\Qnet}{Q_{\mathrm{net}}}
+\providecommand{\tausfc}{\boldsymbol{\tau}}
+
+A coupled Earth System Model is, at bottom, a contract between subsystems that
+otherwise know nothing of one another. The atmosphere does not know what the sea
+surface temperature (SST) is; the ocean does not know how hard the wind is
+blowing. The \emph{coupler} is the layer that brokers this exchange: it moves the
+ocean's surface state up to the atmosphere, runs the atmosphere, computes the
+fluxes of heat, freshwater and momentum across the air--sea interface from bulk
+formulae, and hands those fluxes back down to drive the ocean. This chapter
+documents how \model{} does this, derived directly from the source.
+
+Two facts about the \model{} coupler are worth stating up front, because they
+shape everything below. First, the \emph{active} coupled path is the multi-level
+\dino{} atmosphere coupled to the $z$-level ocean
+(Chapters~\ref{chap:ch04_ocean_equations} and~\ref{chap:ch09_atmosphere_multilevel}),
+expressed as a single differentiable \jax{} function so that the whole coupled
+step flows through \code{jax.jit}, \code{jax.grad} and \code{jax.lax.scan}
+\citep{jax2018}. Second, the coupler does \emph{not} conserve energy by
+construction; it uses a \emph{flux correction} to hold the mean climate against
+model drift, and a substantial part of this chapter is an honest accounting of
+what that correction does and what it costs.
+
+\section{The coupling cycle}
+
+A single coupling interval (default one model day) realizes the data flow
+\begin{equation}
+  \mathrm{SST}^{\,\mathrm{lin}}
+  \xrightarrow{\text{regrid}} \mathrm{SST}^{\,\mathrm{Gauss}}
+  \xrightarrow{\dino{}} \text{surface fields}^{\,\mathrm{Gauss}}
+  \xrightarrow{\text{regrid}} \text{bulk fluxes}^{\,\mathrm{lin}}
+  \xrightarrow{\text{ocean scan}} \text{ocean}(t{+}\Delta t),
+  \label{eq:cycle}
+\end{equation}
+where ``lin'' is the regular latitude--longitude (ocean/land) grid and ``Gauss''
+is the \dino{} Gaussian spectral-transform grid. The lower boundary the
+atmosphere actually sees is not the bare SST but a surface skin temperature that
+blends ocean, sea ice and land,
+\begin{equation}
+  T_{\mathrm{surf}} =
+  \begin{cases}
+    (1-A)\,T_{\mathrm{sst}} + A\,(T_{\mathrm{ice}} + 273.15) & \text{over ocean},\\[2pt]
+    T_{\mathrm{land}} & \text{over land},
+  \end{cases}
+  \label{eq:lowerbc}
+\end{equation}
+with $A$ the (lagged) sea-ice concentration. Equation~\eqref{eq:lowerbc} uses the
+\emph{previous} interval's ice and land skin temperatures: the components are
+coupled \emph{explicitly} (sequentially), not implicitly, so each subsystem is
+forced by its partners' state at the start of the interval.
+\codref{chronos\_esm/coupler/dino\_step.py}{\code{DinoCoupledModel.\_advance} assembles $T_{\mathrm{surf}}$ and drives the cycle of Eq.~\eqref{eq:cycle}}
+
+\section{Bulk aerodynamic surface fluxes}
+
+The turbulent exchange of heat, moisture and momentum through the atmospheric
+surface layer is not resolved at T31; it is \emph{parameterized} by bulk
+aerodynamic formulae \citep{vallis2017}. These express each surface flux as the
+product of a transfer coefficient, the near-surface wind speed, and an air--sea
+contrast in the transported quantity.
+
+Let $\uvec_a=(\uu_a,\vv_a)$ be the atmospheric bottom-level wind, $T_a$ and $q_a$
+the bottom-level air temperature and specific humidity, and $T_s$ the surface
+(SST) temperature. The effective surface wind speed used in the fluxes is floored
+to represent sub-grid gustiness and capped to suppress a wind--evaporation
+feedback runaway (WISHE),
+\begin{equation}
+  |\uvec_a|_{\mathrm{eff}} = \min\!\big(\max(\sqrt{\uu_a^2+\vv_a^2},\,1),\,25\big)\ \mathrm{m\,s^{-1}}.
+  \label{eq:windeff}
+\end{equation}
+The sensible and latent heat fluxes (positive \emph{upward}, out of the ocean) are
+\begin{align}
+  Q_{\mathrm{sens}} &= \dens_a\,c_{p,a}\,\Ch\,|\uvec_a|_{\mathrm{eff}}\,(T_s - T_a),
+  \label{eq:sens}\\
+  Q_{\mathrm{lat}}  &= \dens_a\,\Lvap\,\Ce\,|\uvec_a|_{\mathrm{eff}}\,\big(\qsat(T_s) - q_a\big)\,\beta,
+  \label{eq:lat}
+\end{align}
+with $\dens_a=1.2\ \mathrm{kg\,m^{-3}}$, $c_{p,a}=1004\ \mathrm{J\,kg^{-1}\,K^{-1}}$,
+$\Lvap=2.5\times10^6\ \mathrm{J\,kg^{-1}}$, transfer coefficients
+$\Ch=\Ce=1.2\times10^{-3}$, and an evaporation efficiency $\beta=1$ over the
+ocean. The saturation specific humidity follows the Clausius--Clapeyron form
+\begin{equation}
+  \qsat(T_s) = \frac{0.622\,e_{\mathrm{sat}}(T_s)}{p_0},
+  \qquad
+  e_{\mathrm{sat}}(T_s) = 611\,\exp\!\left(\frac{17.27\,(T_s-273.15)}{(T_s-273.15)+237.3}\right)\ \mathrm{Pa},
+  \label{eq:qsat}
+\end{equation}
+with a fixed reference $p_0=101325\ \mathrm{Pa}$. The fixed $p_0$ is an honest
+simplification: it ignores the (modest) dependence of $\qsat$ on actual surface
+pressure, an error of at most a few percent away from sea level.
+\codref{chronos\_esm/atmos/physics.py}{\code{compute\_surface\_fluxes} implements Eqs.~\eqref{eq:windeff}--\eqref{eq:qsat}}
+
+\paragraph{Net surface heat flux.} The bulk turbulent fluxes are combined with
+radiation to form the net heat flux into the ocean,
+\begin{equation}
+  \Qnet = \underbrace{(1-\alpha_o)\,S^{\downarrow}}_{\text{shortwave in}}
+        + \underbrace{0.8\,\sigma\,\max(T_a-10,150)^4}_{\text{longwave down}}
+        - \underbrace{0.98\,\sigma\,T_s^4}_{\text{longwave up}}
+        - Q_{\mathrm{sens}} - Q_{\mathrm{lat}},
+  \label{eq:qnet}
+\end{equation}
+where $\sigma=5.67\times10^{-8}\ \mathrm{W\,m^{-2}\,K^{-4}}$ is the
+Stefan--Boltzmann constant, $\alpha_o$ is the ocean albedo, and $S^{\downarrow}$
+is the daily-mean top-of-atmosphere insolation reduced for cloud/atmospheric
+absorption (a fixed perpetual day-of-year $80$ in the coupled harness, so there is
+\emph{no seasonal cycle} in the shortwave forcing --- a known limitation). The
+downwelling longwave uses a fixed effective emissivity of $0.8$ and a floored air
+temperature; the upwelling term uses ocean emissivity $0.98$. This is a grey,
+single-band radiation closure --- adequate to set the surface energy balance, but
+not a spectral radiative-transfer scheme.
+\codref{chronos\_esm/coupler/dino\_coupling.py}{\code{ocean\_fluxes\_jax} assembles $\Qnet$ from Eq.~\eqref{eq:qnet}}
+
+\paragraph{Freshwater flux.} Evaporation is recovered from the latent heat flux,
+$E = Q_{\mathrm{lat}}/\Lvap$, and the surface freshwater flux (precipitation minus
+evaporation, the ocean's salinity forcing of Chapter~\ref{chap:ch04_ocean_equations}) is
+\begin{equation}
+  F_w = P - E = P - Q_{\mathrm{lat}}/\Lvap,
+  \label{eq:fw}
+\end{equation}
+with $P$ the precipitation diagnosed by the atmosphere's large-scale
+condensation. Both $\Qnet$ and $F_w$ are subsequently constrained for global
+balance (Section~\ref{sec:fluxcorr}).
+
+\section{Wind stress}
+
+Momentum is transferred to the ocean by the surface wind stress
+$\tausfc=(\tau_x,\tau_y)$, computed from the same bulk-drag idea but with its own
+quadratic form,
+\begin{equation}
+  \tau_x = \dens_a\,\Cd\,|\uvec_a|_{w}\,\uu_a,
+  \qquad
+  \tau_y = \dens_a\,\Cd\,|\uvec_a|_{w}\,\vv_a,
+  \qquad
+  |\uvec_a|_{w} = \max\!\big(\sqrt{\uu_a^2+\vv_a^2},\,1\big),
+  \label{eq:stress}
+\end{equation}
+with drag coefficient $\Cd=1.3\times10^{-3}$. Note that the wind speed floor here
+($1\ \mathrm{m\,s^{-1}}$) matches the heat-flux floor but there is \emph{no}
+$25\ \mathrm{m\,s^{-1}}$ cap; instead each stress component is hard-clamped,
+\begin{equation}
+  \tau_x,\tau_y \in [-0.3,\,0.3]\ \mathrm{Pa}.
+  \label{eq:stressclamp}
+\end{equation}
+The clamp is a numerical safety net: realistic stresses rarely exceed
+$\sim\!0.3\ \mathrm{Pa}$, so saturating it flags an instability rather than
+shaping the climatology. This stress is the boundary forcing of the ocean
+momentum equation (Chapter~\ref{chap:ch07_ocean_prognostic_core}) and drives the
+wind-driven gyres and, indirectly, the overturning of
+Chapter~\ref{chap:ch08_ocean_overturning}.
+\codref{chronos\_esm/coupler/dino\_coupling.py}{\code{ocean\_fluxes\_jax}, Eqs.~\eqref{eq:stress}--\eqref{eq:stressclamp}}
+
+\section{Flux correction: control mode vs.\ free mode}\label{sec:fluxcorr}
+
+A coupled model with imperfect components drifts: small biases in the bulk fluxes
+accumulate into large SST errors over years. \model{} controls this with a
+surface-heat \emph{flux correction} on the SST, and it offers two distinct modes
+selected at construction time. This is the single most important design choice in
+the coupler, and it has direct consequences for forcing experiments
+(Chapter~\ref{chap:ch14_forcing_response}).
+
+\subsection{Strong Haney restoring (control mode)}
+
+In control mode the net heat flux receives a Haney restoring term toward a fixed
+target SST field $T^{\star}$ (the World Ocean Atlas climatology captured at
+initialization),
+\begin{equation}
+  Q_{\mathrm{corr}} = \lambda\,(T^{\star} - T_s),
+  \qquad
+  \lambda = \frac{\densz\,c_{p,w}\,\Delta z_1}{\tau},
+  \label{eq:haney}
+\end{equation}
+where $\lambda$ is the restoring coefficient, $\densz=1025\ \mathrm{kg\,m^{-3}}$
+and $c_{p,w}=3985\ \mathrm{J\,kg^{-1}\,K^{-1}}$ are seawater density and heat
+capacity, $\Delta z_1$ is the top model-layer thickness, and $\tau$ is the
+restoring timescale. With the default $\tau=30\ \mathrm{d}$ this gives
+$\lambda\approx50\ \mathrm{W\,m^{-2}\,K^{-1}}$ --- a \emph{strong} relaxation that
+pins the surface to climatology within roughly a month. The corrected net flux
+that drives the ocean is $\Qnet + Q_{\mathrm{corr}}$.
+\codref{chronos\_esm/ocean/flux\_correction.py}{\code{restoring\_lambda}, \code{restoring\_flux}, \code{heat\_correction} ($\code{q\_flux}{=}\code{None}$)}
+
+\begin{remark}
+The strong restoring is what makes the control climatology look good, but it does
+so by \emph{absorbing} any imposed forcing: if you add CO$_2$ forcing while
+$\lambda\approx50\ \mathrm{W\,m^{-2}\,K^{-1}}$ is acting, an SST anomaly of order
+$\Delta T = F/\lambda$ develops --- a $3.7\ \mathrm{W\,m^{-2}}$ forcing yields only
+$\sim\!0.07\ \mathrm{K}$. Control mode is therefore the wrong tool for climate
+sensitivity; it is the right tool for spin-up and for diagnosing the implied
+correction below.
+\end{remark}
+
+\subsection{Frozen q-flux + weak anomaly restoring (free mode)}
+
+Free mode breaks the suppression without re-opening the cold-tongue drift. The
+recipe is the classic mixed-layer flux correction:
+\begin{enumerate}
+  \item Run a strongly-restored control to equilibrium and accumulate the
+        time-mean restoring flux $\bar{Q} = \langle \lambda\,(T^{\star}-T_s)\rangle$.
+        This is the \emph{implied} flux correction the restoring was silently
+        supplying to hold the mean state.
+  \item In the free run, \emph{prescribe} the frozen field $\bar{Q}$ plus only a
+        \emph{weak}, long-$\tau$ anomaly restoring:
+        \begin{equation}
+          Q_{\mathrm{corr}} = \underbrace{\lambda_{\mathrm{weak}}\,(T^{\star}-T_s)}_{\text{weak anomaly restoring}} + \underbrace{\bar{Q}}_{\text{frozen q-flux}},
+          \qquad \tau \sim 3650\ \mathrm{d}.
+          \label{eq:qflux}
+        \end{equation}
+\end{enumerate}
+The mean state is now held by the fixed field $\bar{Q}$, residual drift is bounded
+by the weak term, but SST is free to respond to an imposed forcing on the slow
+anomaly timescale. Crucially the entire correction is pure \jax{}, so
+$\mathrm{d}(\text{climate})/\mathrm{d}(\text{forcing})$ survives it --- the
+differentiability the model is built for is not severed by the flux correction.
+\codref{chronos\_esm/ocean/flux\_correction.py}{\code{heat\_correction} with \code{q\_flux} provided, Eq.~\eqref{eq:qflux}}
+
+\begin{example}[Selecting the mode]
+A \code{DinoCoupledModel} constructed with \code{q\_flux=None, restore\_tau\_days=30}
+runs in control mode; passing \code{q\_flux=<field>, restore\_tau\_days=3650}
+switches to free mode. The same call also balances the \emph{uncorrected} branch:
+if no target is given, $\Qnet$ has its area-weighted ocean mean removed so the
+global ocean neither gains nor loses heat,
+\begin{equation}
+  \Qnet \leftarrow \Qnet - \frac{\sum_{\text{ocean}} w\,\Qnet}{\sum_{\text{ocean}} w},
+  \qquad w = \cos\lat,
+\end{equation}
+and the freshwater flux $F_w$ is de-meaned identically so it neither adds nor
+removes net mass. Finally $\Qnet$ is clipped to $[-1500,1500]\ \mathrm{W\,m^{-2}}$
+as a stability guard. \codref{chronos\_esm/coupler/dino\_coupling.py}{\code{ocean\_fluxes\_jax} mean-removal and clip}
+\end{example}
+
+\section{CO$_2$ radiative forcing into the ocean heat budget}\label{sec:co2}
+
+The model's single anthropogenic forcing channel is CO$_2$, entered through the
+Myhre logarithmic radiative-forcing law \citep{myhre1998},
+\begin{equation}
+  F_{\mathrm{CO_2}}(C) = 5.35\,\ln\!\left(\frac{C}{C_0}\right)\ \mathrm{W\,m^{-2}},
+  \qquad C_0 = 280\ \mathrm{ppm},
+  \label{eq:myhre}
+\end{equation}
+which vanishes at the pre-industrial reference $C_0$ and gives the canonical
+$\approx3.7\ \mathrm{W\,m^{-2}}$ at doubling. A deliberate design decision is
+\emph{where} this enters: $F_{\mathrm{CO_2}}$ is added to the ocean surface heat
+budget as extra downwelling longwave, \emph{before} the flux correction, rather
+than as an offset to the SST-slaved atmospheric radiative-equilibrium temperature.
+The latter would be nearly inert (the atmosphere is slaved to SST) and would
+double-count. Concretely, Eq.~\eqref{eq:qnet} becomes
+$\Qnet \leftarrow \Qnet + F_{\mathrm{CO_2}}(C)$ and only \emph{then} receives
+$Q_{\mathrm{corr}}$. Because $F_{\mathrm{CO_2}}$ is differentiable in $C$, the
+sensitivity $\mathrm{d}(\text{climate})/\mathrm{d}(\mathrm{CO_2})$ is directly
+available for calibration and sensitivity studies (Chapter~\ref{chap:ch14_forcing_response}).
+\codref{chronos\_esm/coupler/dino\_coupling.py}{\code{co2\_forcing\_wm2} (Eq.~\eqref{eq:myhre}) added in \code{ocean\_fluxes\_jax} before the flux correction}
+
+\begin{remark}
+Putting $F_{\mathrm{CO_2}}$ before the correction makes the mode choice
+load-bearing: under the strong control-mode $\lambda\approx50\ \mathrm{W\,m^{-2}\,K^{-1}}$
+the response is suppressed to $\sim\!F/\lambda$; only free mode
+(Eq.~\eqref{eq:qflux}) lets $F_{\mathrm{CO_2}}$ drive a real warming. The
+historical forcing record (CO$_2$ in ppm, plus a small TSI cycle) is supplied by
+\code{ForcingManager}, which linearly interpolates annual-mean concentrations
+between 1850 and 2025. \codref{chronos\_esm/forcing.py}{\code{ForcingManager.get\_forcing} interpolates $C(t)$ used in Eq.~\eqref{eq:myhre}}
+\end{remark}
+
+\section{Regridding between atmosphere and ocean}
+
+The atmosphere and ocean live on different horizontal grids: the \dino{}
+atmosphere uses a Gaussian latitude grid (the natural collocation for the
+spectral transform), while the ocean and land use a regular
+latitude--longitude grid. The longitudes coincide, so coupling reduces to a
+\emph{one-dimensional} interpolation in latitude. \model{} uses differentiable
+piecewise-linear interpolation in both directions,
+\begin{equation}
+  f^{\,\mathrm{Gauss}} = \mathcal{I}\big[\lat_{\mathrm{lin}}\to\lat_{\mathrm{Gauss}}\big]\,f^{\,\mathrm{lin}},
+  \qquad
+  f^{\,\mathrm{lin}} = \mathcal{I}\big[\lat_{\mathrm{Gauss}}\to\lat_{\mathrm{lin}}\big]\,f^{\,\mathrm{Gauss}},
+  \label{eq:regrid}
+\end{equation}
+implemented with \code{jnp.interp} vectorized over longitude columns
+(\code{jax.vmap}). Using \code{jnp.interp} rather than a looped \code{np.interp} is
+what keeps the regrid differentiable, so gradients flow across the grid boundary
+in both directions.
+\codref{chronos\_esm/coupler/dino\_coupling.py}{\code{make\_regridders\_jax} builds $\mathcal{I}$ of Eq.~\eqref{eq:regrid}}
+
+\begin{remark}[Linear vs.\ conservative remapping]
+The latitudinal interpolation of Eq.~\eqref{eq:regrid} is \emph{not} flux-conserving:
+it does not guarantee that the area integral of a flux is preserved across the
+grid change. A separate dense/sparse matrix remapper exists
+(\code{regrid\_field}, $\text{Dest}=W\,\text{Src}$) intended for conservative
+weights, but in the current configuration it short-circuits to identity for
+collocated grids. The de-meaning step of Section~\ref{sec:fluxcorr} (which
+enforces zero global-mean heat and freshwater on the ocean grid) is what actually
+guards global balance, not the regrid.
+\codref{chronos\_esm/coupler/regrid.py}{\code{regrid\_field}, \code{Regridder} (matrix remap, identity for collocated grids)}
+\end{remark}
+
+\section{Coupling time-stepping: \texttt{step} vs.\ \texttt{step\_fast}}
+
+A coupling interval contains many sub-steps: the atmosphere is advanced with its
+ImEx integrator (Chapter~\ref{chap:ch09_atmosphere_multilevel}) over
+$n_{\mathrm{atm}}$ steps, and the ocean is advanced over $n_{\mathrm{sub}}$
+sub-steps via \code{jax.lax.scan}, where
+\begin{equation}
+  n_{\mathrm{atm}} = \lceil s_{\mathrm{atm}}\,\Delta T_{\mathrm{int}}\rceil,
+  \qquad
+  n_{\mathrm{sub}} = \big\lceil 86400\,\Delta T_{\mathrm{int}}/\Delta t_{\mathrm{ocean}}\big\rceil,
+\end{equation}
+with $\Delta T_{\mathrm{int}}$ the interval in days, $s_{\mathrm{atm}}$ the
+atmosphere steps-per-day, and $\Delta t_{\mathrm{ocean}}$ the ocean time step.
+\model{} exposes the same interval body through two entry points with different
+performance/differentiability trade-offs:
+
+\begin{description}
+  \item[\code{step}] --- the differentiable, variable-interval path. The
+        atmosphere advance and the ocean \code{scan} are wrapped in gradient
+        checkpointing (\code{jax.checkpoint}, ``remat'') so the reverse-mode
+        adjoint fits in memory. This is the path used for \code{jax.grad} and
+        data assimilation (Chapter~\ref{chap:ch15_differentiable_applications}).
+  \item[\code{step\_fast}] --- the forward-only path for long control and forced
+        runs. The \emph{entire} interval (regrid, spectral transforms, atmosphere
+        steps, ocean scan) is fused into one \code{jax.jit} program at a
+        \emph{fixed} interval, with no remat. Removing the checkpointing lets XLA
+        fuse the program, which the source reports is $\sim\!10\times$ faster than
+        the eager \code{step}.
+\end{description}
+
+Both call the shared \code{\_advance} body of Eq.~\eqref{eq:cycle}; they differ
+only in the \code{remat} flag and whether the interval is static.
+\codref{chronos\_esm/coupler/dino\_step.py}{\code{DinoCoupledModel.step} (remat) and \code{step\_fast} (fused jit)}
+
+\begin{remark}[Honest status]
+The differentiable \code{DinoCoupledModel} is the library promotion of the
+standalone control harness \code{experiments/run\_dino\_coupled.py}; it is the
+\code{atmos\_backend='dino'} model. The legacy single-level coupler in
+\code{main.step\_coupled} (Chapter~\ref{chap:ch10_atmosphere_singlelevel}) is
+untouched and is the path the older \code{jax.grad} demos exercise. A second
+honesty note inherited from the AMOC metric: on the present
+diagnostic-velocity ocean, $\mathrm{d}(\text{AMOC})/\mathrm{d}(\text{density})=0$,
+so a CO$_2$ or hosing perturbation entering through the heat/freshwater budget here
+does not yet drive overturning gradients --- closing that is the prognostic-momentum
+work of Chapter~\ref{chap:ch07_ocean_prognostic_core}.
+\end{remark}
+
+\section{Exercises}
+
+\begin{exercise}[Restoring strength and forcing suppression]
+Using Eq.~\eqref{eq:haney}, compute the Haney coefficient $\lambda$ for restoring
+timescales $\tau=10,30,90,365$ days (take $\Delta z_1$ from the model's top layer,
+$\densz=1025$, $c_{p,w}=3985$). For each, predict the equilibrium SST anomaly
+$\Delta T = F/\lambda$ to a doubled-CO$_2$ forcing $F=3.7\ \mathrm{W\,m^{-2}}$
+(Eq.~\eqref{eq:myhre}). At what $\tau$ does $\Delta T$ exceed $1\ \mathrm{K}$?
+Explain why control mode is unusable for climate sensitivity and free mode
+(Eq.~\eqref{eq:qflux}) is required.
+\end{exercise}
+
+\begin{exercise}[Diagnosing the implied q-flux]
+Construct a \code{DinoCoupledModel} in control mode (\code{q\_flux=None},
+\code{restore\_tau\_days=30}) and integrate to a quasi-steady state with
+\code{step\_fast}. At each interval accumulate the restoring flux
+$\lambda\,(T^{\star}-T_s)$ (Eq.~\eqref{eq:haney}) and form its time mean
+$\bar{Q}$. Map $\bar{Q}$: where is the implied correction largest, and what known
+SST biases (e.g.\ the tropical cold tongue) does its sign reveal? Then rebuild the
+model in free mode passing this $\bar{Q}$ as \code{q\_flux} with
+\code{restore\_tau\_days=3650} and verify the mean SST stays close to the control.
+\end{exercise}
+
+\begin{exercise}[Wind-stress clamp as an instability detector]
+The stress components are clamped to $[-0.3,0.3]\ \mathrm{Pa}$
+(Eq.~\eqref{eq:stressclamp}). Instrument \code{ocean\_fluxes\_jax} to record the
+fraction of ocean points hitting the clamp each interval during a multi-year run.
+Argue why a \emph{rising} clamp-hit fraction is a leading indicator of an
+atmospheric instability rather than a feature of the climatology, and relate it to
+the $25\ \mathrm{m\,s^{-1}}$ WISHE cap in the heat fluxes (Eq.~\eqref{eq:windeff}).
+\end{exercise}
+
+\begin{exercise}[Differentiable CO$_2$ sensitivity]
+Because $F_{\mathrm{CO_2}}$ (Eq.~\eqref{eq:myhre}) and the whole coupling interval
+are pure \jax{}, the map $C\mapsto \overline{\mathrm{SST}}$ after $N$ intervals is
+differentiable. In free mode, use \code{jax.grad} through \code{step} to compute
+$\mathrm{d}\,\overline{\mathrm{SST}}/\mathrm{d}C$ at $C=400\ \mathrm{ppm}$, and
+compare it to a finite-difference estimate. Then explain, using the structure of
+Section~\ref{sec:co2}, why the same gradient computed in \emph{control} mode is
+much smaller, and what that implies for using gradients to calibrate climate
+sensitivity.
+\end{exercise}

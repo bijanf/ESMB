@@ -1,4 +1,391 @@
-\chapter{The Ocean: Governing Equations}
-\label{chap:ch04_ocean_equations}
+\chapter{The Ocean: Governing Equations}\label{chap:ch04_ocean_equations}
 
-\emph{[This chapter is under construction.]}
+% --- chapter-local symbols (minimal; not in the shared preamble) ---
+\providecommand{\alphaT}{\alpha_T}   % thermal expansion coefficient (linear EOS)
+\providecommand{\betaS}{\beta_S}     % haline contraction coefficient (linear EOS)
+\providecommand{\maskC}{\chi}        % wet-cell mask (1 ocean, 0 land/floor)
+
+This chapter sets out the governing equations of the \model{} ocean
+component and, crucially, the \emph{discrete} system the code actually
+integrates. The ocean is a hydrostatic, Boussinesq, $z$-level model on a
+latitude--longitude grid at T31 resolution ($48\times96$ horizontal cells,
+$15$ vertical levels; see \code{config.py}). The reference text for the
+continuous theory is \citet{vallis2017}; for the numerical formulation and
+the design choices of $z$-coordinate ocean models we follow
+\citet{griffies2004}. Throughout, we are honest about where the
+implementation simplifies, clamps, or filters the physics: \model{} is a
+\emph{differentiable} model first, a high-fidelity GCM second, and several
+of its closures are diagnostic stand-ins for prognostic dynamics. Those
+diagnostic closures are taken up in detail in
+Chapters~\ref{chap:ch05_ocean_mixing}--\ref{chap:ch08_ocean_overturning};
+here we establish the equation set and the grid on which it lives.
+
+\section{The hydrostatic Boussinesq primitive equations}
+
+The ocean is nearly incompressible and its density varies by less than
+$3\%$ about a reference value. The Boussinesq approximation exploits this:
+density variations are neglected everywhere except in the buoyancy
+(gravity) term, and the continuity equation reduces to non-divergence of
+the velocity field. Let $\uvec=(\uu,\vv)$ be the horizontal velocity,
+$\ww$ the vertical velocity (positive up), $\pres$ the pressure, $\dens$
+the in-situ density and $\densz$ the constant reference density
+(\code{RHO\_WATER}$=1025\,\mathrm{kg\,m^{-3}}$). With $\Cor=2\Om\sin\lat$
+the Coriolis parameter, $\grav$ gravity, and $\mathbf{F}$ the frictional
+(viscous) stress, the hydrostatic primitive equations are
+\citep{vallis2017}
+\begin{align}
+  \Dt{\uvec} + \Cor\,\kvec\times\uvec
+    &= -\frac{1}{\densz}\grad_{\!h}\pres + \mathbf{F}, \label{eq:mom-h}\\
+  \pd{\pres}{z} &= -\dens\,\grav, \label{eq:hydrostatic}\\
+  \diver\uvec + \pd{\ww}{z} &= 0, \label{eq:continuity}
+\end{align}
+where $\grad_{\!h}=(\partial_x,\partial_y)$ is the horizontal gradient and
+$\mathrm{D}/\mathrm{D}t=\partial_t+\uvec\cdot\grad_{\!h}+\ww\,\partial_z$
+is the material derivative. Equation~\eqref{eq:hydrostatic} is the
+hydrostatic balance: the vertical momentum equation is replaced by the
+statement that pressure at depth is the weight of the overlying water.
+Equation~\eqref{eq:continuity} is Boussinesq continuity --- the
+three-dimensional velocity is non-divergent.
+
+\paragraph{What the code integrates instead.}
+\model{} does \emph{not} time-step the horizontal momentum
+equation~\eqref{eq:mom-h}. Instead it \emph{diagnoses} the velocity each
+ocean step from a split into a barotropic and a baroclinic part. This is a
+deliberate simplification: a prognostic-momentum core is the subject of
+Chapter~\ref{chap:ch07_ocean_prognostic_core} and is, at the time of
+writing, the model's critical-path development. The diagnostic split is
+
+\begin{align}
+  \uvec &= \uvec_{\mathrm{bt}}(\xvec) + \uvec_{\mathrm{bc}}(\xvec,z),
+  \qquad \int_{-\dep}^{0}\uvec_{\mathrm{bc}}\dd z = 0 . \label{eq:split}
+\end{align}
+
+The depth-independent (barotropic) part $\uvec_{\mathrm{bt}}$ comes from a
+Stommel streamfunction; the depth-varying (baroclinic) part
+$\uvec_{\mathrm{bc}}$ comes from thermal-wind balance.
+
+\paragraph{Barotropic flow: a Stommel streamfunction.}
+The vertically integrated, frictional, steady vorticity balance forced by
+the wind-stress curl is the classic Stommel problem \citep{stommel1961}.
+\model{} writes the depth-integrated transport as a streamfunction $\psib$,
+$\uvec_{\mathrm{bt}}=\kvec\times\grad\psib/\dep$, and solves a Poisson
+problem for it,
+\begin{equation}
+  \lap\psib = \frac{\curl_z\boldsymbol{\tau}}
+                   {\densz\,\dep\,r_{\mathrm{bt}}},
+  \qquad
+  r_{\mathrm{bt}} = \frac{1}{25\times86400\,\mathrm{s}},
+  \label{eq:stommel}
+\end{equation}
+where $\boldsymbol{\tau}=(\tau_x,\tau_y)$ is the surface wind stress,
+$\dep=\sum_k\Delta z_k$ the total depth, and $r_{\mathrm{bt}}$ a tuned
+$25$-day bottom-drag rate. The right-hand side is built with centred
+differences for the curl and the elliptic solve is an iterative
+masked Poisson solver. The geostrophic velocity then follows from finite
+differences of $\psib$.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean}: \code{curl\_tau}, \code{rhs\_psi}, \code{solve\_poisson\_2d}, and $u_{\mathrm{bt}},v_{\mathrm{bt}}$ from $\psib$}
+
+\paragraph{Baroclinic flow: thermal wind.}
+The vertical shear of the geostrophic current is set by the horizontal
+density gradient (thermal-wind balance). \model{} integrates the
+hydrostatic relation~\eqref{eq:hydrostatic} downward to get the hydrostatic
+pressure from the density anomaly $\dens'=\dens-\densz$,
+\begin{equation}
+  \pres(z) = \grav\!\int_{0}^{z}\!\dens'\dd z'
+  \;\xrightarrow{\text{discrete}}\;
+  \pres_k = \grav\sum_{j\le k}\dens'_j\,\Delta z_j , \label{eq:phydro}
+\end{equation}
+and then forms a damped-geostrophic velocity with a Rayleigh drag $r$ to
+keep the equatorial denominator finite (the Coriolis parameter $\Cor$ is
+floored at $10^{-5}\,\mathrm{s^{-1}}$ near the equator):
+\begin{equation}
+  \uu_{\mathrm{geo}} = -\frac{r\,\partial_x\pres + \Cor\,\partial_y\pres}
+                            {\densz\,(\Cor^2+r^2)},
+  \qquad
+  \vv_{\mathrm{geo}} = \frac{\Cor\,\partial_x\pres - r\,\partial_y\pres}
+                            {\densz\,(\Cor^2+r^2)} . \label{eq:thermalwind}
+\end{equation}
+The baroclinic part is the deviation of $\uvec_{\mathrm{geo}}$ from its
+wet-column vertical mean, enforcing the zero-mean constraint
+in~\eqref{eq:split} exactly per column.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean}: \code{pressure\_hydro}, \code{u\_geo/v\_geo}, \code{f\_clamped}, \code{u\_bc/v\_bc}}
+
+\begin{remark}
+A flat-bottom Stommel streamfunction laid over \emph{variable} bathymetry
+does not conserve mass column-by-column: because
+$\partial_x(\psib\dep)\ne\dep\,\partial_x\psib$, the zonally- and
+vertically-integrated meridional transport is spuriously
+$\mathcal{O}(\pm350\Sv)$ where a closed basin requires $\approx 0$.
+\model{} therefore subtracts, at each latitude, a uniform meridional
+velocity so the integrated transport vanishes
+($\code{v\_new} \mathrel{-}= \code{net\_v}/\code{area\_v}$). This is a
+first-order corrector, not a true C-grid transport streamfunction; see
+Chapter~\ref{chap:ch08_ocean_overturning}.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean}: per-latitude net-transport corrector}
+\end{remark}
+
+\paragraph{Vertical velocity from continuity.}
+Given the horizontal flow, $\ww$ is diagnosed by integrating
+\eqref{eq:continuity} upward from the rigid floor ($\ww=0$ at $z=-\dep$):
+\begin{equation}
+  \ww(z) = -\!\int_{-\dep}^{z}\!\diver\uvec\dd z'
+  \;\xrightarrow{\text{discrete}}\;
+  \ww_{k+\frac12} = -\!\!\sum_{j\ge k}(\diver\uvec)_j\,\Delta z_j .
+  \label{eq:w-continuity}
+\end{equation}
+For \emph{tracer advection} the model first projects out the depth-mean
+horizontal divergence (a rigid-lid projection) so the depth-integrated flow
+is non-divergent and $\ww=0$ at both surface and floor; this makes the
+discrete 3-D advecting flow exactly mass-conserving and prevents a spurious
+$\sim+0.25\,\mathrm{K\,yr^{-1}}$ surface-cell heat leak.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean}: \code{div\_e} rigid-lid projection, \code{w\_if}; and the diagnostic \code{w\_new}}
+
+\section{Tracer transport: potential temperature and salinity}
+
+Potential temperature $\Temp$ and salinity $\Salt$ (and a passive
+dissolved-inorganic-carbon tracer $C$) are advected by the resolved flow
+and mixed by sub-grid diffusion. The continuous tracer equation for any
+$\Temp$ is
+\begin{equation}
+  \pd{\Temp}{t}
+   = \underbrace{-\,\uvec\cdot\grad_{\!h}\Temp - \ww\,\pd{\Temp}{z}}_{\text{advection}}
+   + \underbrace{\grad_{\!h}\!\cdot(\kappa_h\grad_{\!h}\Temp)}_{\text{horizontal diffusion}}
+   + \underbrace{\pd{}{z}\!\Big(\kappa_z\,\pd{\Temp}{z}\Big)}_{\text{vertical diffusion}}
+   + \mathcal{S}_\Temp , \label{eq:tracer}
+\end{equation}
+with $\kappa_h$ the horizontal (eddy) diffusivity, $\kappa_z$ the vertical
+diffusivity, and $\mathcal{S}_\Temp$ the surface forcing applied to the top
+wet cell only. The advecting velocity used for tracers includes the
+Gent--McWilliams bolus velocity \citep{gentmcwilliams1990},
+$\uvec_{\mathrm{eff}}=\uvec+\uvec^{*}$, which parameterizes the
+adiabatic stirring by mesoscale eddies (Chapter~\ref{chap:ch05_ocean_mixing}).
+
+\paragraph{Discrete tracer step.}
+The code uses first-order \emph{upwind} horizontal advection (stable, but
+diffusive), a centred Laplacian for horizontal diffusion, an implicit-free
+centred vertical-diffusion flux, and upwind vertical advection in
+\emph{advective} form (consistent with the horizontal form, so no spurious
+compression source). The full tendency
+$\mathcal{T}(\Temp)=\text{horiz}+\text{vadv}+\text{vdiff}+\mathcal{S}$ is
+advanced with a classical fourth-order Runge--Kutta (RK4) step,
+\begin{equation}
+  \Temp^{n+1} = \Temp^{n}
+     + \frac{\Delta t}{6}\big(k_1+2k_2+2k_3+k_4\big),
+  \qquad \Delta t = 900\,\mathrm{s},
+  \label{eq:rk4}
+\end{equation}
+where the $k_i$ are tendency evaluations at the RK4 stages and
+$\Delta t=\code{DT\_OCEAN}$.
+The horizontal upwind/diffusion kernel is, schematically,
+\begin{lstlisting}[caption={Upwind advection + Laplacian diffusion (one tracer face direction).}]
+dF_dx = jnp.where(u_eff > 0, F - FW, FE - F) / dx     # upwind on sign of u
+adv   = -(u_eff * dF_dx + v_eff * dF_dy)              # advective form
+lap   = ((FE - F) + (FW - F)) / dx**2 + ((FN - F) + (FS - F)) / dy**2
+return adv + lap * diff_coef                          # diff_coef = kappa_h (interior)
+\end{lstlisting}
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean}: \code{\_horiz}, \code{\_vadv}, \code{\_vdiff}, \code{tendencies}, and the RK4 update}
+
+\begin{remark}[Honest limitations]
+Three numerical/physical caveats matter for interpretation. (i) Upwind
+advection adds implicit numerical diffusion of order $|u|\,\Delta x/2$,
+which at T31 is comparable to the explicit $\kappa_h$; sharp fronts are
+smeared. (ii) Near the poles ($|\,\text{row}\,| < 5$ from each edge) the
+horizontal diffusivity is raised to $2\times10^4\,\mathrm{m^2\,s^{-1}}$ as a
+``sponge'' (\code{diff\_coef}), and the GM coefficient is masked to zero
+there, to suppress grid-converging noise. (iii) The metric terms
+($\cos\lat$ factors of a true spherical operator) are omitted from the
+diagnostic divergence used for $\ww_{\mathrm{new}}$; the operators are
+Cartesian on the lat--lon grid. These are differentiability- and
+stability-driven trade-offs, not physical claims.
+\end{remark}
+
+\paragraph{Surface forcing.}
+Surface heat flux $Q$, freshwater flux $F_w$, and a carbon flux enter only
+the top wet cell, scaled by the layer heat capacity / thickness:
+\begin{equation}
+  \mathcal{S}_\Temp^{\,\text{sfc}} = \frac{Q}{\densz\,c_p\,\Delta z_0},
+  \qquad
+  \mathcal{S}_\Salt^{\,\text{sfc}} = -\frac{F_w\,S_{\mathrm{ref}}}{\densz\,\Delta z_0},
+  \label{eq:sfcflux}
+\end{equation}
+with $c_p=\code{CP\_WATER}=3985\,\mathrm{J\,kg^{-1}\,K^{-1}}$ and a
+virtual-salt-flux reference $S_{\mathrm{ref}}=35$. An optional subpolar
+North-Atlantic freshwater ``hosing'' term (in $\Sv$) is added to
+$\mathcal{S}_\Salt$ for AMOC experiments (Chapter~\ref{chap:ch17_amoc_tipping}).
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean}: \code{fT\_s}, \code{fS\_s}, \code{fD\_s}; the \code{.at[0].add(...)} surface injection}
+
+\paragraph{Salinity restoring, clamps, and conservation.}
+Because the model lacks a prognostic sea-ice/brine cycle and uses a
+virtual salt flux, salinity is restored and renormalized to prevent drift
+into the physics-stability clip. The code applies a strong high-latitude
+sponge (poleward of $65^\circ$, $6$-month timescale) plus a weak global
+relaxation to $S_{\mathrm{ref}}=35$ ($3$-year timescale), then hard-clips
+$\Salt\in[30,38]\,\mathrm{psu}$ and $\Temp\in[250,320]\,\mathrm{K}$, floors
+$\Temp$ at the $-1.8^\circ\mathrm{C}$ freezing point ($271.35\,\mathrm{K}$,
+a sea-ice stub), and finally shifts the volume-mean salinity back to the
+observed $34.7\,\mathrm{psu}$ each step. The mean-shift removes net drift
+without touching the spatial gradient that drives the circulation. A
+differentiable soft clip (\code{soft\_clip}, a $\tanh$ saturation) is
+available as a gradient-friendly alternative to the hard \code{jnp.clip}.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean}: sponge/global relaxation, \code{jnp.clip}, freezing floor, volume-mean renorm}
+\codref{chronos\_esm/ocean/utils.py}{\code{soft\_clip}: differentiable $\tanh$ saturation}
+
+\section{Equation of state and density}
+
+Density closes the system by linking $\dens$ to $(\Temp,\Salt)$. The real
+ocean obeys a strongly nonlinear equation of state (TEOS-10); \model{} uses
+a \emph{linear} EOS, adequate for a differentiable T31 model and easy to
+differentiate exactly:
+\begin{equation}
+  \dens(\Temp,\Salt)
+   = \densz - \alphaT\,(\Temp-\Temp_0) + \betaS\,(\Salt-\Salt_0),
+  \label{eq:eos}
+\end{equation}
+with $\densz=1025\,\mathrm{kg\,m^{-3}}$, thermal-expansion proxy
+$\alphaT=0.2$, haline-contraction proxy $\betaS=0.8$, and reference state
+$\Temp_0=283.15\,\mathrm{K}$, $\Salt_0=35$. Density is recomputed at the
+start of every ocean step (entering the thermal-wind pressure) and again at
+the end from the updated tracers.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{equation\_of\_state}}
+
+\begin{remark}
+The coefficients in~\eqref{eq:eos} are tuned tank-model values, not
+laboratory $\alpha,\beta$ (which are $\sim\!2\times10^{-4}\,\mathrm{K^{-1}}$
+and $\sim\!8\times10^{-4}\,\mathrm{psu^{-1}}$ times $\densz$). The linear
+EOS omits cabbeling and thermobaricity and the pressure dependence of
+density. For the diagnostic thermal-wind and overturning closures used here,
+only the \emph{sign and gradient} of $\dens(\Temp,\Salt)$ matter, and those
+are correct: warmer, fresher water is lighter.
+\end{remark}
+
+\section{Vertical coordinate, bathymetry, and masks}
+
+\paragraph{$z$-levels with a stretched grid.}
+\model{} is a fixed $z$-level model with $n_z=15$ levels over a
+$5000\,\mathrm{m}$ column. A uniform $\Delta z$ would make the surface layer
+$\sim\!333\,\mathrm{m}$ thick --- far too sluggish a SST response, since
+forcing enters as $Q/(\densz c_p\Delta z_0)$ (Eq.~\ref{eq:sfcflux}). Instead
+the interfaces are stretched so the surface layer is thin ($\sim\!50\,\mathrm{m}$)
+and layers thicken with depth:
+\begin{equation}
+  z_i = \dep_{\mathrm{tot}}\Big(\tfrac{i}{n_z}\Big)^{s},\quad i=0,\dots,n_z,
+  \qquad \Delta z_k = z_{k+1}-z_k,\quad s=1.7 .
+  \label{eq:zgrid}
+\end{equation}
+The layer-centre depths $z^c_k=\tfrac12(z_k+z_{k+1})$ are also the depths
+onto which the WOA18 initial conditions are interpolated, so dynamics and
+ICs stay consistent.
+\codref{chronos\_esm/config.py}{\code{\_ocean\_vertical\_grid}: \code{OCEAN\_DZ}, \code{OCEAN\_DEPTH\_CENTERS}, \code{stretch=1.7}}
+
+\paragraph{Bathymetry and the wet mask.}
+The land/sea mask is derived from where WOA18 surface temperature is valid;
+a positive-down depth field $\dep(x,y)$ is built from ETOPO bathymetry
+(block-mean coarsened, regridded, Gaussian-smoothed, capped at
+$5000\,\mathrm{m}$, floored at $500\,\mathrm{m}$ in wet cells, with isolated
+one-cell ponds removed). From $\dep(x,y)$ and the level interfaces the code
+forms a 3-D \emph{wet-cell mask} $\maskC_{k,j,i}\in\{0,1\}$ ($1$ ocean, $0$
+land or below the floor).
+\codref{chronos\_esm/data.py}{\code{load\_bathymetry\_mask}, \code{load\_ocean\_depth}, \code{load\_initial\_conditions}}
+
+\paragraph{No-flux boundary conditions via face masks.}
+Boundaries are enforced with the MITgcm \emph{hFac} rule: a cell face is
+open only if \emph{both} adjacent centres are wet. The code builds west,
+east, south, north and vertical-interface masks
+\begin{equation}
+  f^{\mathrm{E}}_{k,j,i} = \maskC_{k,j,i}\,\maskC_{k,j,i+1},\quad\dots,\quad
+  f^{\mathrm{iface}}_{k} = \maskC_{k}\,\maskC_{k+1},
+  \label{eq:facemask}
+\end{equation}
+with the polar rows ($j=0$, $j=n_y-1$) and the surface/floor interfaces
+forced closed. A closed face returns the cell's own value (zero gradient),
+so neither advection nor diffusion ever exchanges with a dry cell. The
+surface interface is closed (rigid lid: no tracer advected through the
+ocean surface), and the floor interface is closed (no flux through the sea
+bed). All masks are \emph{static}, hence safe for automatic differentiation.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean}: \code{maskC}, \code{fW/fE/fS/fN}, \code{iface}, \code{\_nbrs}; tendencies frozen on dry cells}
+
+\begin{proposition}[Discrete tracer conservation under the rigid-lid projection]
+With the depth-mean horizontal divergence projected out (so the discrete
+3-D flow $(\uvec_{\mathrm{eff}},\ww)$ is non-divergent with $\ww=0$ at
+surface and floor) and no-flux face masks, the advective-form vertical
+advection conserves the volume-weighted tracer integral
+$\sum_{k,j,i}\Temp_{k,j,i}\,\Delta z_k\,\maskC_{k,j,i}$ in the absence of
+surface forcing and restoring. The volume-mean salinity renormalization then
+removes any residual drift from the clips and upwind numerics.
+\end{proposition}
+
+\begin{table}[t]
+\centering
+\caption{Key ocean parameters and their source (T31 default; see \code{config.py} and \code{step\_ocean} defaults).}
+\begin{tabular}{lll}
+\toprule
+Symbol & Value & Where \\
+\midrule
+$\densz$ (\code{RHO\_WATER}) & $1025\,\mathrm{kg\,m^{-3}}$ & \code{config.py} \\
+$c_p$ (\code{CP\_WATER}) & $3985\,\mathrm{J\,kg^{-1}\,K^{-1}}$ & \code{config.py} \\
+$\Om$ (\code{OMEGA}) & $7.2921\times10^{-5}\,\mathrm{s^{-1}}$ & \code{config.py} \\
+$\Delta t$ (\code{DT\_OCEAN}) & $900\,\mathrm{s}$ & \code{config.py} \\
+$n_z,\;\dep_{\mathrm{tot}},\;s$ & $15,\;5000\,\mathrm{m},\;1.7$ & \code{config.py} \\
+$\kappa_h$ (interior) & $500\,\mathrm{m^2\,s^{-1}}$ & \code{step\_ocean} \code{kappa\_h} \\
+$\kappa_{\mathrm{GM}}$ & $1000\,\mathrm{m^2\,s^{-1}}$ & \code{step\_ocean} \code{kappa\_gm} \\
+$(\alphaT,\betaS)$ & $(0.2,\,0.8)$ & \code{equation\_of\_state} \\
+$r_{\mathrm{bt}}$ & $(25\,\mathrm{d})^{-1}$ & \code{step\_ocean} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section*{Summary}
+
+The \model{} ocean solves Boussinesq tracer transport
+(Eq.~\ref{eq:tracer}) for $(\Temp,\Salt,C)$ with RK4
+(Eq.~\ref{eq:rk4}), closes density with a linear EOS (Eq.~\ref{eq:eos}),
+and \emph{diagnoses} velocity from a barotropic Stommel streamfunction
+(Eq.~\ref{eq:stommel}) plus a baroclinic thermal-wind shear
+(Eq.~\ref{eq:thermalwind}), with $\ww$ from continuity
+(Eq.~\ref{eq:w-continuity}). The vertical grid is stretched $z$-levels
+(Eq.~\ref{eq:zgrid}); bathymetry, masks, and the hFac no-flux face rule
+(Eq.~\ref{eq:facemask}) impose the coastal and sea-floor boundaries. The
+mixing closures (GM, vertical diffusivity) are detailed in
+Chapter~\ref{chap:ch05_ocean_mixing}, the discrete operators and solver in
+Chapter~\ref{chap:ch06_ocean_numerics}, and the overturning closure in
+Chapter~\ref{chap:ch08_ocean_overturning}.
+
+\begin{exercise}
+Using \code{equation\_of\_state}, compute the density difference between a
+warm subtropical surface parcel ($\Temp=298\,\mathrm{K}$, $\Salt=36.5$) and
+a cold subpolar parcel ($\Temp=275\,\mathrm{K}$, $\Salt=34$). Which is
+denser, and by how much (kg\,m$^{-3}$)? Now repeat with realistic
+coefficients $\alphaT=\densz\cdot2\times10^{-4}$,
+$\betaS=\densz\cdot8\times10^{-4}$. Discuss how the model's tuned $\alpha,\beta$
+exaggerate or understate the thermal vs.\ haline control of density.
+\end{exercise}
+
+\begin{exercise}
+The surface heat-flux tendency is $Q/(\densz c_p \Delta z_0)$. Using the
+stretched-grid formula~\eqref{eq:zgrid} with $n_z=15$, $s=1.7$, compute
+$\Delta z_0$ and the SST tendency for a net flux $Q=50\,\mathrm{W\,m^{-2}}$,
+in $\mathrm{K\,day^{-1}}$. Then recompute for a \emph{uniform} grid
+($\Delta z_0=5000/15\,\mathrm{m}$). Explain quantitatively why the
+stretched grid is essential for a realistic SST response.
+\end{exercise}
+
+\begin{exercise}
+Run a short ocean integration (a few model days) and diagnose the
+zonally-and-vertically integrated meridional transport
+$\sum_{k,i} \vv\,\Delta x\,\Delta z_k\,\maskC$ at each latitude
+\emph{before} and \emph{after} the per-latitude net-transport corrector
+(comment it out to see the ``before''). Confirm the corrector removes the
+spurious $\mathcal{O}(\pm350\Sv)$ net transport. Why is a vanishing net
+meridional transport a prerequisite for a clean AMOC overturning
+(Chapter~\ref{chap:ch08_ocean_overturning})?
+\end{exercise}
+
+\begin{exercise}
+\model{} is differentiable. Treat the EOS coefficient $\alphaT$ as a control
+parameter and, using \jax{} automatic differentiation, compute the gradient
+of the global-mean SST after one ocean step with respect to $\alphaT$.
+Where in the diagnostic velocity split (Eq.~\ref{eq:split}) does $\alphaT$
+enter, and would you expect $\partial(\text{AMOC})/\partial\alphaT$ to be
+non-zero given that velocity is \emph{diagnosed}, not prognostic? Relate
+your answer to the thermal-wind pathway in Eq.~\eqref{eq:thermalwind}.
+\end{exercise}

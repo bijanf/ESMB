@@ -1,4 +1,415 @@
-\chapter{The Atmosphere: Multi-Level Spectral Dynamical Core}
-\label{chap:ch09_atmosphere_multilevel}
+\chapter{The Atmosphere: Multi-Level Spectral Dynamical Core}\label{chap:ch09_atmosphere_multilevel}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (kept minimal; not in the shared preamble) -------
+\providecommand{\sig}{\sigma}                 % vertical sigma coordinate
+\providecommand{\sigd}{\dot{\sigma}}          % vertical sigma velocity
+\providecommand{\dvg}{\delta}                 % horizontal divergence (spectral prognostic)
+\providecommand{\Tref}{\overline{T}}          % reference temperature profile T_l(sigma)
+\providecommand{\Tvar}{T'}                     % temperature variation about reference
+\providecommand{\Teq}{T_{\mathrm{eq}}}        % radiative-equilibrium temperature
+\providecommand{\qhum}{q}                      % specific humidity tracer
+\providecommand{\Lv}{L_v}                      % latent heat of vaporization
+
+The single-level barotropic atmosphere of Chapter~\ref{chap:ch10_atmosphere_singlelevel}
+has a fatal structural limitation: with no vertical degree of freedom it cannot
+support \emph{baroclinic instability}, the conversion of the equator--pole
+temperature gradient into eddy kinetic energy that builds mid-latitude storm
+tracks, the eddy-driven jet, and the surface westerlies. \model{}'s production
+atmosphere therefore replaces it with a genuine multi-level spectral
+primitive-equation dynamical core. Rather than re-implement a spectral transform
+core from scratch, \model{} wraps Google's \dino{} dycore --- the differentiable
+\jax{} spectral primitive-equation solver that underlies NeuralGCM
+\citep{kochkov2024neuralgcm} --- and supplies the column physics
+(thermal forcing, drag, and a moisture cycle) as additional explicit tendencies.
+Everything in this chapter lives in
+\codref{chronos\_esm/atmos/dino\_atmos.py}{the \code{DinoAtmosphere} wrapper class}.
+
+This is a deliberate architectural choice. The dycore handles the parts that are
+hard to get right and easy to get wrong --- the spherical-harmonic transforms,
+the semi-implicit treatment of gravity waves, and tracer advection --- while
+\model{} owns the physics that couples the atmosphere to the rest of the Earth
+system. The result is differentiable end to end, so the adjoint of an atmospheric
+trajectory can be taken with respect to forcing or initial conditions
+(Chapter~\ref{chap:ch03_differentiable}).
+
+\begin{remark}
+The standalone single-file \code{spectral.py} in the same directory
+(\codref{chronos\_esm/atmos/spectral.py}{FFT-in-$\lon$ / finite-difference-in-$\lat$
+transforms, \code{solve\_helmholtz}}) is a \emph{pseudo}-spectral hybrid written
+for the legacy single-level model and the QTCM experiments. Its header is candid:
+a full pure-\jax{} Legendre transform is ``1000+ lines,'' so it uses an exact
+zonal FFT but fourth-order finite differences in latitude. The multi-level
+atmosphere described here does \emph{not} use it; \dino{} provides true
+spherical-harmonic transforms. We mention \code{spectral.py} only to map the
+repository honestly --- its \code{solve\_helmholtz} is the building block of the
+semi-implicit scheme the legacy model never wired in.
+\end{remark}
+
+\section{Governing equations in $\sig$ coordinates}
+
+The dycore integrates the hydrostatic primitive equations on the sphere in a
+terrain-following vertical coordinate
+\begin{equation}
+  \sig \;=\; \frac{\pres}{\pres_s},
+\end{equation}
+where $\pres_s(\lon,\lat,t)$ is the surface pressure, so $\sig$ runs from $0$ at
+the model top to $1$ at the surface and the lower boundary $\sig=1$ is a
+coordinate surface even over orography \citep[Ch.~12]{vallis2017}. \model{} uses
+\code{SigmaCoordinates.equidistant(24)}: $24$ equally spaced layers of thickness
+$\Delta\sig = 1/24$, with layer centres $\sig_l$ stored in \code{self.sigma}
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{DinoAtmosphere.\_\_init\_\_},
+vertical grid}). The horizontal grid is the spectral T31 triangular truncation
+(\code{Grid.T31}, $\approx 3.75^\circ$ Gaussian nodal mesh).
+
+Following standard spectral practice, the horizontal momentum is carried not as
+$(\uu,\vv)$ but as its rotational and divergent parts --- the relative vorticity
+$\vort$ and the horizontal divergence $\dvg$:
+\begin{equation}
+  \vort \;=\; \kvec\cdot(\curl\,\uvec), \qquad
+  \dvg  \;=\; \diver\,\uvec .
+\end{equation}
+The four prognostic fields, stored as complex spherical-harmonic coefficients in
+the \dino{} \code{State} object, are
+\begin{equation}
+  \big(\;\vort,\;\dvg,\;\Tvar,\;\ln\pres_s\;\big),
+\end{equation}
+where $\Tvar = T - \Tref_l$ is the temperature \emph{variation} about a fixed
+reference profile $\Tref_l$ (the layer-mean temperatures $\approx 288$~K returned
+by \code{isothermal\_rest\_atmosphere}), and $\ln\pres_s$ is the log of surface
+pressure (carrying $\ln\pres_s$ rather than $\pres_s$ linearises the surface-
+pressure tendency and keeps $\pres_s>0$ exactly). A specific-humidity tracer
+$\qhum$ is advected alongside them. The continuous evolution is, schematically,
+\begin{align}
+  \pd{\vort}{t} &= -\,\kvec\cdot\curl\!\big(\,\text{absolute-vorticity flux}\,\big)
+                   + F_\vort, \\
+  \pd{\dvg}{t}  &= \kvec\cdot\curl(\dots) - \lap\!\Big(\tfrac{1}{2}|\uvec|^2 + \Phi\Big)
+                   + F_\dvg, \\
+  \pd{\Tvar}{t} &= -\uvec\cdot\grad T - \sigd\,\pd{T}{\sig}
+                   + \frac{\kappa T\,\omega}{\pres} + F_T, \\
+  \pd{\ln\pres_s}{t} &= -\,\frac{1}{\pres_s}\!\int_0^1 \diver(\pres_s\,\uvec)\dd\sig ,
+  \label{eq:lnps}
+\end{align}
+with geopotential $\Phi$ from hydrostatic balance, $\kappa = R_d/c_p$, vertical
+$\sig$-velocity $\sigd$ diagnosed from the continuity constraint, and
+$\omega = \Dt{\pres}$. The $F$ terms are the \model{}-supplied forcings of
+Section~\ref{sec:ch09forcing}. The exact discrete tendencies are \dino{}'s
+\code{PrimitiveEquations.explicit\_terms} and \code{implicit\_terms}; \model{}
+constructs the operator with the reference profile, the modal orography, and the
+coordinate/spec objects (\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{pe.PrimitiveEquations(...)}}).
+Diagnostic $(\uu,\vv)$ are recovered from $(\vort,\dvg)$ by inverting the
+streamfunction/velocity-potential relations inside
+\code{pe.compute\_diagnostic\_state}, which returns $\uu\cos\lat$ and $\vv\cos\lat$;
+\model{} divides by $\cos\lat$ to get physical winds
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{DinoAtmosphere.diagnostics}}).
+
+\section{The spectral transform method}
+
+The spectral method represents each horizontal field as a truncated sum of
+spherical harmonics $Y_l^m(\lat,\lon) = P_l^m(\sin\lat)\,e^{im\lon}$,
+\begin{equation}
+  f(\lon,\lat) \;=\; \sum_{m=-M}^{M}\;\sum_{l=|m|}^{L} \hat f_l^m\, Y_l^m(\lat,\lon),
+  \qquad \text{T31: } L = M = 31 .
+\end{equation}
+Two operators motivate the choice. First, horizontal derivatives are
+\emph{exact and local} in spectral space: the Laplacian is diagonal,
+\begin{equation}
+  \lap Y_l^m \;=\; -\,\frac{l(l+1)}{\Erad^2}\,Y_l^m ,
+  \label{eq:laplacian-eig}
+\end{equation}
+so the Poisson inversions needed to get $\uvec$ from $(\vort,\dvg)$ and $\Phi$
+from temperature become mere multiplications --- no iterative solver, no polar
+finite-difference singularity. Second, the nonlinear products (advection, kinetic
+energy) are cheapest to evaluate pointwise on the grid. The dycore therefore
+\emph{transforms} between the two representations every step: it computes
+derivatives spectrally, transforms to the Gaussian nodal mesh
+(\code{to\_nodal}), forms products there, and transforms back (\code{to\_modal}).
+\model{}'s physics, which is naturally pointwise (it depends on local $T$, $\qhum$,
+$\pres_s$, and the underlying SST), is computed entirely on the nodal grid and
+projected back to modal coefficients with \code{to\_modal} before being handed to
+the integrator; the vorticity/divergence parts of a velocity tendency are formed
+with the spectral operators \code{curl\_cos\_lat} and \code{div\_cos\_lat}
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{\_forcing\_explicit}, return value}).
+
+\begin{example}[Why a velocity seed must be made rotational first]
+The symmetry-breaking perturbation (Section~\ref{sec:ch09eddies}) is built as a
+random nodal velocity field $\uvec'$, multiplied by $\cos\lat$, transformed to
+modal space, and then passed through \code{curl\_cos\_lat} to extract only its
+rotational (vorticity) part:
+\begin{lstlisting}
+clu = jnp.stack([cl*amp*randn, cl*amp*randn])     # cos(lat)*(u',v')
+seed_vort = grid.curl_cos_lat(grid.to_modal(clu)) # rotational part only
+\end{lstlisting}
+The seed is injected purely into \code{vorticity}; the divergent part is
+discarded because divergent perturbations radiate away as gravity waves rather
+than projecting onto the slowly growing baroclinic mode.
+\end{example}
+
+\section{Time stepping: implicit--explicit Runge--Kutta}
+
+The primitive equations are \emph{stiff}: fast external and internal gravity waves
+($\sim 300\ \mathrm{m\,s^{-1}}$) coexist with the slow advective flow
+($\sim 10\ \mathrm{m\,s^{-1}}$). A fully explicit scheme would have to resolve the
+gravity-wave CFL with a tiny step. The dycore instead splits the right-hand side
+into the linear terms responsible for the fast waves (handled \emph{implicitly},
+where they are unconditionally stable) and the nonlinear advective/forcing terms
+(handled \emph{explicitly}). \model{} assembles this split as
+\begin{equation}
+  \dt{\mathbf{s}} \;=\; \underbrace{E(\mathbf{s})}_{\text{explicit}}
+                      \;+\; \underbrace{I(\mathbf{s})}_{\text{implicit}},
+  \qquad
+  E(\mathbf{s}) = E_{\mathrm{dyn}}(\mathbf{s}) + F(\mathbf{s}),
+\end{equation}
+where $E_{\mathrm{dyn}}$ is \code{eq.explicit\_terms}, $F$ is the \model{} forcing
+of Section~\ref{sec:ch09forcing}, $I$ is \code{eq.implicit\_terms}, and the
+implicit solve uses \code{eq.implicit\_inverse}. The integrator is the
+three-stage implicit--explicit Runge--Kutta scheme \code{imex\_rk\_sil3}
+(``semi-implicit, low-storage, 3rd order''):
+\begin{lstlisting}
+ode  = ti.ImplicitExplicitODE.from_functions(
+           explicit, eq.implicit_terms, eq.implicit_inverse)
+step = ti.step_with_filters(ti.imex_rk_sil3(ode, dt), [self.diff])
+\end{lstlisting}
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{\_run\_interval}}). The time
+step is $\Delta t = 20$~min, nondimensionalised through the dycore's unit system
+(\code{specs.nondimensionalize}); $\approx 72$ steps make a model day
+(\code{steps\_per\_day}). One ocean coupling interval calls \code{step(state, sst,
+n\_days)}, which runs $72\,n_{\text{days}}$ inner steps with the SST held fixed and
+jitted as a traced argument so the whole interval compiles once.
+
+\begin{remark}[A unit-handling foot-gun]
+All physics is done in plain \jax{} with scalar scale factors precomputed in
+\code{\_\_init\_\_} (e.g. \code{t0\_seconds}, \code{v\_scale\_ms}); no \code{pint}
+objects ever enter a jitted region. SI rates in $\mathrm{s^{-1}}$ are made
+nondimensional by multiplying by \code{t0\_seconds}. When a saved state is
+reloaded, \code{sim\_time} must be restored as \code{None}, not as the stored
+scalar: the ImEx integrator forms tendencies with \code{sim\_time=None} and adds
+them to the state by \code{tree\_map}, so a scalar clock would trigger an
+\code{array + None} mismatch on the first resumed step
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{load\_state}}).
+\end{remark}
+
+\section{Scale-selective hyperdiffusion}
+
+The truncation discards scales smaller than the grid; energy that cascades toward
+that cutoff must be removed or it piles up as grid-scale noise. \model{} applies a
+$\nabla^4$ (del$^4$, $\text{order}=2$) hyperdiffusion as a post-step filter. Using
+the Laplacian eigenvalue \eqref{eq:laplacian-eig}, mode $(l,m)$ is multiplied each
+step by a damping factor that scales like
+\begin{equation}
+  \hat f_l^m \;\longleftarrow\; \hat f_l^m \,\Big[\,1 + c\,\big(\,l(l+1)\big)^{2}\,\Big]^{-1},
+  \qquad
+  c \;\propto\; \frac{\Delta t}{\tau\,[\,L(L+1)\,]^{2}} ,
+\end{equation}
+so the very top (grid-scale) mode is damped on the chosen $e$-folding time $\tau$
+while the largest scales are left almost untouched
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{ti.horizontal\_diffusion\_step\_filter}}).
+The crucial tuning is $\tau$. \model{} sets $\tau = 6$~h, deliberately
+\emph{weaker} than the $\tau\approx 2$~h common in idealized cores. At T31 the
+baroclinic eddies live at fairly high total wavenumbers ($l\sim 10$--$15$); a
+$2$~h diffusion damps \emph{those} modes on $1$--$15$ days --- competitive with
+their $1$--$3$ day baroclinic growth --- which would suppress the eddies and with
+them the eddy momentum flux that drives the surface westerlies. At $\tau = 6$~h
+the eddies grow while grid-scale noise is still killed quickly.
+
+\begin{remark}[The opposite lesson from the single-level model]
+In the legacy single-level atmosphere
+(Chapter~\ref{chap:ch10_atmosphere_singlelevel}) eddies were \emph{spurious} and
+hyperdiffusion was kept strong to suppress them. Here eddies \emph{are} the
+physics we want, so diffusion must be weak enough to let them grow. The two
+regimes call for opposite settings; copying tuning from one to the other is a
+trap.
+\end{remark}
+
+\section{Held--Suarez forcing with an SST-slaved equilibrium}\label{sec:ch09forcing}
+
+\dino{} integrates the adiabatic, frictionless dynamics; the diabatic physics is
+\model{}'s. The thermal forcing follows the Held--Suarez benchmark
+\citep{heldsuarez1994}: a Newtonian relaxation of temperature toward a prescribed
+radiative-equilibrium field $\Teq$, plus Rayleigh drag in the boundary layer. The
+key \model{} departure is that $\Teq$ is \emph{anchored to the underlying sea
+surface temperature}, so the atmosphere responds to the ocean.
+
+\paragraph{Equilibrium temperature.} The classical Held--Suarez $\Teq$ uses a
+fixed analytic equator--pole profile $315 - 60\sin^2\lat$. \model{} keeps the
+benchmark's vertical lapse structure but replaces the surface anchor with the
+local SST $T_s$:
+\begin{equation}
+  \Teq(\lat,\sig) \;=\; \Big(\tfrac{\sig\,\pres_s}{\pres_0}\Big)^{\!\kappa}
+  \Big[\, T_s(\lat,\lon) \;-\; \Delta_z\,\ln\!\Big(\tfrac{\sig\,\pres_s}{\pres_0}\Big)\,\cos^2\lat \,\Big],
+  \qquad
+  \Teq \geq T_{\min},
+  \label{eq:teq}
+\end{equation}
+with $\pres_0 = 10^5$~Pa, the static-stability parameter $\Delta_z = 10$~K, and a
+floor $T_{\min} = 200$~K
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{\_equilibrium\_temperature}}).
+The $(\sig\pres_s/\pres_0)^\kappa$ factor converts the surface (potential)
+anchor into actual temperature on each $\sig$ level; the $\Delta_z\ln(\cdot)$ term
+sets the vertical lapse rate, tapered to the tropics by $\cos^2\lat$. Because $T_s$
+is the coupled ocean's SST, the equator--pole \emph{temperature gradient that
+drives the jet is whatever the ocean produces} --- with the honest consequence
+that a too-weak modelled SST gradient yields weaker-than-observed surface
+westerlies.
+
+\paragraph{Newtonian relaxation and drag.} The temperature and momentum forcings
+are
+\begin{align}
+  F_T \;&=\; -\,k_T(\lat,\sig)\,\big(\,T - \Teq\,\big), \label{eq:newt}\\
+  F_{\uvec} \;&=\; -\,k_v(\sig)\,\uvec, \label{eq:drag}
+\end{align}
+with Held--Suarez vertical profiles built from
+$\mathrm{cut}(\sig)=\max\!\big(0,\,(\sig-\sig_b)/(1-\sig_b)\big)$, $\sig_b=0.7$:
+\begin{equation}
+  k_T \;=\; k_a + (k_s - k_a)\,\mathrm{cut}(\sig)\,\cos^4\lat,
+  \qquad
+  k_v \;=\; k_f\,\mathrm{cut}(\sig),
+\end{equation}
+with $k_a = (40\ \mathrm{d})^{-1}$ (free-atmosphere radiative timescale),
+$k_s = (4\ \mathrm{d})^{-1}$ (faster boundary-layer relaxation), and
+$k_f = (1\ \mathrm{d})^{-1}$ (boundary-layer drag), all nondimensionalised
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{\_kt}, \code{\_kv} profiles;
+\code{\_forcing\_explicit}}). The drag acts only below $\sig_b$ (the boundary
+layer) and the strong thermal relaxation $k_s$ acts there and equatorward, exactly
+as in \citet{heldsuarez1994}.
+
+\paragraph{Moisture and the ITCZ.} On top of dry Held--Suarez, \model{} carries a
+prognostic specific-humidity tracer $\qhum$ with a surface evaporation source and a
+large-scale condensation sink. Evaporation into the lowest layer uses a bulk
+formula driven by SST and near-surface wind, capped to $1$--$25\ \mathrm{m\,s^{-1}}$:
+\begin{equation}
+  E \;=\; \rho_a\,C_E\,|\uvec_{\mathrm{sfc}}|\,\max\!\big(q_{\mathrm{sat}}(T_s) - \qhum_{\mathrm{bot}},\,0\big)
+  \quad[\mathrm{kg\,m^{-2}s^{-1}}],
+\end{equation}
+and supersaturation is rained out on a $\tau_c = 3$~h timescale, latent-heating the
+column:
+\begin{equation}
+  C \;=\; \frac{\max(\qhum - q_{\mathrm{sat}}(T),\,0)}{\tau_c},
+  \qquad
+  F_T \mathrel{+}= \frac{\Lv}{c_p}\,C,
+  \qquad
+  \pd{\qhum}{t} \mathrel{+}= E\,\frac{\grav}{\pres_s\,\Delta\sig} - C,
+\end{equation}
+with $q_{\mathrm{sat}}$ from Clausius--Clapeyron
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{\_qsat}, \code{\_forcing\_explicit}
+moisture block}). Column-integrated $C$ is reported as precipitation
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{diagnostics}}). Moisture
+converging in the tropics condenses and releases latent heat, producing an ITCZ
+that the dry single-level model could never represent.
+
+\begin{remark}[Conservation fixers]
+Two pragmatic fixes keep long runs honest. (i) Surface pressure is rescaled every
+interval to conserve the initial global-mean dry mass; without it, Gibbs ripples
+from spectrally representing orography leak $\sim 0.3$~hPa/day
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{\_fix\_mass}}). (ii) The ETOPO
+orography is Gaussian-smoothed before use, because raw T31 topography has sharp
+gradients that produced a $\sim 1.8$~hPa/day mass drift through those ripples.
+Reported MSLP reduces $\pres_s$ to mean sea level with a fixed standard-atmosphere
+scale height, so it is noise-free and comparable to ERA5.
+\end{remark}
+
+\section{How the jet and storm tracks emerge}\label{sec:ch09eddies}
+
+The point of going multi-level is that the mid-latitude circulation is now
+\emph{earned}, not prescribed. The SST-anchored $\Teq$ \eqref{eq:teq} sets up an
+equator--pole temperature gradient; thermal-wind balance turns that gradient into
+a westerly jet with vertical shear; the sheared, stratified flow is
+baroclinically unstable; the growing eddies flux momentum into the jet core and
+heat poleward, and their surface signature is the trade-easterly /
+mid-latitude-westerly / polar-easterly tripole. None of this is imposed --- it is
+the saturation of baroclinic instability, exactly the textbook life cycle
+\citep[Ch.~9, 12]{vallis2017}.
+
+Getting there in finite wall-clock time needed two non-obvious choices.
+
+\paragraph{(1) Initialise near radiative equilibrium.} \dino{}'s
+\code{isothermal\_rest\_atmosphere} is an isothermal fluid at rest --- and
+\emph{exactly} zonally symmetric. \model{} instead initialises the temperature
+field at the SST-anchored $\Teq$ so the baroclinic jet exists from day~0 rather
+than taking $\sim 2$ months to build through the slow $40$-day thermal relaxation
+(\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{initial\_state}}).
+
+\paragraph{(2) Break zonal symmetry with a \emph{rotational} seed.} An exactly
+axisymmetric state is an unstable equilibrium the flow never leaves on its own ---
+only floating-point roundoff breaks it, and only after $\sim 100$ days. Without an
+asymmetric seed \emph{no} baroclinic eddies form, there is no eddy
+momentum-flux convergence, and the surface stays easterly everywhere (the $u_{\mathrm{sfc}}$
+pattern correlation against ERA5 is $\sim 0$). \model{} adds a small random
+\emph{vorticity} perturbation ($\approx 2\ \mathrm{m\,s^{-1}}$ amplitude). It must
+be rotational, not thermal: a temperature perturbation is simply relaxed away by
+$F_T$ before it can grow, whereas a rotational seed projects directly onto the
+growing baroclinic mode (\codref{chronos\_esm/atmos/dino\_atmos.py}{\code{\_\_init\_\_},
+\code{seed\_vort} via \code{curl\_cos\_lat}}). With (1), (2), and the weak $6$~h
+diffusion, eddies, storm tracks, and surface westerlies appear in $\sim 2$--$3$
+weeks instead of $\sim 2$--$3$ months. The validated dry-core spin-up
+(\codref{experiments/dino\_held\_suarez.py}{Phase-1 Held--Suarez verification})
+reproduces the textbook twin $\sim 22\ \mathrm{m\,s^{-1}}$ upper-tropospheric
+midlatitude jets with surface trades.
+
+\begin{proposition}[The surface westerlies are eddy-driven]
+In a statistically steady, zonally averaged state the surface zonal-momentum
+budget below the boundary layer balances the eddy momentum-flux convergence
+against surface drag,
+\begin{equation}
+  -\,\frac{1}{\Erad\cos^2\lat}\,\pd{}{\lat}\big(\overline{u'v'}\cos^2\lat\big)
+  \;\approx\; k_v\,\overline{\uu}_{\mathrm{sfc}} .
+\end{equation}
+Hence $\overline{\uu}_{\mathrm{sfc}}>0$ (westerly) requires a convergence of eddy
+momentum flux at that latitude. With the rotational seed switched off
+(\code{seed\_wind\_ms=0}) the eddies vanish, $\overline{u'v'}\to 0$, and the
+surface westerlies collapse to easterlies everywhere --- the failure mode the seed
+was introduced to cure.
+\end{proposition}
+
+\section{Status and honest limitations}
+
+The dino atmosphere is the validated control-run path through the standalone
+harness \codref{experiments/run\_dino\_coupled.py}{checkpointing/resumable
+control harness}, \emph{not yet} the path inside \code{main.py:step\_coupled}; the
+single-level atmosphere of Chapter~\ref{chap:ch10_atmosphere_singlelevel} is still
+the coupled default. Two honest caveats carry into the validation chapters
+(\ref{chap:ch16_climatology}, \ref{chap:ch18_jets_stormtracks}). First, the
+surface wind and pressure \emph{pattern} are only as good as the SST gradient the
+T31 ocean supplies; a weak modelled gradient yields weaker westerlies than ERA5,
+a limitation of the \emph{coupling}, not the dycore. Second, resume restores the
+prognostic modal state exactly but recomputes diagnostic fields, so a restarted
+run is state-complete but not bit-reproducible ($\sim 0.03$~K/week drift,
+negligible). The ITCZ, by contrast, is a clear win over the single-level model:
+moisture convergence makes it rain at the equator rather than in the subtropics.
+
+\begin{exercise}[Switch off the symmetry-breaking seed]
+Construct \code{DinoAtmosphere(seed\_wind\_ms=0.0)} and a second instance with the
+default $2\ \mathrm{m\,s^{-1}}$ seed. Spin both up for $60$ days at a fixed
+Earth-like SST and plot the zonal-mean surface zonal wind
+$\overline{\uu}_{\mathrm{sfc}}(\lat)$ from \code{diagnostics}. Confirm that the
+seed-free run has easterlies at all latitudes while the seeded run develops
+mid-latitude westerlies. Relate the difference to the eddy momentum-flux budget of
+the proposition above.
+\end{exercise}
+
+\begin{exercise}[The diffusion timescale controls the eddies]
+Re-run a $60$-day spin-up at $\tau \in \{2,4,6,12\}$~h
+(\code{diffusion\_tau\_hours}). For each, measure eddy kinetic energy
+$\tfrac{1}{2}\,\overline{(u'^2+v'^2)}$ at $\sim 45^\circ$ and the peak surface
+westerly. Show that $\tau=2$~h damps the eddies and weakens the westerlies, and
+explain why this is the \emph{opposite} of the correct setting for the
+single-level model.
+\end{exercise}
+
+\begin{exercise}[SST gradient sets the jet]
+Replace the default SST $T_s = 300 - 40\sin^2\lat$ with a weaker gradient
+$300 - 20\sin^2\lat$ and a stronger one $300 - 60\sin^2\lat$, passing each to
+\code{initial\_state} and \code{step}. Using thermal-wind balance, predict how the
+upper-tropospheric jet speed should change, then verify against the model's
+$\overline{\uu}(\lat,\sig)$. Use this to argue why a cold-biased tropical SST in
+the coupled run (a known \model{} bias) weakens the simulated westerlies.
+\end{exercise}
+
+\begin{exercise}[Differentiable sensitivity of the jet]
+Because the whole trajectory is \jax{}-differentiable
+(Chapter~\ref{chap:ch03_differentiable}), use \code{jax.grad} to compute the
+sensitivity of a $30$-day-mean jet-speed diagnostic to the static-stability
+parameter $\Delta_z$ (\code{dThz}) in \eqref{eq:teq}. Compare the adjoint gradient
+against a finite-difference estimate and comment on what the sign of
+$\partial(\text{jet})/\partial\Delta_z$ tells you about the static-stability
+control of baroclinicity.
+\end{exercise}

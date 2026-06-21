@@ -1,4 +1,374 @@
 \chapter{Differentiable Applications: Calibration, Sensitivity, Data Assimilation}
 \label{chap:ch15_differentiable_applications}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal; not in the shared preamble) ---
+\providecommand{\Jcost}{\mathcal{J}}          % cost / objective functional
+\providecommand{\dST}{\Delta S}               % subpolar-minus-subtropical salinity contrast
+\providecommand{\Fcrit}{F_{\mathrm{crit}}}    % saddle-node freshwater flux
+\providecommand{\param}{\boldsymbol{\theta}}  % parameter vector
+
+The defining feature of \model{} is that every prognostic step --- ocean tracer
+advection, the \dino{} spectral atmosphere, the bulk flux coupler, the
+overturning closure --- is written as a composition of \jax{} primitives, so the
+\emph{entire} coupled trajectory is a differentiable function of its inputs
+\citep{jax2018}. Chapters \ref{chap:ch03_differentiable}--\ref{chap:ch14_forcing_response}
+built this machine; this chapter shows what the derivatives are \emph{for}. We
+treat four concrete uses --- gradient-based parameter calibration, sensitivity
+maps, four-dimensional variational data assimilation (4D-Var), and the calibration
+of a tipping point --- and we are deliberately honest about the one place where
+naive backpropagation \emph{fails}: a bifurcation is non-smooth, and the gradient
+through a long integration that crosses it diverges. The remedy, fold
+continuation by implicit differentiation, closes the chapter and forward-references
+the AMOC tipping study of Chapter \ref{chap:ch17_amoc_tipping}.
+
+\section{The differentiable model as a function}
+
+Write the coupled step (Chapter \ref{chap:ch13_coupler_fluxes}) as a map
+$\mathbf{x}_{n+1} = \mathcal{M}(\mathbf{x}_n;\param)$, where $\mathbf{x}$ is the
+state pytree (ocean \code{OceanState}, \dino{} modal \code{pe.State}, land, ice)
+and $\param$ collects tunable parameters. The forward model over $N$ coupling
+intervals is the composition $\mathcal{M}^{N}$. A scalar objective
+$\Jcost(\mathbf{x}_0,\param)$ --- a misfit to observations, a climatology error,
+or a target diagnostic --- is therefore an ordinary differentiable function, and
+\jax{} returns its exact gradient by reverse-mode AD (the adjoint):
+\begin{equation}
+  \nabla_{\param}\Jcost
+  \;=\; \code{jax.grad}(\Jcost)(\param),
+  \qquad
+  \nabla_{\mathbf{x}_0}\Jcost
+  \;=\; \code{jax.grad}(\Jcost,\,\mathrm{argnums}{=}0)(\mathbf{x}_0).
+  \label{eq:adgrad}
+\end{equation}
+This is not a finite-difference estimate: it is the analytic derivative of the
+discrete program, accurate to floating point. The coupled step is built so this
+works in practice. Each interval is
+\codref{chronos\_esm/coupler/dino\_step.py}{\code{DinoCoupledModel.\_advance}: SST
+$\to$ regrid $\to$ \dino{} interval $\to$ flux coupler $\to$ ocean \code{scan}},
+and the differentiable variant \code{step()} wraps both the atmosphere interval
+and the inner ocean sub-stepping in \code{jax.checkpoint} (rematerialisation) so
+the reverse pass stores only interval-boundary states and recomputes the rest:
+\begin{equation}
+  \underbrace{\text{store every step}}_{\text{memory }\mathcal{O}(N_{\mathrm{sub}})}
+  \;\longrightarrow\;
+  \underbrace{\text{store boundaries, recompute}}_{\text{memory }\mathcal{O}(1),\ \text{cost }\times 2}.
+  \label{eq:remat}
+\end{equation}
+The two code paths are intentionally split: \code{step\_fast} is one fused
+\code{jit} program with \emph{no} remat (used for forward control/forced runs,
+$\sim 10\times$ faster), while \code{step} carries the remat for gradients and DA.
+
+\begin{remark}
+Reverse mode costs $\mathcal{O}(1)$ adjoints regardless of the number of
+parameters, so it is the right tool for high-dimensional control vectors (an
+initial-condition field, a 3-D flux correction). For a handful of scalar
+parameters, forward-mode (\code{jax.jvp}) or even central differences are
+competitive and easier to validate against.
+\end{remark}
+
+\section{Gradient-based parameter calibration}
+
+Calibration tunes $\param$ so the model reproduces data. The classical
+approach perturbs each parameter and reruns; with $P$ parameters this is
+$P{+}1$ runs per gradient step. Differentiability collapses that to \emph{one}
+run plus one adjoint, \emph{independent of $P$}. Given targets
+$\mathbf{y}_k$ (e.g.\ WOA18 SST/SSS, ERA5 winds) sampled by an observation
+operator $\mathcal{H}$, minimise
+\begin{equation}
+  \Jcost(\param)
+  = \sum_k \big\lVert \mathcal{H}\big(\mathcal{M}^{k}(\mathbf{x}_0;\param)\big)
+      - \mathbf{y}_k \big\rVert^{2}_{\mathbf{R}^{-1}}
+  \;+\; \tfrac12\,\lVert \param - \param_b\rVert^{2}_{\mathbf{B}^{-1}},
+  \label{eq:calib}
+\end{equation}
+with $\mathbf{R}$ the observation-error covariance and the second term a
+background (prior) regulariser around $\param_b$ with covariance $\mathbf{B}$.
+Any \jax{}-compatible optimiser (L-BFGS, Adam) then iterates
+$\param \leftarrow \param - \alpha\,\nabla_{\param}\Jcost$ using
+\eqref{eq:adgrad}. Natural targets in \model{} are the eddy-diffusivity
+$\kappa_{\mathrm{GM}}$ \citep{gentmcwilliams1990}, the bulk drag coefficient,
+hyperdiffusion coefficients, and the overturning closure constants
+($\code{thc\_k\_vel}$, $\code{thc\_haline\_gain}$) threaded through
+\code{\_advance}.
+
+\begin{remark}[Gradient hygiene over long windows]
+The adjoint of a chaotic trajectory has a Lyapunov-amplified component: the
+gradient is correct for the \emph{discrete} cost, but its variance grows with
+window length and it stops being a useful descent direction for a
+\emph{climatological} target. Keep calibration windows short (days--weeks for the
+atmosphere), or target time-mean / low-frequency statistics, or use the
+steady-state route of \S\ref{sec:fold}. This is the same caveat that motivates
+fold continuation below.
+\end{remark}
+
+\section{Sensitivity maps}
+
+A sensitivity map is the spatial gradient field of a scalar diagnostic with
+respect to a field-valued input --- exactly the by-product of one adjoint.
+Let $J$ be, say, the AMOC strength at $26.5^\circ$N (Chapter
+\ref{chap:ch08_ocean_overturning}) and let the input be the surface freshwater
+flux $F(\lat,\lon)$. Then
+\begin{equation}
+  \frac{\delta J}{\delta F(\lat,\lon)}
+  = \big[\code{jax.grad}(J)(F)\big](\lat,\lon)
+  \label{eq:sensmap}
+\end{equation}
+is a 2-D field telling you \emph{where} a unit of freshwater most weakens (or
+strengthens) the overturning. One reverse pass yields the sensitivity to every
+grid point at once --- the property that makes adjoint sensitivity the workhorse
+of ocean state estimation. Because the barotropic streamfunction solve sits
+inside the ocean step, these maps propagate through an \emph{implicit} linear
+solve; the next section explains why that is differentiable for free.
+
+\subsection*{Differentiating through the elliptic solve}
+
+The ocean streamfunction is obtained by solving a variable-coefficient elliptic
+problem (Chapter \ref{chap:ch07_ocean_prognostic_core}),
+\begin{equation}
+  \diver\!\big(\kappa\,\grad\psib\big) = \vort,
+  \qquad \kappa = 1/\dep,
+  \label{eq:elliptic}
+\end{equation}
+on the sphere, discretised in symmetric face-conductance form so the operator is
+SPD and solved by a custom conjugate-gradient (CG) iteration,
+\codref{chronos\_esm/ocean/solver.py}{\code{solve\_elliptic\_varcoef\_sphere} /
+\code{solve\_cg}}. Two design choices make \eqref{eq:elliptic} differentiable.
+First, the CG loop uses \code{jax.lax.scan} for a \emph{fixed} \code{max\_iter}
+with a \code{jnp.where} that turns converged steps into no-ops --- a
+\code{while\_loop} would not be reverse-differentiable:
+\begin{equation}
+  \mathbf{x}^{(i+1)} =
+  \begin{cases}
+    \mathbf{x}^{(i)}, & r^{(i)} \le \mathrm{tol}\cdot\lVert b\rVert \quad(\text{no-op}),\\[2pt]
+    \mathbf{x}^{(i)} + \alpha_i\,\mathbf{p}^{(i)}, & \text{otherwise},
+  \end{cases}
+  \qquad
+  \alpha_i = \frac{\mathbf{r}^{(i)\!\top}\mathbf{z}^{(i)}}{\mathbf{p}^{(i)\!\top}A\mathbf{p}^{(i)}}.
+  \label{eq:cgstep}
+\end{equation}
+Second, the operator pins $\psib=0$ on land via an identity row
+($A_{ii}=1$ there) rather than masking faces, which would make $A$ singular and
+the CG diverge --- a Dirichlet ($\psib=0$) coastline is the correct
+streamfunction boundary condition. Because the solution satisfies $A\psib=b$
+with $A,b$ depending on $\param$, the adjoint of the solve is itself a solve of
+$A^{\top}\boldsymbol{\lambda}=\partial J/\partial\psib$; AD through the unrolled
+\code{scan} computes this automatically (a small floor \code{1e-12} guards the
+Jacobi preconditioner and the $\alpha_i$ denominator against division by zero).
+
+\section{Variational data assimilation (4D-Var) on the atmosphere}
+
+4D-Var seeks the initial state $\mathbf{x}_0$ that best fits a window of
+observations subject to the model dynamics as a strong constraint. With the
+\dino{} atmosphere as the active dynamical core
+(\codref{chronos\_esm/coupler/dino\_step.py}{\code{DinoCoupledModel.step}, the
+remat'd differentiable interval}), the standard incremental cost is
+\begin{equation}
+  \Jcost(\mathbf{x}_0) =
+  \tfrac12 \lVert \mathbf{x}_0 - \mathbf{x}_b \rVert^{2}_{\mathbf{B}^{-1}}
+  + \tfrac12 \sum_{k=0}^{K}
+    \big\lVert \mathcal{H}_k\!\big(\mathcal{M}^{k}(\mathbf{x}_0)\big) - \mathbf{y}_k
+    \big\rVert^{2}_{\mathbf{R}_k^{-1}},
+  \label{eq:4dvar}
+\end{equation}
+with $\mathbf{x}_b$ the background, $\mathbf{B},\mathbf{R}_k$ the background and
+observation error covariances. The control variable is the modal \dino{} state
+(vorticity / divergence / temperature variation / log-surface-pressure), which is
+a registered \jax{} pytree and therefore a legal argument to \code{jax.grad}. The
+gradient
+\begin{equation}
+  \nabla_{\mathbf{x}_0}\Jcost
+  = \mathbf{B}^{-1}(\mathbf{x}_0-\mathbf{x}_b)
+  + \sum_k \mathbf{M}_k^{\top}\,\mathbf{H}_k^{\top}\,\mathbf{R}_k^{-1}
+    \big(\mathcal{H}_k(\mathbf{x}_k)-\mathbf{y}_k\big)
+  \label{eq:4dvargrad}
+\end{equation}
+involves the tangent-linear $\mathbf{M}_k=\partial\mathcal{M}^{k}/\partial\mathbf{x}_0$
+and its adjoint $\mathbf{M}_k^{\top}$ --- in a hand-coded DA system these are
+thousands of lines of separately maintained code that must be re-validated every
+time the forward model changes. Here they are \emph{generated} by reverse-mode AD
+of the same forward step, so they can never drift out of sync with the model.
+\begin{example}[A minimal atmospheric 4D-Var]
+Build the model once, then minimise \eqref{eq:4dvar} over a short window:
+\begin{lstlisting}[style=chronos]
+model = DinoCoupledModel()                  # dino atmosphere active
+def J(atmos0):
+    st = state0._replace(atmos=atmos0)
+    miss = 0.0
+    for k in range(K):
+        st = model.step(st, interval=0.25)  # 6-h slot, remat'd
+        miss += loss(model.diagnostics_lin(st), y[k])
+    return Jb(atmos0) + miss
+g = jax.grad(J)(state0.atmos)               # adjoint of the whole window
+\end{lstlisting}
+The atmosphere is the cleanest 4D-Var target in \model{}: short windows, a
+genuine multi-level dynamical core, and well-behaved tangent linearity over a few
+days. Ocean and fully coupled DA are gated by the slower, stiffer ocean adjoint
+and are out of scope here.
+\end{example}
+
+\section{Bifurcations are non-smooth: calibrate the fold, not the run}
+\label{sec:fold}
+
+The applications above all assume the objective is a smooth function of the
+trajectory. A \emph{tipping point} breaks that assumption. The AMOC `on'/`off'
+collapse is a saddle-node (fold) bifurcation \citep{stommel1961,rahmstorf2005}:
+as a control parameter --- here the North-Atlantic freshwater (hosing) flux $F$
+--- crosses a critical value $\Fcrit$, the stable on-state \emph{ceases to exist}
+and the system jumps to the off-state. Two facts make
+``$\code{jax.grad}$ through a 200-year hosing sweep'' the wrong tool:
+\begin{enumerate}
+  \item the trajectory sensitivity $\partial\mathbf{x}/\partial F$
+        \emph{diverges} as $F\to\Fcrit$ (the linearisation has a zero eigenvalue
+        at the fold), so the backpropagated gradient blows up exactly where you
+        need it;
+  \item even away from the fold you would differentiate through hundreds of model
+        years and a discrete collapse event --- expensive and dominated by the
+        chaotic tail of \S3.
+\end{enumerate}
+The rigorous differentiable handle on a fold is \emph{continuation}: implicitly
+differentiate the joint conditions that \emph{define} the fold rather than
+backpropagating a trajectory.
+
+\subsection*{The reduced box and its fold}
+
+\model{}'s overturning closure
+(\codref{chronos\_esm/ocean/overturning.py}{\code{thc\_overturning\_velocity}})
+sets the AMOC amplitude from an Atlantic upper-ocean density contrast through a
+$\softplus$ rectifier,
+\begin{equation}
+  A \;=\; C_{\mathrm{eff}}\,k_{\mathrm{rel}}\,
+          \softplus\!\Big(\frac{\Delta\dens + (\gamma-1)\,\beta_S\,\dST}{\delta\rho}\Big),
+  \qquad
+  \softplus(z)=\log(1+e^z),
+  \label{eq:amocclosure}
+\end{equation}
+where $\Delta\dens$ is the thermal density contrast, $\dST$ the subpolar-minus-
+subtropical salinity contrast, $\gamma=\code{haline\_gain}$ amplifies the haline
+feedback, $\beta_S=0.78\ \mathrm{kg\,m^{-3}\,psu^{-1}}$, $\delta\rho=0.1$, and
+$k_{\mathrm{rel}}=k_{\mathrm{vel}}/10^{-4}$. The calibration script
+\codref{experiments/calibrate\_amoc\_fold.py}{\code{amoc} / \code{fcrit} /
+\code{newton\_invert}} recognises that, with a salt-advection feedback, this
+closure \emph{is} a Stommel two-box model. Reducing to the salinity contrast
+$s\equiv\dST$ with thermal contrast held fixed,
+\begin{align}
+  \dt{s} &= -\kappa F \;+\; \mu\,A(s)\,(-s), \label{eq:boxode}\\
+  A(s)   &= C_{\mathrm{eff}}\,k_{\mathrm{rel}}\,
+            \softplus\!\Big(\frac{\rho_T + \gamma\,\beta_S\,s}{\delta\rho}\Big),
+            \label{eq:boxamoc}
+\end{align}
+where hosing $F$ freshens the box ($-\kappa F$) and the overturning imports salt
+at a rate $\propto A(s)(-s)$ (advective feedback: a stronger AMOC carries more
+salt poleward, deepening the contrast). The steady on-state balances these,
+$\kappa F = \mu A(s)(-s) =: R(s)$, and since $R(s)\to0$ as $s\to0^-$ and as
+$s\to-\infty$, $R$ has an interior maximum. That maximum is the fold:
+\begin{equation}
+  \boxed{\;\Fcrit(\param)\;=\;\max_{s}\;\frac{R(s)}{\kappa}
+        \;=\;\frac{\mu}{\kappa}\,\max_{s}\,A(s)\,(-s)\;}
+  \label{eq:fcrit}
+\end{equation}
+For $F>\Fcrit$ no steady on-state exists: the saddle and node have annihilated.
+
+\subsection*{Why AD of the fold is exact: the envelope theorem}
+
+The key step is that $\Fcrit$ is itself a \emph{maximum} over the internal
+coordinate $s$. By the envelope theorem, the parameter-derivative of a maximised
+function equals the partial derivative at the optimum, with the
+$\partial(\cdot)/\partial s\cdot\dd s^\star/\dd\param$ term vanishing because
+$\partial R/\partial s=0$ there (that vanishing condition is exactly the fold's
+zero-eigenvalue condition):
+\begin{equation}
+  \frac{\dd \Fcrit}{\dd \param}
+  = \left.\frac{1}{\kappa}\,\pd{R}{\param}\right|_{s=s^\star(\param)} .
+  \label{eq:envelope}
+\end{equation}
+So differentiating the \emph{discretised} $\max$ over a fixed grid $\_S\_GRID$
+($s\in[-3,-0.02]$, $4000$ points; \code{jnp.max} after a \code{vmap}) gives the
+correct fold gradient to machine precision --- no integration, no divergence, one
+\code{jax.grad}. The script then \emph{inverts}: given a target $\Fcrit$ (default
+$0.6\Sv$), Newton's method on \eqref{eq:fcrit} with an AD-supplied derivative
+solves for the parameter (here \code{haline\_gain}) that places the fold there,
+\begin{equation}
+  \gamma^{(i+1)} = \gamma^{(i)}
+   - \frac{\Fcrit(\gamma^{(i)}) - \Fcrit^{\mathrm{target}}}
+          {\dd\Fcrit/\dd\gamma\big|_{\gamma^{(i)}}},
+  \label{eq:newton}
+\end{equation}
+\codref{experiments/calibrate\_amoc\_fold.py}{\code{newton\_invert}: 15 AD-Newton
+iterations}. The two lumped box constants $C_{\mathrm{eff}}$ and $\mu/\kappa$ are
+first fitted to GCM anchors --- the on-state AMOC at $F{=}0$ fixes
+$C_{\mathrm{eff}}$, a near-marginal hosing run fixes $\mu/\kappa$ --- read from
+saved hysteresis sweeps (\code{\_load\_anchors}). One confirmatory full GCM hosing
+run then validates the predicted $\Fcrit$, replacing an entire multi-job parameter
+grid with a single run.
+
+\begin{remark}[Honest scope]
+The reduction \eqref{eq:boxode}--\eqref{eq:boxamoc} is a \emph{caricature}: a
+single salinity contrast, fixed thermal contrast, lumped constants. Its value is
+that it shares the \emph{functional form} \eqref{eq:amocclosure} of the GCM
+closure, so the fold it predicts is a calibrated \emph{guess} for where the full
+model tips --- not a substitute for the full hysteresis experiment. The
+envelope-theorem gradient is exact for the box; whether the box's $\Fcrit$
+matches the GCM's is an empirical question answered by the confirmatory run.
+Chapter \ref{chap:ch17_amoc_tipping} carries this through to the full coupled
+hysteresis and its interpretation.
+\end{remark}
+
+\begin{remark}[$\softplus$ as a differentiable rectifier]
+A hard threshold $\max(0,\cdot)$ on the density contrast would give a
+non-differentiable (and, with a hard on/off, a genuinely discontinuous)
+overturning. The $\softplus$ in \eqref{eq:amocclosure} is a smooth surrogate:
+positive and $C^\infty$, with $\softplus(z)\approx z$ for $z\gg0$ and
+$\softplus(z)\approx e^{z}\to 0$ for $z\ll0$. It keeps the closure
+differentiable everywhere \emph{within} a branch; the non-smoothness that matters
+is the fold \eqref{eq:fcrit} between branches, which is why it needs continuation,
+not a smoother rectifier.
+\end{remark}
+
+\section*{Summary}
+
+Differentiability turns calibration from a parameter grid into a gradient
+descent, turns sensitivity studies into a single adjoint, and supplies the
+tangent-linear and adjoint operators of 4D-Var for free
+\citep{jax2018,kochkov2024neuralgcm}. The one structural caveat is the
+bifurcation: backpropagation through a trajectory that crosses a fold diverges,
+and the correct differentiable object is the fold condition itself, handled by
+implicit differentiation and the envelope theorem on a reduced box. The same
+adjoint that makes the smooth applications cheap is what forces this distinction
+to be made explicit.
+
+\begin{exercise}[Sensitivity to the drag coefficient]
+Using \code{DinoCoupledModel.step}, define $J$ as the global-mean kinetic energy
+of the surface ocean after a 30-day integration and compute
+$\partial J/\partial C_d$ with \code{jax.grad}. Verify the AD gradient against a
+central finite difference $\big(J(C_d{+}\epsilon)-J(C_d{-}\epsilon)\big)/2\epsilon$
+for $\epsilon=10^{-3}$. Explain any disagreement in terms of the remat path and
+the CG tolerance in \code{solve\_cg}.
+\end{exercise}
+
+\begin{exercise}[Freshwater sensitivity map]
+Take $J$ = AMOC at $26.5^\circ$N (Chapter \ref{chap:ch08_ocean_overturning}) and
+compute the field $\delta J/\delta F(\lat,\lon)$ via \eqref{eq:sensmap} over a
+5-year window. Where is the AMOC most sensitive to freshwater forcing? Compare
+the location of the maximum-magnitude sensitivity with the subpolar
+North-Atlantic deep-water-formation region implied by the convection layer in
+\code{thc\_overturning\_velocity}.
+\end{exercise}
+
+\begin{exercise}[Reproduce the fold calibration]
+Run \code{python experiments/calibrate\_amoc\_fold.py --target 0.6}. (i) From the
+printed $\Fcrit$ table over $(\code{haline\_gain},k_{\mathrm{vel}})$, confirm that
+$\Fcrit$ increases with the haline gain and decreases with $k_{\mathrm{vel}}$, and
+explain both signs from \eqref{eq:fcrit}. (ii) Re-derive the AD gradient
+$\dd\Fcrit/\dd\gamma$ at the solution using \eqref{eq:envelope} and check it
+against the script's value. (iii) Why does refining \code{\_S\_GRID} from 4000 to
+40\,000 points barely change $\Fcrit$, whereas \emph{shrinking} its range to
+exclude $s^\star$ corrupts it?
+\end{exercise}
+
+\begin{exercise}[Why not backprop the sweep?]
+Argue quantitatively that $\partial(\text{AMOC}_{26.5})/\partial F$ from a
+hosing-sweep adjoint must diverge as $F\to\Fcrit^-$. Relate the divergence to the
+zero eigenvalue of the steady-state Jacobian at the fold, and contrast with the
+\emph{finite} envelope-theorem derivative \eqref{eq:envelope}. What does this
+imply for the variance of a 4D-Var gradient \eqref{eq:4dvargrad} computed over a
+window that straddles a tipping event?
+\end{exercise}
