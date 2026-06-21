@@ -180,6 +180,59 @@ def test_sphere_elliptic_differentiable():
     assert np.isfinite(float(g)) and abs(float(g)) > 0, f"d|psi|/d(coef)={float(g)}"
 
 
+OMEGA = 7.292e-5
+
+
+def _run_gyre_sphere(tau0, ny=44, nx=40):
+    """Mid-latitude sector basin (15-60N, 0-60E), closed by land walls."""
+    lat = np.deg2rad(np.linspace(15.0, 60.0, ny))
+    dlat = float(lat[1] - lat[0])
+    lon = np.deg2rad(np.linspace(0.0, 60.0, nx))
+    dlon = float(lon[1] - lon[0])
+    m = np.ones((ny, nx)); m[0, :] = m[-1, :] = m[:, 0] = m[:, -1] = 0.0
+    mask = jnp.asarray(m)
+    lat_j = jnp.asarray(lat)
+    rho0, H, r = 1025.0, 4000.0, 6.0e-6
+    lat0, lat1 = lat[0], lat[-1]
+    taux = (-tau0 * jnp.cos(np.pi * (lat_j - lat0) / (lat1 - lat0)))[:, None] * jnp.ones((ny, nx))
+    tauy = jnp.zeros((ny, nx))
+    curl = bt.wind_stress_curl_sphere(taux, tauy, lat_j, dlon, dlat, A_EARTH)
+    F = (curl / (rho0 * H)) * mask
+    psi, zeta = bt.spin_up_gyre_sphere(F, lat=lat_j, dlon=dlon, dlat=dlat, a=A_EARTH,
+                                       omega=OMEGA, dt=1500.0, r=r, mask=mask,
+                                       coef=jnp.ones((ny, nx)), n_steps=800, max_iter=150)
+    return psi, F, mask, lat_j, dlon, dlat
+
+
+def test_stommel_gyre_sphere():
+    psi, F, mask, lat_j, dlon, dlat = _run_gyre_sphere(0.1)
+    psi = np.asarray(psi)
+    assert np.all(np.isfinite(psi)), "spherical gyre psi not finite"
+    ny, nx = psi.shape
+
+    # western intensification: meridional jet |v| peaks near the west wall
+    _, v = bt.velocities_sphere(jnp.asarray(psi), lat_j, dlon, dlat, A_EARTH, mask)
+    v = np.asarray(v)
+    midrows = slice(ny // 3, 2 * ny // 3)
+    jet_col = int(np.argmax(np.abs(v[midrows, :]).mean(axis=0)))
+    assert jet_col < nx // 3, f"jet at col {jet_col}/{nx} -- not western-intensified"
+
+    # Sverdrup interior: v ~ F/beta away from the western boundary layer
+    beta = (2.0 * OMEGA * np.cos(np.asarray(lat_j)) / A_EARTH)[:, None]
+    pred = np.asarray(F) / beta
+    interior = (slice(ny // 3, 2 * ny // 3), slice(nx // 2, nx - 3))
+    rel = np.abs(v[interior] - pred[interior]).mean() / (np.abs(pred[interior]).mean() + 1e-30)
+    assert rel < 0.45, f"spherical Sverdrup balance rel.err={rel:.2f}"
+
+
+def test_gyre_sphere_differentiable():
+    def strength(tau0):
+        psi, _, _, _, _, _ = _run_gyre_sphere(tau0, ny=28, nx=28)
+        return jnp.max(jnp.abs(psi))
+    g = jax.grad(strength)(0.1)
+    assert np.isfinite(float(g)) and abs(float(g)) > 0, f"d(gyre_sphere)/d(tau0)={float(g)}"
+
+
 if __name__ == "__main__":
     test_elliptic_varcoef_manufactured_constant()
     test_elliptic_varcoef_manufactured_variable()
