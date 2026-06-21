@@ -391,3 +391,90 @@ def solve_elliptic_varcoef(coef, rhs, dx, dy, mask=None, x0=None,
     x, info = solve_cg(operator, b, x0_flat, max_iter=max_iter, tol=tol,
                        preconditioner=precond)
     return x.reshape(ny, nx), info
+
+
+# ---------------------------------------------------------------------------
+# SPHERICAL variable-coefficient elliptic solver (P3 / S2, second half):
+#   (1/(a^2 cos(phi))) [ d/dlon (coef/cos(phi) dpsi/dlon)
+#                      + d/dphi (coef cos(phi) dpsi/dphi) ] = rhs
+# This is the operator a prognostic barotropic-vorticity / JEBAR ocean core needs on the
+# real lat-lon grid (coef = 1/H over ETOPO bathymetry). It is discretised in symmetric
+# FACE-CONDUCTANCE form (multiply the cell equation by the cell area a^2 cos(phi) dlon
+# dlat) so the matrix stays symmetric positive-definite and the AD-safe CG applies -- the
+# area-divided form used in the Cartesian solver would be non-symmetric once the cell area
+# varies with latitude. A polar cos(phi) floor avoids the 1/cos(phi) blow-up at the lat-lon
+# pole singularity (same idea as the atmosphere's pole-dx floor). Periodic in lon, Dirichlet
+# psi=0 in lat and on land. Differentiable in coef, rhs.
+# ---------------------------------------------------------------------------
+def _sphere_conductances(coef, lat, dlon, dlat, a, cos_min):
+    """Symmetric east/west/north/south face conductances + cell area on the sphere.
+
+    coef: (ny, nx) cell-centred (e.g. 1/H). lat: (ny,) cell-centre latitude [rad].
+    dlon, dlat: grid spacing [rad]. a: Earth radius [m]. cos_min: polar cos floor.
+    """
+    cosc = jnp.maximum(jnp.cos(lat), cos_min)[:, None]                 # (ny,1) cell centre
+    lat_n = 0.5 * (lat + jnp.concatenate([lat[1:], lat[-1:]]))         # north-face latitude
+    lat_s = 0.5 * (lat + jnp.concatenate([lat[:1], lat[:-1]]))         # south-face latitude
+    cosn = jnp.maximum(jnp.cos(lat_n), cos_min)[:, None]
+    coss = jnp.maximum(jnp.cos(lat_s), cos_min)[:, None]
+    # face coef = arithmetic mean of adjacent cells (Dirichlet via land-identity, not masked)
+    coef_n = jnp.concatenate([coef[1:, :], coef[-1:, :]], axis=0)
+    coef_s = jnp.concatenate([coef[:1, :], coef[:-1, :]], axis=0)
+    # conductance = coef_face * face_length / centre_distance (the Earth radius cancels):
+    #   E/W face length = a*dlat, distance = a*cos(phi)*dlon -> dlat/(cos*dlon)
+    #   N/S face length = a*cos(phi_face)*dlon, distance = a*dlat -> cos_face*dlon/dlat
+    cE = 0.5 * (coef + jnp.roll(coef, -1, axis=1)) * (dlat / (cosc * dlon))
+    cW = 0.5 * (coef + jnp.roll(coef, 1, axis=1)) * (dlat / (cosc * dlon))
+    cN = 0.5 * (coef + coef_n) * (cosn * dlon / dlat)
+    cS = 0.5 * (coef + coef_s) * (coss * dlon / dlat)
+    area = (a ** 2) * cosc * dlon * dlat                               # (ny,1) cell area
+    return cE, cW, cN, cS, area
+
+
+def _sphere_op(psi, cE, cW, cN, cS):
+    """M psi = sum_faces C_face (psi - psi_nbr) = -area * div(coef grad psi) (symmetric)."""
+    pe = jnp.roll(psi, -1, axis=1)
+    pw = jnp.roll(psi, 1, axis=1)
+    pn = jnp.concatenate([psi[1:, :], jnp.zeros_like(psi[:1, :])], axis=0)
+    ps = jnp.concatenate([jnp.zeros_like(psi[:1, :]), psi[:-1, :]], axis=0)
+    return (cE * (psi - pe) + cW * (psi - pw)
+            + cN * (psi - pn) + cS * (psi - ps))
+
+
+def apply_elliptic_varcoef_sphere(psi, coef, lat, dlon, dlat, a, mask=None,
+                                  cos_min=0.087):
+    """Apply the spherical operator L psi = div(coef grad psi) (area-divided, ocean only)."""
+    ny, nx = psi.shape
+    coef = jnp.broadcast_to(jnp.asarray(coef, psi.dtype), (ny, nx))
+    mask = jnp.ones((ny, nx), psi.dtype) if mask is None else mask.astype(psi.dtype)
+    cE, cW, cN, cS, area = _sphere_conductances(coef, jnp.asarray(lat, psi.dtype),
+                                                dlon, dlat, a, cos_min)
+    return (-_sphere_op(psi, cE, cW, cN, cS) / area) * mask
+
+
+def solve_elliptic_varcoef_sphere(coef, rhs, lat, dlon, dlat, a, mask=None, x0=None,
+                                  max_iter=600, tol=1e-7, cos_min=0.087):
+    """Solve the spherical div(coef grad psi) = rhs for psi. Returns (psi, info).
+
+    coef, rhs: (ny, nx). lat: (ny,) cell-centre latitude [rad]. dlon, dlat: [rad].
+    a: Earth radius [m]. mask: 1=ocean,0=land (psi=0 on land). Differentiable.
+    """
+    ny, nx = rhs.shape
+    coef = jnp.broadcast_to(jnp.asarray(coef, rhs.dtype), (ny, nx))
+    mask = jnp.ones((ny, nx), rhs.dtype) if mask is None else mask.astype(rhs.dtype)
+    lat = jnp.asarray(lat, rhs.dtype)
+    cE, cW, cN, cS, area = _sphere_conductances(coef, lat, dlon, dlat, a, cos_min)
+
+    def operator(psi_flat):
+        psi = psi_flat.reshape(ny, nx)
+        m = _sphere_op(psi, cE, cW, cN, cS)               # symmetric SPD on ocean
+        return (m * mask + psi * (1.0 - mask)).flatten()
+
+    diag = (cE + cW + cN + cS) * mask + (1.0 - mask)      # diag of M (positive), id on land
+    precond = jacobi_preconditioner(diag.flatten())
+
+    b = (-rhs * area * mask).flatten()                    # symmetric: multiply by cell area
+    x0_flat = x0.flatten() if x0 is not None else jnp.zeros_like(b)
+    x, info = solve_cg(operator, b, x0_flat, max_iter=max_iter, tol=tol,
+                       preconditioner=precond)
+    return x.reshape(ny, nx), info

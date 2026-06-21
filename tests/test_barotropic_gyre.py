@@ -20,8 +20,11 @@ jax.config.update("jax_enable_x64", True)
 
 from chronos_esm.ocean import barotropic as bt  # noqa: E402
 from chronos_esm.ocean.solver import (  # noqa: E402
-    apply_elliptic_varcoef, solve_elliptic_varcoef, solve_poisson_2d,
+    apply_elliptic_varcoef, apply_elliptic_varcoef_sphere, solve_elliptic_varcoef,
+    solve_elliptic_varcoef_sphere, solve_poisson_2d,
 )
+
+A_EARTH = 6.371e6
 
 
 def _basin(ny, nx):
@@ -132,6 +135,49 @@ def test_gyre_differentiable():
         return jnp.max(jnp.abs(psi))
     g = jax.grad(strength)(0.1)
     assert np.isfinite(float(g)) and abs(float(g)) > 0, f"d(gyre)/d(tau0)={float(g)}"
+
+
+# ---- spherical elliptic operator (P3/S2 second half) ----------------------
+def _sphere_band(ny, nx, lat0_deg=20.0, lat1_deg=70.0):
+    """Periodic-in-lon lat band; land walls on the north/south edges."""
+    lat = np.deg2rad(np.linspace(lat0_deg, lat1_deg, ny))
+    dlat = float(lat[1] - lat[0])
+    dlon = 2.0 * np.pi / nx
+    m = np.ones((ny, nx)); m[0, :] = m[-1, :] = 0.0   # Dirichlet psi=0 at band edges
+    return jnp.asarray(lat), dlat, dlon, jnp.asarray(m)
+
+
+def test_sphere_elliptic_manufactured_variable():
+    ny, nx = 48, 64
+    lat, dlat, dlon, mask = _sphere_band(ny, nx)
+    lon = np.linspace(0, 2 * np.pi, nx, endpoint=False)
+    LON, LAT = np.meshgrid(lon, np.asarray(lat))
+    lat0, lat1 = float(lat[0]), float(lat[-1])
+    env = np.sin(np.pi * (np.asarray(lat)[:, None] - lat0) / (lat1 - lat0))
+    psi0 = jnp.asarray(np.sin(2 * LON) * env) * mask           # periodic in lon, 0 at edges
+    coef = jnp.asarray(1.0 + 0.4 * np.sin(LON) * np.cos(LAT))  # variable 1/H-like, >0
+    rhs = apply_elliptic_varcoef_sphere(psi0, coef, lat, dlon, dlat, A_EARTH, mask)
+    psi, info = solve_elliptic_varcoef_sphere(coef, rhs, lat, dlon, dlat, A_EARTH,
+                                              mask=mask, max_iter=2500, tol=1e-9)
+    # NB: the residual stalls at a float64 roundoff floor in this anisotropic system
+    # (cE~1/cos, cN~cos), but the SOLUTION error is the meaningful metric and is tiny.
+    err = jnp.linalg.norm((psi - psi0) * mask) / jnp.linalg.norm(psi0 * mask)
+    assert float(err) < 1e-4, f"spherical var-coef round trip err={float(err):.2e}"
+
+
+def test_sphere_elliptic_differentiable():
+    ny, nx = 32, 40
+    lat, dlat, dlon, mask = _sphere_band(ny, nx)
+    rng = np.random.default_rng(1)
+    rhs = jnp.asarray(rng.standard_normal((ny, nx))) * mask
+
+    def amp(scale):
+        coef = scale * jnp.ones((ny, nx))                     # coef ~ 1/H; vary uniformly
+        psi, _ = solve_elliptic_varcoef_sphere(coef, rhs, lat, dlon, dlat, A_EARTH,
+                                               mask=mask, max_iter=3000, tol=1e-10)
+        return jnp.max(jnp.abs(psi))
+    g = jax.grad(amp)(1.0)
+    assert np.isfinite(float(g)) and abs(float(g)) > 0, f"d|psi|/d(coef)={float(g)}"
 
 
 if __name__ == "__main__":
