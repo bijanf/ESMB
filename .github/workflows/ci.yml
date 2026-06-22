@@ -47,7 +47,9 @@ jobs:
         cache: 'pip'
 
     - name: Install tools
-      run: pip install black isort flake8
+      # Pin to keep CI deterministic and matched to local dev (unpinned 'latest' drifts:
+      # e.g. a newer black reformats files an older one left alone, flipping this check red).
+      run: pip install black==26.5.1 isort==8.0.1 flake8==7.3.0
 
     - name: Check formatting (black)
       run: black --check chronos_esm tests

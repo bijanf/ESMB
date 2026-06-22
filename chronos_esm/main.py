@@ -169,7 +169,7 @@ def step_coupled(
 
     def atmos_land_step(carry, _):
         # Unpack carry
-        (current_state, acc_fluxes) = carry
+        current_state, acc_fluxes = carry
 
         # -----------------------------------------------------
         # ATMOSPHERE & LAND DYNAMICS
