@@ -92,24 +92,51 @@ Measured on the **WOA18 T31 ocean** (`experiments/diagnose_gm_amoc.py`):
 | `d(AMOC)/d(subpolar salt)`, GM on | +33 Sv/psu (density pathway **preserved**) |
 
 **Finding:** GM is correctly implemented and produces a physically-right ~1–2 Sv eddy (bolus)
-overturning, but it reduces the 326 Sv barrier by only ~1 %. The barrier is dominated by the
-**Eulerian-mean** cell — i.e. the momentum / **rigid-lid surface-pressure** regime — not by
-steep isopycnal slopes. So GM is *necessary* eddy physics but **not the lever for this barrier**;
-the earlier "GM cuts the overturning toward ~15 Sv" expectation was optimistic at T31. (The slow
-isopycnal-*flattening* mechanism operates on multi-decadal timescales not testable here; even at
-literature-typical magnitude it would not close a 20× gap.) **Next P3 lever: the rigid-lid
-surface-pressure reference**, then finer resolution — with GM retained as the (now validated)
-eddy closure.
+overturning, but it reduces the 326 Sv barrier by only ~1 %. So GM is *necessary* eddy physics
+but **not the lever for this barrier**; the earlier "GM cuts the overturning toward ~15 Sv"
+expectation was optimistic at T31. (The slow isopycnal-*flattening* mechanism operates on
+multi-decadal timescales not testable here; even at literature-typical magnitude it would not
+close a 20× gap.)
+
+### Surface-pressure reference settled (2026-06-22): NOT the lever either — the barotropic mode is already clean
+
+The other roadmap-candidate lever was a rigid-lid **surface-pressure reference**. A surface
+pressure `p_s(x,y)` is depth-independent, so `∇p_s` drives only the **barotropic** (depth-mean)
+flow — it cannot change the baroclinic shear. Decomposing the prognostic overturning
+(`experiments/diagnose_amoc_barotropic.py`, WOA18 T31) shows the barrier lives entirely in the
+*baroclinic* mode, so a surface-pressure solve cannot touch it:
+
+| quantity | value |
+|---|---|
+| AMOC upper cell 26.5 N, barotropic **removed** (baroclinic) | **326.2 Sv** |
+| AMOC upper cell 26.5 N, barotropic **included** | **326.2 Sv** (identical) |
+| global net meridional transport, max\|net/lat\| | **~0 Sv** (the old ±350 Sv spurious mode is gone) |
+| depth-integrated `\|div(∫u dz)\|` | **~2e-19** (non-divergent to machine precision) |
+
+The barotropic mode is **already non-divergent and net-zero** — `barotropic.rigid_lid_project`
+(`veros_driver.py:219`) eliminated the old ±350 Sv spurious net the roadmap worried about. The
+326 Sv AMOC is **pure baroclinic overturning**, identical with or without barotropic removal.
+
+**Conclusion — both candidate levers are now settled, and the barrier is a *resolution* limit.**
+GM (~1 %, necessary) and the rigid-lid projection (already done; surface-pressure adds nothing
+to the AMOC) are both addressed. The remaining 326 Sv is the T31 **baroclinic geostrophic**
+overturning, ~20–40× too large because the grid cannot resolve the eddies that would flatten the
+isopycnals. The genuine path forward is **finer resolution** (eddy-permitting, ≪ T31), not a
+further T31 parameterization. The shipped **diagnostic + THC** path (which gives a stable,
+density-driven ~15 Sv AMOC and the P4 tipping result) remains the correct T31 production choice;
+the prognostic-momentum core stays research-in-progress behind its default-off flag, with GM
+available as the (now validated) eddy closure for when resolution increases.
 
 **Decision (2026-06-22): ship the working diagnostic + THC AMOC as production; S5 stays
 research-in-progress behind the default-off flag.** Rationale: the production path gives a
 **stable ~15 Sv AMOC** and already delivered the **P4 bistability/tipping** result, which *is*
 density-driven — the THC closure scales with the subpolar−subtropical density contrast, so it
 restores the `d(AMOC)/d(density)` pathway that the bare thermal-wind diagnostic lacks. S5 is a
-rigor upgrade, **not a blocker** for the forcing-response science or release. **GM is now
-implemented + measured (see above) — it is not the lever; the next S5 increment is the rigid-lid
-surface-pressure reference**, then finer resolution — see `experiments/diagnose_prognostic_amoc.py`
-(reproduce the barrier) and `experiments/diagnose_gm_amoc.py` (the GM measurement).
+rigor upgrade, **not a blocker** for the forcing-response science or release. **Both candidate
+levers are now settled (see below): GM gives ~1 % and the surface-pressure reference is not the
+lever (the barotropic mode is already clean) — the barrier is a *resolution* limit, so the next
+real S5 increment is finer (eddy-permitting) resolution.** Reproduce: `diagnose_prognostic_amoc.py`
+(barrier), `diagnose_gm_amoc.py` (GM), `diagnose_amoc_barotropic.py` (baroclinic/barotropic split).
 
 ## What's built (S2–S4)
 

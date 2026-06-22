@@ -20,6 +20,22 @@ Apache-2.0. Known limitations are documented, not hidden (single-humidity T31 at
 weak ITCZ; AMOC via closure, prognostic core is research-in-progress; surface-forcing proxy,
 not equilibrium ECS). Details in the dated development entries below.
 
+## [Unreleased] - 2026-06-22e — Surface-pressure reference settled: NOT the AMOC lever (P3)
+
+- **`experiments/diagnose_amoc_barotropic.py`** decomposes the prognostic-momentum AMOC into
+  barotropic + baroclinic parts on the WOA18 T31 ocean. **Finding:** the AMOC upper cell is
+  **326.2 Sv with OR without removing the barotropic transport** (identical), the global net
+  meridional transport is ~0 Sv, and the depth-integrated transport is non-divergent to ~2e-19.
+  i.e. the barotropic mode is **already clean** (`barotropic.rigid_lid_project` removed the old
+  ±350 Sv spurious net), and the 326 Sv barrier is **pure baroclinic overturning**.
+- **Therefore a rigid-lid surface-pressure reference is NOT the AMOC lever** — a surface pressure
+  is depth-independent and drives only the barotropic flow, which is already non-divergent and
+  net-zero. Both roadmap-candidate levers are now settled: GM ~1 % (2026-06-22d, measured),
+  surface-pressure not-the-lever (already clean). The remaining barrier is the T31 **baroclinic
+  geostrophic** overturning (~20–40× too large) = a **resolution limit**, closeable only by
+  eddy-permitting resolution, not a T31 parameterization. Production stays on the diagnostic +
+  THC path (stable ~15 Sv, density-driven, P4 tipping). See `docs/prognostic_ocean_core.md`.
+
 ## [Unreleased] - 2026-06-22d — Gent–McWilliams eddy parameterization + T31-barrier diagnosis (P3)
 
 - **New `chronos_esm/ocean/gm.py`** — a correct, AD-safe Gent–McWilliams (GM90) eddy
