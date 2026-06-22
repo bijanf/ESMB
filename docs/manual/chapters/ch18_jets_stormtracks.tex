@@ -1,4 +1,225 @@
 \chapter{Mid-Latitude Jets and Storm Tracks}
 \label{chap:ch18_jets_stormtracks}
 
-\emph{[This chapter is under construction.]}
+The mid-latitude westerly jets and the storm tracks that flank them are among the most
+demanding tests of an atmospheric model. They are not directly forced --- there is no external
+agent that blows the wind eastward at $40^\circ$ latitude. Instead they are an \emph{emergent}
+consequence of how the atmosphere disposes of the equator-to-pole temperature gradient. This
+chapter explains the phenomenon, shows how \model{} represents it with two very different
+atmospheres (the multi-level \dino{} dycore of
+Chapter~\ref{chap:ch09_atmosphere_multilevel} and the single-level barotropic model of
+Chapter~\ref{chap:ch10_atmosphere_singlelevel}), and presents the validation dashboard for the
+surface winds --- honestly, including where the coarse T31 resolution defeats the dynamics.
+
+\section{The phenomenon: baroclinic instability and the eddy-driven jet}
+
+A rotating, differentially heated atmosphere is in approximate thermal-wind balance: the
+poleward temperature gradient $\partial\Temp/\partial\lat$ is tied to a vertical shear of the
+zonal wind,
+\begin{equation}
+  f\,\pd{\uu}{\dep} \;\approx\; -\frac{\grav}{\Temp}\,\pd{\Temp}{\lat},
+  \label{eq:thermalwind}
+\end{equation}
+so the gradient alone produces westerlies that increase with height --- a \emph{thermal-wind
+jet}. This balanced state is, however, baroclinically \emph{unstable}: small perturbations tap
+the available potential energy stored in the sloping isentropes and grow into the travelling
+synoptic eddies we call weather systems \citep{vallis2017}. These eddies are not noise on top
+of the circulation; they \emph{are} the circulation. Their poleward heat flux relaxes the
+gradient that feeds them, and --- crucially for the jet --- their momentum flux converges in
+mid-latitudes, accelerating the surface westerlies. The mature state is therefore an
+\emph{eddy-driven jet} sitting over a storm track, with a surface-wind tripole: trade
+easterlies in the tropics, westerlies in mid-latitudes, and weak polar easterlies. No
+parameterization puts the westerlies there; the eddies earn them.
+
+The key implication for modelling is structural: \emph{baroclinic instability requires vertical
+structure}. Equation~\eqref{eq:thermalwind} is a statement about shear, and a single-level
+model has no shear to be unstable to. This single fact divides \model{}'s two atmospheres.
+
+\section{Two representations in \model{}}
+
+\subsection{The multi-level \dino{} dycore: eddies as physics}
+
+\model{}'s multi-level atmosphere (Chapter~\ref{chap:ch09_atmosphere_multilevel}) is built on
+Google's differentiable \dino{} spectral primitive-equation dycore --- the dynamical core
+behind NeuralGCM \citep{kochkov2024neuralgcm}. Run at T31 with 24 $\sigma$-levels, an
+ImEx--RK3 integrator and a $\nabla^4$ hyperdiffusion filter, it resolves vertical shear and
+therefore performs \emph{genuine} baroclinic instability: it grows transient eddies and builds
+an eddy-driven jet from the internal dynamics, with no jet prescribed.
+
+The canonical proof is the dry Held--Suarez test \citep{heldsuarez1994}, in which the only
+forcing is Newtonian relaxation toward a prescribed radiative-equilibrium temperature plus
+boundary-layer Rayleigh drag. Started from an isothermal rest state, the \dino{} core in
+\model{} reproduces the textbook circulation: a pair of upper-tropospheric mid-latitude
+westerly jets of $\sim$22~m/s and surface trade easterlies (Figure~\ref{fig:hs_jet}). This is
+exactly the structure the single-level model can never generate, and it confirms the dycore is
+the right tool.
+\codref{experiments/dino\_held\_suarez.py}{Held--Suarez dry-dynamics reference + \texttt{build\_held\_suarez\_model}}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\linewidth]{dino_held_suarez_jet}
+\caption{The \dino{} dry dycore in \model{} under Held--Suarez \citep{heldsuarez1994} forcing,
+T31 with 24 $\sigma$-levels. From an isothermal rest state the core spins up the textbook
+baroclinic circulation: twin upper-tropospheric mid-latitude westerly jets of $\sim$22~m/s with
+surface trade easterlies beneath. The eddy-driven jet is emergent, not prescribed --- the
+defining capability the single-level barotropic model lacks.}
+\label{fig:hs_jet}
+\end{figure}
+
+When this same core is coupled to the ocean SST (Chapter~\ref{chap:ch13_coupler_fluxes}), the
+storm track appears. To make the eddies grow on the right timescale at coarse T31, the
+initialization is anchored near radiative equilibrium (so the baroclinic jet exists from day
+zero rather than after a two-month relaxation), a small rotational vorticity seed breaks the
+exact zonal symmetry that an axisymmetric state would otherwise preserve indefinitely, and the
+hyperdiffusion is weakened (relaxation timescale $2\!\to\!6$~h) so the $l\!\sim\!10$--$15$
+eddies that carry the momentum flux are not damped before they grow. With these in place the
+eddies fire within $\sim$2--6 weeks and the atmosphere develops a $\sim$27~m/s eddy-driven jet,
+surface winds with visible synoptic structure, and an equatorial ITCZ
+(Figure~\ref{fig:dino_circ}).
+\codref{chronos\_esm/atmos/dino\_atmos.py}{SST-coupled \dino{} atmosphere, eddy spin-up}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{dino_circulation}
+\caption{The SST-coupled multi-level \dino{} atmosphere on the WOA SST (time-mean of a 120-day
+spin-up). Left: a $\sim$27~m/s eddy-driven baroclinic jet in the zonal-mean zonal wind. Centre:
+surface winds carrying transient synoptic-eddy structure (the storm track). Right: an equatorial
+ITCZ in precipitation from the resolved Hadley circulation and prognostic moisture. Regenerate
+with \texttt{python experiments/dino\_circulation\_figure.py}.}
+\label{fig:dino_circ}
+\end{figure}
+
+\subsection{The single-level model: a relaxed jet}
+
+The default coupled atmosphere is single-level and barotropic
+(Chapter~\ref{chap:ch10_atmosphere_singlelevel}). Having no vertical shear, it cannot satisfy
+the thermal-wind relation~\eqref{eq:thermalwind} and cannot be baroclinically unstable, so left
+to itself the winds geostrophically adjust to a near-standstill (and, before the v3 overhaul,
+even \emph{anti}-correlated with ERA5). \model{} therefore \emph{parameterizes} the
+eddy-momentum flux that the level cannot resolve: the winds are relaxed (timescale $\sim$2 days)
+toward an observed zonal-mean surface-wind profile --- tropical easterlies, mid-latitude
+westerlies, weak polar easterlies. This is an honest stand-in, not a derivation: it imposes the
+\emph{climatological} jet rather than growing it. The decoupling is deliberate --- relaxation
+sets the realism while strong hyperdiffusion provides stability --- and is discussed in
+Chapter~\ref{chap:ch10_atmosphere_singlelevel}.
+\codref{chronos\_esm/atmos/dynamics.py}{single-level wind relaxation toward \texttt{u\_target}}
+
+\section{Diagnostic and metric}
+
+The jet/storm-track diagnostic is built from the near-surface zonal wind $\uu_{\mathrm{sfc}}$,
+the meridional wind $\vv_{\mathrm{sfc}}$, and the mean sea-level pressure $\pres$. We score the
+time-mean fields against ERA5 with the validation framework
+(Chapter~\ref{chap:ch16_climatology}), reporting area-weighted bias, RMSE, the spatial pattern
+correlation, and the standard-deviation ratio (a perfect model scores bias~0, corr~1, std
+ratio~1). The \emph{zonal mean} of $\uu_{\mathrm{sfc}}$ versus latitude isolates the jet
+structure --- the trade-westerly-polar tripole --- while the $\uu_{\mathrm{sfc}}$ bias map
+exposes where the jet is misplaced. The MSLP zonal mean diagnoses the subpolar lows and
+subtropical highs that the storm track organises.
+\codref{chronos\_esm/validation/}{area-weighted skill metrics, bias maps, zonal means}
+
+\section{Assessment against ERA5}
+
+Figures~\ref{fig:zonal_u}--\ref{fig:zonal_mslp} are the current surface-wind/pressure dashboard,
+generated by the atmosphere-only forced spin-up (SST held to WOA18, so coupled-ocean bias cannot
+mask the atmospheric skill). Two readings, one per atmosphere, are warranted.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\linewidth]{zonal_u_sfc}
+\caption{Zonal-mean surface zonal wind versus latitude, \model{} (single-level forced spin-up)
+versus ERA5. The relaxed single-level jet reproduces the latitudinal tripole --- equatorial
+trade easterlies, mid-latitude westerlies, polar easterlies --- which is what lifts the
+$\uu_{\mathrm{sfc}}$ pattern correlation to $\approx 0.72$ in this configuration.}
+\label{fig:zonal_u}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{biasmap_u_sfc}
+\caption{Surface zonal-wind bias map (model $-$ ERA5). The single-level model captures the
+zonal-mean jet structure (Figure~\ref{fig:zonal_u}); the residual two-dimensional pattern is
+dominated by zonal asymmetries --- the longitudinal positioning of the storm tracks --- that a
+single level, lacking baroclinic eddies, cannot place.}
+\label{fig:biasmap_u}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\linewidth]{zonal_mslp}
+\caption{Zonal-mean mean sea-level pressure versus latitude, \model{} versus ERA5. After the
+polar-instability fix the pressure field is physical (variance reduced from $\sim$15$\times$ to
+$\sim$2$\times$ observed), but the storm-track-organised subpolar low / subtropical high pattern
+remains the weakest field: at T31 neither atmosphere has strong synoptic MSLP skill.}
+\label{fig:zonal_mslp}
+\end{figure}
+
+\paragraph{Single-level (forced spin-up).} The relaxation parameterization succeeds at what it
+is designed to do: the surface zonal-wind \emph{zonal mean} matches ERA5's tripole well and the
+$\uu_{\mathrm{sfc}}$ pattern correlation reaches $\approx 0.72$ (recovered from $-0.08$ before
+the overhaul). But this is the jet \emph{prescribed}, not earned, and the limits show in the
+fields the relaxation does not set: the meridional wind has near-zero pattern correlation and
+the MSLP pattern correlation stays near zero, because synoptic systems --- the eddies that
+organise the storm track in two dimensions --- are simply absent.
+
+\paragraph{Multi-level (SST-forced).} The \dino{} atmosphere earns its winds dynamically and
+wins the thermodynamics/hydrology decisively (precipitation pattern correlation
+$0.16\!\to\!0.34$ with a real ITCZ, plus a better near-surface temperature). On the surface
+\emph{wind/pressure pattern}, however, it does \emph{not} yet beat the prescribed single-level
+field, for a physically understood reason rather than a bug.
+
+\paragraph{The honest limitation: a weak T31 SST gradient.} The eddy momentum flux that builds
+the mid-latitude surface westerlies scales with the equator-to-pole temperature gradient. At
+T31 the regridded WOA SST has only a $\sim$22.6~K equator--pole contrast --- the sharp Gulf
+Stream, Kuroshio and ACC fronts are smoothed away --- roughly half the $\sim$45~K of an
+idealized aquaplanet at which the textbook surface tripole emerges cleanly. At this weak
+gradient the resolved eddy momentum flux is too small to build a clean mid-latitude
+surface-westerly belt; a 22.6~K aquaplanet stays surface-easterly at mid-latitudes too, so this
+is the gradient, not the orography. Consequently the \dino{} surface dynamic-field pattern
+correlations stay near zero ($\uu_{\mathrm{sfc}}\approx-0.01$, with the coupled control near
+$+0.10$), and the MSLP pattern correlation is negative. Recovering the observed surface
+westerlies needs higher resolution (to resolve the SST fronts), an explicit eddy-momentum /
+surface-stress parameterization, or realistic stationary-wave forcing (monsoons, land contrast)
+that the Held--Suarez plus bulk-moisture physics does not yet supply. This is why the
+single-level relaxed jet remains the \emph{default} coupled atmosphere: it trades dynamical
+honesty for a usable surface-wind climatology.
+
+\paragraph{Status of the scorecard.} The quantitative numbers quoted above are the documented
+benchmark values; the headline surface-wind/pressure scorecard is being refreshed from the
+latest control run (a 30-year time mean is being generated), since the dense transient eddies
+otherwise swamp the weak time mean in a short climatology. The figures here are the current
+validation dashboard for the jets and storm tracks.
+
+\section{Summary}
+
+\model{} represents the eddy-driven jet two ways. The multi-level \dino{} dycore does the
+\emph{physics} --- baroclinic instability, transient storm-track eddies, an emergent
+$\sim$27~m/s jet, validated against the Held--Suarez benchmark --- but at T31 the SST gradient
+is too weak for those eddies to build realistic surface westerlies. The single-level model
+\emph{parameterizes} the result, reaching a good surface-wind zonal mean ($\uu_{\mathrm{sfc}}$
+corr $\approx 0.72$) at the cost of having no genuine synoptic systems (near-zero MSLP and
+$\vv_{\mathrm{sfc}}$ pattern skill). Both are honest about what they cannot do: the storm track
+in two dimensions remains the frontier, awaiting higher resolution or explicit eddy
+parameterization.
+
+\begin{exercise}[Model as laboratory]
+Run the dry Held--Suarez reference (\texttt{experiments/dino\_held\_suarez.py}) from isothermal
+rest and plot the zonal-mean zonal wind every few days. Identify the day on which the
+upper-tropospheric jet first exceeds 15~m/s and the day eddy kinetic energy begins to grow.
+Explain, using equation~\eqref{eq:thermalwind}, why the thermal-wind jet appears \emph{before}
+the eddies.
+\end{exercise}
+
+\begin{exercise}[Model as laboratory]
+Force the coupled \dino{} atmosphere with two SST fields: the real WOA SST ($\sim$22.6~K
+equator--pole gradient) and an idealized aquaplanet with a $\sim$45~K gradient. Compare the
+zonal-mean surface zonal wind at $\sim$50$^\circ$ latitude. Quantify how much of the missing
+mid-latitude surface westerly is attributable to the weak T31 SST gradient versus other causes.
+\end{exercise}
+
+\begin{exercise}[Model as laboratory]
+In the single-level model, vary the wind-relaxation timescale (e.g.\ 1, 2, and 6 days in
+\texttt{chronos\_esm/atmos/dynamics.py}) and re-score $\uu_{\mathrm{sfc}}$ against ERA5 with the
+validation framework. Explain why too-weak relaxation lets a barotropic shear instability drive
+the winds toward the safety clamp, and relate this to why the single level needs strong
+hyperdiffusion whereas the multi-level model needs it weak.
+\end{exercise}

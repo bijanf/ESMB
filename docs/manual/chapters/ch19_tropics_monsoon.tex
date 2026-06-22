@@ -1,4 +1,221 @@
 \chapter{The Tropics: ITCZ, Monsoons, and Variability}
 \label{chap:ch19_tropics_monsoon}
 
-\emph{[This chapter is under construction.]}
+The tropics are the engine room of the climate system. Solar heating peaks near the equator,
+moist convection lofts that heat into the upper troposphere, and the resulting Hadley
+circulation exports it poleward. The narrow, deep-convecting rain band where the trade winds of
+the two hemispheres meet --- the \emph{Intertropical Convergence Zone} (ITCZ) --- is the single
+most prominent feature of the observed precipitation field, and one of the hardest for a coarse
+model to capture. This chapter evaluates how \model{} represents the tropical mean state: the
+ITCZ and its precipitation, what role the multi-level moist atmosphere plays in producing it,
+and --- honestly --- where the representation remains weak, including the near-absence of
+interannual (ENSO-like) variability and the limited monsoon at this resolution.
+
+This is a Part~IV evaluation chapter. We first define the phenomenon and the physics that should
+produce it, recall how the relevant model components implement that physics
+(Chapters~\ref{chap:ch09_atmosphere_multilevel} and \ref{chap:ch10_atmosphere_singlelevel}),
+describe the diagnostic and the skill metric, then present the validation figures and a
+qualitative assessment with its limitations.
+
+\section{The phenomenon: deep convection and the ITCZ}
+
+In the time mean, the trade-wind boundary layers of the Northern and Southern Hemispheres
+converge in the deep tropics, forcing ascent, condensation, and a band of intense rainfall. The
+ascending branch of the Hadley cell sits over this band; the descending branches dry the
+subtropics, producing the desert latitudes near $\pm25^\circ$. The position and strength of the
+ITCZ are set by the cross-equatorial energy transport and by the underlying sea-surface
+temperature (SST), since deep convection switches on only above an SST threshold of roughly
+$26$--$27^\circ$C \citep{vallis2017}. A faithful tropical climate therefore requires two
+ingredients simultaneously: a moist atmosphere that can convect and rain, and an ocean whose
+tropical SST is warm enough to trigger that convection.
+
+\section{Why vertical structure matters: single level vs.\ multi-level}
+
+The distinction between \model{}'s two atmospheres is sharpest in the tropics. The
+\textbf{single-level (barotropic) atmosphere} of Chapter~\ref{chap:ch10_atmosphere_singlelevel}
+has no vertical coordinate: it cannot represent the ascent--condensation--latent-heating column
+that \emph{is} deep tropical convection. With no resolved Hadley overturning to concentrate
+moisture at the equator, its precipitation is too dry and rains in the wrong place --- in the
+subtropics and mid-latitudes rather than on the equator --- and its precipitation pattern
+correlation against observations is near zero. This is a structural limitation, not a tuning
+failure: a single level simply has nowhere to put the vertical motion that makes an ITCZ.
+
+The \textbf{multi-level spectral atmosphere} built on the \dino{} dycore
+(Chapter~\ref{chap:ch09_atmosphere_multilevel}) does have the necessary vertical structure. It
+carries prognostic specific humidity as an advected tracer, evaporates moisture from the surface
+with a bulk formula, and rains out supersaturation through a large-scale condensation closure
+that latent-heats the column. As the resolved Hadley circulation spins up, that closure
+concentrates rainfall in the deep tropics and dries the subtropics --- a real ITCZ forming
+\emph{from the resolved circulation}, with no explicit convection scheme. \model{} therefore
+follows the same lineage as NeuralGCM, whose differentiable spectral core \dino{} is
+\citep{kochkov2024neuralgcm}. This is the central evaluation message of the chapter: the
+multi-level atmosphere produces an equatorial rain band that the single level cannot.
+
+\section{Diagnostic and metric}
+
+The precipitation diagnostic is the column-integrated condensation rate, $P$ (in mm/day),
+output by the multi-level atmosphere's moisture physics and regridded from the Gaussian
+transform grid to the model's lat--lon grid. We assess it three ways against the GPCP-class
+observational climatology bundled with the validation framework
+(\code{chronos\_esm/validation/}):
+
+\begin{description}[leftmargin=0pt,style=nextline]
+  \item[Spatial map and bias map] $P$, the observed climatology, and their difference
+    $P_{\mathrm{model}}-P_{\mathrm{obs}}$, to localize where the model is too wet or too dry.
+  \item[Zonal mean] the latitude profile of $\langle P\rangle_\lambda$, model versus
+    observations, which isolates the ITCZ peak, its width, and the subtropical minima.
+  \item[Scalar scorecard] area-weighted bias, RMSE, pattern correlation, and standard-deviation
+    ratio (a perfect model scores bias $0$, corr $1$, std ratio $1$).
+\end{description}
+
+\codref{experiments/make\_readme\_figures.py}{precipitation map, zonal mean, and scorecard}
+
+\section{The current validation dashboard}
+
+Figures~\ref{fig:dino_circ}--\ref{fig:precip_bias} are the present tropical validation
+dashboard, generated from a short SST-forced spin-up of the multi-level atmosphere on the WOA18
+SST climatology. The quantitative scorecard is refreshed from the latest control run; a 30-year
+time mean of the coupled \dino{}\,$\leftrightarrow$\,ocean control is being generated to replace
+the short-spin-up numbers quoted below with an equilibrated climatology.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{dino_circulation}
+\caption{Multi-level \dino{} atmosphere forced by the WOA SST (time mean of a $120$-day
+spin-up). \emph{Left:} the zonal-mean zonal wind, with the twin upper-tropospheric
+eddy-driven baroclinic jets ($\sim27$~m/s) that the single level cannot generate. \emph{Centre:}
+surface zonal wind, showing trade easterlies straddling the equator. \emph{Right:} precipitation
+(mm/day) --- the tropical ITCZ rain band, the feature of interest in this chapter. Regenerate
+with \code{python experiments/dino\_circulation\_figure.py}.}
+\label{fig:dino_circ}
+\end{figure}
+
+The right-hand panel of Figure~\ref{fig:dino_circ} is the headline result: an equatorial band of
+enhanced precipitation, organized by the resolved Hadley ascent, with dry subtropical flanks.
+The accompanying trade easterlies (centre panel) converging toward that band are the surface
+signature of the same circulation. A single-level atmosphere produces neither.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.72\linewidth]{zonal_precip}
+\caption{Zonal-mean precipitation versus latitude: \model{}'s multi-level atmosphere (solid) and
+the observed climatology (dashed). The model reproduces a distinct equatorial peak near
+$5$--$15^\circ$N --- a genuine ITCZ --- but it is too dry: the peak undershoots the observed
+maximum and the subtropical/extratropical totals are low. The single-level atmosphere has no
+such equatorial peak.}
+\label{fig:precip_zonal}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{biasmap_precip}
+\caption{Precipitation maps: model (left), observed climatology (centre), and their difference
+(right). The model captures the broad equatorial rain band and the Pacific/Atlantic structure,
+but is systematically too dry along the deep-tropical maximum (brown band near the equator in the
+difference map) and lacks the sharp South Pacific and South Atlantic convergence zones.}
+\label{fig:precip_bias}
+\end{figure}
+
+\section{Assessment}
+
+\paragraph{What works.} The qualitative win is unambiguous and is documented across the model's
+development record. Moving from the single-level to the multi-level moist atmosphere lifts the
+precipitation \emph{pattern correlation} markedly: in the SST-forced benchmark it rises from
+$0.16$ for the single level to $0.34$ for the multi-level atmosphere, and the precipitation
+standard-deviation ratio recovers toward observed (from $0.41$ to $\sim0.8$). Crucially, the
+correlation gain comes with a \emph{physically correct} ITCZ --- the model now rains on the
+equator instead of in the subtropics. In the fully coupled, flux-corrected control run (where the
+tropical SST is restored toward WOA so it is warm enough to convect), the same revival is even
+clearer: the precipitation pattern correlation reaches $0.37$, and the documented narrative of
+that run names the ``revived ITCZ'' as one of its two headline gains. The chain is exactly the
+one the physics predicts in Section~\ref{chap:ch19_tropics_monsoon}: warm tropical SST
+$\rightarrow$ deep convection $\rightarrow$ Hadley ascent $\rightarrow$ equatorial rain band.
+
+\paragraph{What does not (yet).} Three honest limitations stand out.
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{The ITCZ is still too dry and too weak.} Figure~\ref{fig:precip_zonal} shows the
+    equatorial peak undershooting the observed maximum, and the bias map
+    (Figure~\ref{fig:precip_bias}) shows a coherent dry band straddling the equator. A pattern
+    correlation of $\sim0.34$--$0.37$ is a real improvement but is still modest. The large-scale
+    condensation closure has no convective organization or explicit deep-convection
+    parameterization, and at T31 ($\sim3.75^\circ$) the rain band is only a few grid cells wide,
+    so it is unavoidably blurred and under-peaked.
+  \item \textbf{Tropical SST limits the convection.} The free-running coupled model carries a
+    tropical cold-tongue bias (tropical SST several degrees below WOA), which suppresses the deep
+    convection that should drive the ITCZ. The control run quoted above relies on a Haney SST
+    restoring toward WOA to remove that bias; the ITCZ is therefore partly \emph{earned} by the
+    flux correction rather than freely predicted. A free-running warm tropical SST remains a
+    standing target (Chapter~\ref{chap:ch13_coupler_fluxes}).
+  \item \textbf{No strong interannual (ENSO-like) variability.} At this configuration \model{}
+    has no documented El~Ni\~no--Southern Oscillation. The coupled control is run as a stable,
+    flux-corrected, drift-free mean state; the ocean's diagnostic-velocity dynamics and the
+    coarse T31 atmosphere do not sustain the coupled Bjerknes feedback that produces ENSO. The
+    tropical climate documented here is a \emph{mean-state} evaluation, not a variability one ---
+    and the spurious noise that the AMOC closure exhibits (Chapter~\ref{chap:ch17_amoc_tipping})
+    should not be mistaken for organized tropical variability.
+\end{enumerate}
+
+\paragraph{Monsoons.} Monsoon circulations --- the seasonal land--sea thermal contrast that
+reverses the low-level winds and drives summer rainfall over South Asia, West Africa, and the
+Americas --- are only weakly represented. Two factors limit them. First, resolution: at
+$\sim3.75^\circ$ the land--sea coastlines, orographic barriers (the Tibetan Plateau, the
+Ethiopian Highlands), and narrow monsoon rain bands are smoothed to a few grid cells, and the
+sub-grid Central-American isthmus even has to be closed by hand in the control run
+(Chapter~\ref{chap:ch13_coupler_fluxes}). Second, the land surface is a simplified slab plus
+bucket-hydrology model (Chapter~\ref{chap:ch12_land}): it captures the first-order land--ocean
+temperature contrast but not the soil-moisture--precipitation feedbacks and surface heterogeneity
+that sharpen real monsoon onset and intensity. The model produces a continental-scale seasonal
+land warming, but the resulting monsoon overturning and rainfall are muted. Sharper monsoons,
+like a sharper ITCZ, need higher resolution and a richer land surface.
+
+\paragraph{Why the surface wind pattern lags the rain.} It is worth contrasting the tropical
+\emph{thermodynamic} skill (precipitation, which the multi-level atmosphere clearly improves)
+with the tropical \emph{dynamic} skill (surface wind and pressure patterns, which it does not yet
+improve). The eddy momentum flux that builds the observed surface-wind belts scales with the
+equator-to-pole SST gradient; at T31 the regridded WOA SST has only a $\sim22.6$~K gradient,
+because the sharp Gulf~Stream, Kuroshio, and ACC fronts are smoothed away. That weak gradient is
+enough to organize moisture into an ITCZ but too weak to reproduce the observed surface-wind
+pattern --- the same decoupling discussed for the mid-latitudes in
+Chapter~\ref{chap:ch18_jets_stormtracks}. Tropical precipitation is the field where the
+multi-level atmosphere most clearly earns its added cost.
+
+\section{Summary}
+
+\model{}'s multi-level moist atmosphere produces a genuine ITCZ --- an equatorial rain band
+organized by the resolved Hadley circulation --- where the single-level atmosphere structurally
+cannot, lifting the precipitation pattern correlation from $\sim0.16$ to $\sim0.34$--$0.37$ and
+moving the rain onto the equator. The honest counterweights are that the ITCZ remains too dry and
+too weak at T31, that it currently relies on an SST flux correction to keep the tropics warm
+enough to convect, that strong interannual (ENSO-like) variability is absent at this
+configuration, and that monsoons are limited by resolution and the simplified land surface. The
+tropical mean state is a documented success of the multi-level upgrade; tropical variability and
+a free-running warm tropics are open work.
+
+% =====================================================================
+\section*{Model-as-laboratory exercises}
+\addcontentsline{toc}{section}{Model-as-laboratory exercises}
+
+\begin{exercise}[The vertical-structure argument]
+Run the single-level atmosphere and the multi-level \dino{} atmosphere on the \emph{same} WOA
+SST and compare their zonal-mean precipitation profiles (\code{make\_readme\_figures.py}). Explain,
+in terms of the vertical motion field each model can or cannot represent, why only the multi-level
+profile has an equatorial peak. Quantify the difference in pattern correlation.
+\end{exercise}
+
+\begin{exercise}[SST control on the ITCZ]
+The ITCZ should follow warm SST. Force the multi-level atmosphere with a WOA SST field to which
+you have added a $+2$~K anomaly in the Northern-Hemisphere tropics and $-2$~K in the
+Southern-Hemisphere tropics. Predict, then measure, how the latitude of the zonal-mean
+precipitation peak shifts. Relate the shift to the cross-equatorial energy-transport argument of
+\citet{vallis2017}.
+\end{exercise}
+
+\begin{exercise}[Quantifying the dry bias]
+Using the precipitation bias map (Figure~\ref{fig:precip_bias}) from a control checkpoint,
+compute the area-weighted mean bias \emph{within} $\pm10^\circ$ of the equator and compare it to
+the global-mean bias. Is the deep-tropical dry bias larger or smaller than the global value? What
+does this tell you about whether the model's water budget error is concentrated in the ITCZ or
+spread evenly? Discuss whether raising horizontal resolution or strengthening the condensation
+closure is the more promising fix.
+\end{exercise}

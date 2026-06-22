@@ -22,6 +22,8 @@
 ## Overview
 Chronos-ESM is a fully differentiable, coupled Earth System Model (Ocean, Atmosphere, Land, Ice) implemented in **JAX**. It is designed for high-performance climate simulation and data assimilation on consumer hardware (GPU/TPU).
 
+> 📘 **Manual / textbook.** A book-length, equation-complete manual — every governing equation derived from the code, the differentiable-modeling paradigm, canonical climate test cases (AMOC tipping, jets, ITCZ), a CMIP7 roadmap, and a teaching syllabus — is in [`docs/manual/`](docs/manual/). Read the compiled PDF: [**`docs/manual/main.pdf`**](docs/manual/main.pdf) (rebuild with `docs/manual/build.sh`).
+
 ### Key Features
 *   **Physics**: Primitive-equation ocean (Veros-like, z-levels), spectral atmosphere, thermodynamic sea ice, bucket land.
 *   **Technology**: JAX-based end-to-end differentiability for gradient-based tuning.

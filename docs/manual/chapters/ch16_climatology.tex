@@ -1,4 +1,393 @@
-\chapter{Mean Climatology versus Observations}
-\label{chap:ch16_climatology}
+\chapter{Mean Climatology versus Observations}\label{chap:ch16_climatology}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal, chapter-scoped; not in the shared preamble) ---
+\providecommand{\bias}{\overline{\Delta}}          % area-weighted bias
+\providecommand{\rmse}{\mathrm{RMSE}}              % root-mean-square error
+\providecommand{\corrp}{r}                          % pattern correlation
+\providecommand{\stdr}{\sigma_{\mathrm{r}}}        % std ratio sigma_model/sigma_obs
+\providecommand{\wcell}{w_{ij}}                     % area weight of cell (i,j)
+\providecommand{\Tair}{T_{2\mathrm{m}}}            % 2 m air temperature
+
+The previous chapters built \model{} component by component: the ocean primitive
+equations (Ch.~\ref{chap:ch04_ocean_equations}--\ref{chap:ch07_ocean_prognostic_core}),
+the overturning closure (Ch.~\ref{chap:ch08_ocean_overturning}), the multi-level
+\dino{} and single-level spectral atmospheres
+(Ch.~\ref{chap:ch09_atmosphere_multilevel}--\ref{chap:ch10_atmosphere_singlelevel}),
+and the bulk-flux coupler (Ch.~\ref{chap:ch13_coupler_fluxes}). A model that
+runs, conserves, and stays finite has cleared only the lowest bar. The question
+this Part~IV chapter asks is the harder one: \emph{is it right?} We answer it for
+the time-mean state --- the \emph{climatology} --- by confronting the coupled
+control run with two observational references and reporting area-weighted skill,
+honestly, including where the model is wrong and why that matters.
+
+The climatology is the cleanest target for a first evaluation because it
+averages away weather and interannual noise: a sufficiently long time mean of a
+stable run should reproduce the large-scale geographical patterns of
+temperature, salinity, and pressure that a textbook climate atlas shows. It is
+also the most unforgiving target, because every structural bias survives the
+averaging. We proceed by (i) defining the diagnostic and its observational
+references (\S\ref{sec:c16_framework}), (ii) stating the four area-weighted
+metrics the validation framework computes (\S\ref{sec:c16_metrics}), (iii)
+presenting the ocean and atmosphere bias-map and zonal-mean dashboards
+(\S\ref{sec:c16_ocean}--\S\ref{sec:c16_atmos}), and (iv) reading the mean state
+honestly --- the closed salt budget and realistic large-scale structure on the
+one hand, the documented cold-tropics bias and its downstream consequence on the
+other (\S\ref{sec:c16_honesty}).
+
+\section{The diagnostic and its observational references}\label{sec:c16_framework}
+
+\subsection{What a climatology is}
+
+Let $X(\lon,\lat,t)$ be a model field. Its climatology is the time mean
+%
+\begin{equation}
+  \overline{X}(\lon,\lat) \;=\; \frac{1}{T}\int_{0}^{T} X(\lon,\lat,t)\,\dd t ,
+  \label{eq:c16_climmean}
+\end{equation}
+%
+taken over an \emph{equilibrated} window $T$ long enough that the weather
+spectrum and any residual spin-up transient are averaged out. In practice this
+is a discrete mean over a glob of saved checkpoints. The dashboard harness
+\codref{experiments/make\_readme\_figures.py}{averages a glob of saved states
+into a climatology before scoring} explicitly averages a sequence of yearly
+checkpoints into $\overline{X}$ so that weather noise and spin-up do not swamp
+the time-mean signal. The quantitative scorecard reported below is refreshed
+from the latest control mean; a 30-yr time mean of the coupled
+\dino{}$\leftrightarrow$ocean control is being generated for the headline
+numbers, and the figures in this chapter are the current validation dashboard.
+
+\subsection{The two observational references}
+
+\model{} is graded against two community reference datasets, each on its native
+grid, loaded by \codref{chronos\_esm/validation/obs.py}{WOA18 and ERA5 loaders,
+returning native-grid NumPy arrays}:
+
+\begin{description}[leftmargin=1.5em,style=nextline]
+  \item[Ocean --- WOA18.] The World Ocean Atlas 2018 annual climatology supplies
+  sea-surface temperature ($\Temp$, the topmost level) and sea-surface salinity
+  ($\Salt$). WOA18 is also the dataset used to \emph{initialise} the ocean
+  (Ch.~\ref{chap:ch04_ocean_equations}), so the surface-temperature comparison
+  must be read with care: in the flux-corrected control the surface heat flux
+  \emph{restores} SST toward WOA (Haney restoring; Ch.~\ref{chap:ch13_coupler_fluxes}),
+  so SST skill is partly imposed, not predicted. The genuinely emergent ocean
+  field is salinity, which evolves freely.
+  \item[Atmosphere --- ERA5.] The ECMWF ERA5 reanalysis (monthly means,
+  averaged to an annual climatology) supplies 2~m air temperature ($\Tair$),
+  10~m zonal and meridional winds ($\uu_{\mathrm{sfc}},\vv_{\mathrm{sfc}}$),
+  total precipitation, and mean sea-level pressure (\code{mslp}). ERA5 is an
+  independent reference --- the model is never initialised from it --- so every
+  atmospheric metric is an honest skill score.
+\end{description}
+
+Both references are regridded onto the model's T31 grid before scoring
+(\code{grid.regrid\_to\_model}), and each field is converted to a human-friendly
+display unit (precipitation in mm/day, pressure in hPa) by the per-variable
+display table in \codref{chronos\_esm/validation/scorecard.py}{the \_DISPLAY
+table maps each field to units, scale, colour map}. The canonical model fields
+the scorecard reads are \code{sst}, \code{sss}, \code{t2m}, \code{u\_sfc},
+\code{v\_sfc}, \code{precip}, and \code{mslp}.
+
+\section{Area-weighted skill metrics}\label{sec:c16_metrics}
+
+All metrics are area weighted. On a latitude--longitude grid the cells shrink
+toward the poles, so each cell carries the weight $\wcell \propto \cos\lat_i$
+(\code{grid.area\_weights}); a cell contributes only where \emph{both} model and
+observation are finite, which masks land for ocean fields automatically. Writing
+$\langle\cdot\rangle$ for the area-weighted average over valid cells, the four
+diagnostics in \codref{chronos\_esm/validation/metrics.py}{area\_weighted\_stats
+and taylor\_stats compute bias, RMSE, pattern correlation, and the std ratio}
+are:
+
+\begin{align}
+  \text{bias} \quad
+    &\bias = \langle X_{\mathrm{mod}}\rangle - \langle X_{\mathrm{obs}}\rangle ,
+    \label{eq:c16_bias}\\[2pt]
+  \text{RMSE} \quad
+    &\rmse = \sqrt{\big\langle (X_{\mathrm{mod}} - X_{\mathrm{obs}})^2 \big\rangle} ,
+    \label{eq:c16_rmse}\\[2pt]
+  \text{pattern correlation} \quad
+    &\corrp = \frac{\big\langle X_{\mathrm{mod}}' \, X_{\mathrm{obs}}' \big\rangle}
+                   {\sigma_{\mathrm{mod}}\,\sigma_{\mathrm{obs}}} ,
+    \label{eq:c16_corr}\\[2pt]
+  \text{std ratio} \quad
+    &\stdr = \frac{\sigma_{\mathrm{mod}}}{\sigma_{\mathrm{obs}}} ,
+    \label{eq:c16_stdr}
+\end{align}
+%
+where a prime denotes the deviation from the area-weighted mean,
+$X' = X - \langle X\rangle$, and $\sigma^2 = \langle X'^2\rangle$. These four
+separate the kinds of error a climatology can have. The \emph{bias}
+(Eq.~\ref{eq:c16_bias}) is the global offset --- is the model on average too warm
+or too salty? The \emph{RMSE} (Eq.~\ref{eq:c16_rmse}) is the total point-by-point
+error, conflating offset and pattern. The \emph{pattern correlation}
+(Eq.~\ref{eq:c16_corr}) removes the mean from each field and asks only whether
+the model puts the highs and lows in the \emph{right places}; $\corrp=1$ is a
+perfect spatial pattern regardless of amplitude. The \emph{std ratio}
+(Eq.~\ref{eq:c16_stdr}) measures whether the spatial \emph{amplitude} is right:
+$\stdr<1$ means the model is too smooth (too little spatial contrast),
+$\stdr>1$ means it is too noisy or too sharp. A perfect model sits at
+$\bias=0$, $\corrp=1$, $\stdr=1$. The pair $(\corrp,\stdr)$ are the polar
+coordinates of a Taylor diagram \citep{eyring2016cmip6}, which the framework also
+emits, and they are exactly the right summary for a climatology because they are
+insensitive to a constant offset that a flux correction may impose.
+
+Two reductions present the spatial detail. The \emph{bias map}
+$\overline{X}_{\mathrm{mod}} - \overline{X}_{\mathrm{obs}}$ shows \emph{where}
+the model is wrong, on a diverging colour scale centred at zero. The
+\emph{zonal mean} $\langle X\rangle_\lon(\lat)$, the longitude average per
+latitude band (\code{metrics.zonal\_mean}), collapses the field to a single
+latitude profile and is the cleanest view of the large-scale meridional
+structure that the primitive equations are supposed to set.
+
+\section{Ocean climatology versus WOA18}\label{sec:c16_ocean}
+
+\subsection{Sea-surface temperature}
+
+Figure~\ref{fig:c16_biasmap_sst} maps the SST bias and
+Fig.~\ref{fig:c16_zonal_sst} the SST zonal mean against WOA18. The model
+reproduces the canonical meridional SST structure --- a warm equatorial belt,
+the subtropical maxima, and the steep poleward cooling --- with a near-unity
+pattern correlation and std ratio, as expected for a field whose surface is
+restored toward the same climatology in the flux-corrected control. The honest
+reading is therefore that SST is largely \emph{imposed} at the surface, not
+predicted; its value here is as a consistency check (the restoring is doing its
+job and the run is stable) rather than as an independent skill claim. The
+informative residual is the spatial pattern of the small remaining bias, which
+the bias map exposes.
+
+\begin{figure}[h]\centering
+  \includegraphics[width=0.92\textwidth]{biasmap_sst}
+  \caption{Sea-surface temperature bias, $\overline{\Temp}_{\mathrm{mod}}-
+  \overline{\Temp}_{\mathrm{WOA18}}$ (\,$^\circ$C), on the T31 grid. Diverging
+  scale centred at zero; land masked. The large-scale SST pattern is realistic
+  (near-unity pattern correlation), but recall the control restores surface
+  temperature toward WOA, so the agreement is partly imposed.}
+  \label{fig:c16_biasmap_sst}
+\end{figure}
+
+\begin{figure}[h]\centering
+  \includegraphics[width=0.78\textwidth]{zonal_sst}
+  \caption{Zonal-mean sea-surface temperature versus WOA18. The model recovers
+  the warm equatorial belt and the steep poleward decline. The residual
+  flattening of the tropical maximum is the cold-tropics bias discussed in
+  \S\ref{sec:c16_honesty}.}
+  \label{fig:c16_zonal_sst}
+\end{figure}
+
+\subsection{Sea-surface salinity}
+
+Salinity is the emergent ocean test, because nothing restores it to WOA at the
+surface in the modern control --- the global \emph{salt budget is closed} (water
+conservation plus volume-mean salinity conservation), so the model no longer
+drifts its salinity into the physics-stability clip
+(Ch.~\ref{chap:ch05_ocean_mixing}; \codref{chronos\_esm/ocean/veros\_driver.py}{
+high-latitude salinity sponge and the closed volume-mean salt budget}). The
+zonal-mean salinity (Fig.~\ref{fig:c16_zonal_sss}) reproduces the textbook
+double-peaked structure --- saline subtropical gyres flanking a fresher
+equatorial band, with fresh high latitudes --- which is the signature of the
+evaporation-minus-precipitation pattern that the freshwater flux imposes. The
+bias map (Fig.~\ref{fig:c16_biasmap_sss}) shows the pattern is right where the
+amplitude is honestly under-resolved: at T31 the std ratio is below one (the
+spatial salinity contrast is too smooth), and the pattern correlation, while
+positive in the forced-atmosphere assessment, is modest. The key honest point is
+conservation: the \emph{global-mean} salinity bias is small precisely because the
+budget is closed, and the remaining error is a pattern/amplitude deficiency, not
+a runaway drift.
+
+\begin{figure}[h]\centering
+  \includegraphics[width=0.92\textwidth]{biasmap_sss}
+  \caption{Sea-surface salinity bias, $\overline{\Salt}_{\mathrm{mod}}-
+  \overline{\Salt}_{\mathrm{WOA18}}$ (psu). The small global-mean bias reflects
+  the closed salt budget; the residual is a too-smooth spatial pattern
+  (std ratio $<1$) rather than a drift.}
+  \label{fig:c16_biasmap_sss}
+\end{figure}
+
+\begin{figure}[h]\centering
+  \includegraphics[width=0.78\textwidth]{zonal_sss}
+  \caption{Zonal-mean sea-surface salinity versus WOA18. The double-peaked
+  subtropical-saline / equatorial-fresh / polar-fresh structure --- set by the
+  evaporation-minus-precipitation forcing --- is reproduced, with amplitude
+  somewhat damped at T31.}
+  \label{fig:c16_zonal_sss}
+\end{figure}
+
+\section{Atmosphere climatology versus ERA5}\label{sec:c16_atmos}
+
+\subsection{2 m air temperature}
+
+The 2~m air temperature (Figs.~\ref{fig:c16_biasmap_t2m},
+\ref{fig:c16_zonal_t2m}) is the atmosphere's thermodynamic mean state. Its
+large-scale meridional structure --- warm tropics, cold poles, the land/ocean
+contrast --- follows the SST it sits over, so $\Tair$ inherits both the strength
+and the weakness of the surface ocean. In the flux-corrected coupled control the
+$\Tair$ pattern correlation against ERA5 is high (the documented control
+scorecard reports $\corrp\approx0.88$ once the continents are given an
+interactive land surface and no longer behave as a uniformly cold ocean), but
+the field carries a documented warm bias and an over-damped spatial amplitude:
+the control std ratio is below one, meaning the model spreads too little
+warm--cold contrast across the globe. Because the SST-driven part of $\Tair$ is
+imposed by the SST restoring, the honestly \emph{emergent} skill here is the
+land/ocean contrast and the continental pattern, not the absolute temperature.
+
+\begin{figure}[h]\centering
+  \includegraphics[width=0.92\textwidth]{biasmap_t2m}
+  \caption{2~m air-temperature bias, $\overline{\Tair}_{\mathrm{mod}}-
+  \overline{\Tair}_{\mathrm{ERA5}}$ (K). The pattern is realistic; a warm bias
+  and an over-damped spatial amplitude remain, and the field inherits the
+  surface ocean's biases.}
+  \label{fig:c16_biasmap_t2m}
+\end{figure}
+
+\begin{figure}[h]\centering
+  \includegraphics[width=0.78\textwidth]{zonal_t2m}
+  \caption{Zonal-mean 2~m air temperature versus ERA5. The model recovers the
+  warm-tropics / cold-poles profile; the flattened tropical maximum mirrors the
+  cold-tropics SST bias of \S\ref{sec:c16_honesty}.}
+  \label{fig:c16_zonal_t2m}
+\end{figure}
+
+\subsection{Mean sea-level pressure --- the weakest field}
+
+Mean sea-level pressure (Fig.~\ref{fig:c16_biasmap_mslp}) is, by design, the
+field on which \model{}'s atmosphere is graded most harshly, and it is the
+weakest field in the dashboard. The two atmospheric options expose two distinct
+failure modes, both documented and both understood. The default
+\emph{single-level barotropic} atmosphere (Ch.~\ref{chap:ch10_atmosphere_singlelevel})
+has no baroclinic eddies, so it cannot generate the synoptic highs and lows that
+organise the observed pressure field; its \code{mslp} \emph{pattern} correlation
+stays near zero. Crucially, this was hard-won: an earlier polar instability ---
+the lat--lon $\dd x$ collapsed at the poles and detonated the
+$R\,\Temp\,\lap(\ln \pres_s)$ term --- had pinned the pressure field to its clamp
+with a variance $\sim\!215\times$ observed, until the dynamical metric was
+floored, bringing the variance to $\sim\!2\times$ observed (a physical, if
+pattern-poor, field). The multi-level \dino{} atmosphere
+(Ch.~\ref{chap:ch09_atmosphere_multilevel}) \emph{does} perform genuine
+baroclinic instability \citep{kochkov2024neuralgcm}, yet its surface
+pressure/wind \emph{pattern} skill is still not improved in the coupled control
+(the documented control \code{mslp} correlation is negative): at T31 the
+regridded WOA SST has only a $\sim\!22.6$~K equator--pole gradient, too weak for
+the resolved eddy momentum flux to build the observed mid-latitude surface
+pressure and wind pattern. The bias map should therefore be read as a
+\emph{diagnosis of a known structural limit}, not a tuning failure: closing it
+needs a sharper SST gradient (higher resolution) or an explicit
+eddy-momentum parameterization.
+
+\begin{figure}[h]\centering
+  \includegraphics[width=0.92\textwidth]{biasmap_mslp}
+  \caption{Mean sea-level-pressure bias, $\overline{\pres}_{s,\mathrm{mod}}-
+  \overline{\pres}_{s,\mathrm{ERA5}}$ (hPa). The single-level atmosphere has no
+  synoptic eddies (pattern correlation near zero), and at T31 the smoothed SST
+  gradient is too weak for the multi-level \dino{} eddies to build the observed
+  surface pressure pattern. The variance is nonetheless physical after the
+  polar-metric fix; the residual is a documented structural limit, not a
+  drift.}
+  \label{fig:c16_biasmap_mslp}
+\end{figure}
+
+\section{Honest assessment of the mean state}\label{sec:c16_honesty}
+
+\subsection{What is right}
+
+Three results in the dashboard are genuine, not artefacts of restoring. First,
+the \emph{salt budget is closed}: salinity no longer drifts into the clip, the
+global-mean bias is small, and the zonal-mean S structure is realistic --- this
+is a conservation property of the discretisation
+(Ch.~\ref{chap:ch06_ocean_numerics}), and it is a non-trivial thing for a free
+ocean to get right. Second, the \emph{large-scale T/S structure} is correct: the
+warm-tropics/cold-poles temperature profile and the double-peaked salinity
+profile both emerge with high pattern correlation, confirming that the primitive
+equations plus the surface forcing set the right meridional skeleton
+\citep{vallis2017,griffies2004}. Third, when the continents are given an
+interactive land surface, the \emph{land/ocean temperature contrast} is captured
+($\Tair$ pattern correlation rises sharply in the documented control), and a
+\emph{revived ITCZ} appears in precipitation once the run rains on the equator
+rather than the subtropics --- the genuinely emergent atmospheric skill.
+
+\subsection{The cold-tropics bias and its consequence}
+
+The single most consequential mean-state error is a \emph{cold-tropics bias}: a
+cold-tongue deficit in tropical SST relative to WOA, visible as the flattened
+tropical maximum in the SST and $\Tair$ zonal means
+(Figs.~\ref{fig:c16_zonal_sst}, \ref{fig:c16_zonal_t2m}). It arises from a
+slow, basin-wide ocean cooling tendency that the surface flux balance pins at the
+\emph{global mean} but not in its \emph{spatial pattern}: removing the global-mean
+net heat keeps the planet's energy budget closed without fixing where the heat
+is missing, so the tropics run cold while the global mean stays on target. A
+related subtlety surfaced and was fixed in the coupled control --- the heat-flux
+adjustment had been balanced over land$+$ocean cells, leaving a residual net
+\emph{ocean} cooling because heat is applied only to ocean cells; balancing the
+adjustment over ocean cells only flattened the SST drift (documented: a
+$17.3\to14.9\,^\circ$C drift became $17.3\to17.5\,^\circ$C, flat).
+
+The consequence is real and runs downstream into every other diagnostic. A cold,
+flat tropical SST means a weak equator--pole and equator--subtropics SST
+gradient, which (i) weakens the Hadley overturning and dries the ITCZ in the
+single-level atmosphere, leaving precipitation too dry, and (ii) deprives the
+multi-level \dino{} atmosphere of the baroclinicity it needs to build
+mid-latitude surface westerlies and a realistic pressure pattern --- exactly the
+\code{mslp} weakness of \S\ref{sec:c16_atmos}. It is also why the
+CO$_2$ response of Ch.~\ref{chap:ch14_forcing_response} must be read as a
+transient surface-forcing proxy on a cold base state rather than an equilibrium
+sensitivity. The mean-state cold-tropics bias is thus not a cosmetic blemish; it
+is the upstream limiter on the model's hydrological and dynamical realism, and it
+is the next calibration target. The differentiable framework of
+Ch.~\ref{chap:ch15_differentiable_applications} is the intended lever for
+attacking it: a gradient-based fit of the surface flux and mixing parameters to
+the WOA/ERA5 climatology is exactly the kind of high-dimensional calibration
+that automatic differentiation makes tractable \citep{jax2018}.
+
+\subsection{Reading the scorecard}
+
+The quantitative scorecard --- one row per field with bias, RMSE, pattern
+correlation, std ratio, and the count of valid cells --- is printed by
+\code{scorecard.format\_scorecard} and refreshed from the latest 30-yr control
+mean as new checkpoints accumulate. Read it field by field with the metric
+roles of \S\ref{sec:c16_metrics} in mind: trust $\corrp$ and $\stdr$ over
+$\bias$ wherever a flux correction can impose the mean (SST, the SST-driven
+part of $\Tair$); treat salinity, precipitation, and the land/ocean contrast as
+the emergent skill; and read \code{mslp} and the meridional wind as the
+documented structural ceiling of a single-gradient T31 atmosphere. The figures
+in this chapter are the current validation dashboard against which the next
+generation of calibrated runs will be measured.
+
+\begin{remark}
+A perfect score on a flux-corrected control is not a goal; it would only mean the
+restoring is strong. The scientific content of a climatology evaluation lives in
+the \emph{residuals} that the restoring cannot reach --- the salinity pattern,
+the precipitation, the pressure field --- and in being explicit about which
+numbers are imposed and which are earned.
+\end{remark}
+
+\section*{Exercises: the model as laboratory}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}[Restored versus emergent skill]
+Run the validation harness on a saved control climatology and record the
+scorecard for \code{sst} and \code{sss}. Now turn off the SST restoring (set the
+Haney coefficient $\to0$; Ch.~\ref{chap:ch13_coupler_fluxes}), re-run a
+short equilibration, and re-score. Quantify how much of the SST pattern
+correlation collapses without restoring, and confirm that the salinity score is
+essentially unchanged. Explain, using Eqs.~\eqref{eq:c16_corr}--\eqref{eq:c16_stdr},
+why the std ratio is a more honest summary than the bias for a restored field.
+\end{exercise}
+
+\begin{exercise}[Diagnosing the cold-tropics bias]
+From the SST and $\Tair$ zonal means (Figs.~\ref{fig:c16_zonal_sst},
+\ref{fig:c16_zonal_t2m}), extract the model's equator-to-pole temperature
+gradient and compare it to the $\sim\!22.6$~K WOA value documented for the T31
+grid. Then plot the precipitation zonal mean and test the hypothesis that a
+weaker tropical SST gradient produces a drier, less equatorially-peaked ITCZ.
+Discuss why fixing the global-mean energy balance does not, by itself, fix the
+tropical pattern.
+\end{exercise}
+
+\begin{exercise}[Calibrating against the climatology]
+Using the differentiable pipeline of Ch.~\ref{chap:ch15_differentiable_applications},
+define the area-weighted RMSE of \eqref{eq:c16_rmse} between the model SST
+climatology and WOA18 as a scalar cost. Compute its gradient with respect to a
+vertical-mixing or surface-flux parameter and take a few descent steps. Report
+whether the tropical cold bias and the global-mean energy balance can be improved
+\emph{simultaneously}, and reflect on whether a single scalar parameter is enough
+or whether a spatial pattern of corrections is required.
+\end{exercise}

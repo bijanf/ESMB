@@ -287,6 +287,15 @@ forms a 3-D \emph{wet-cell mask} $\maskC_{k,j,i}\in\{0,1\}$ ($1$ ocean, $0$
 land or below the floor).
 \codref{chronos\_esm/data.py}{\code{load\_bathymetry\_mask}, \code{load\_ocean\_depth}, \code{load\_initial\_conditions}}
 
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\linewidth]{bathymetry}
+\caption{Model ocean depth $\dep(x,y)$ at T31, derived from ETOPO bathymetry (block-mean
+coarsened, smoothed, capped at $5000\,\mathrm{m}$ and floored at $500\,\mathrm{m}$ in wet
+cells). The land/sea mask follows where the WOA18 surface field is valid.}
+\label{fig:bathymetry}
+\end{figure}
+
 \paragraph{No-flux boundary conditions via face masks.}
 Boundaries are enforced with the MITgcm \emph{hFac} rule: a cell face is
 open only if \emph{both} adjacent centres are wet. The code builds west,

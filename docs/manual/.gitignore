@@ -10,4 +10,4 @@
 *.fdb_latexmk
 *.synctex.gz
 *.idx
-main.pdf
+# main.pdf is intentionally COMMITTED so the compiled manual is downloadable from GitHub.
