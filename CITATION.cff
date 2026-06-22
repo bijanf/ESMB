@@ -12,10 +12,15 @@ authors:
     given-names: Bijan
     email: bijan.fallah@gmail.com
 version: "0.1.0"
-date-released: "2026-06-15"
+date-released: "2026-06-22"
 license: Apache-2.0
 repository-code: "https://github.com/bijanf/ESMB"
 url: "https://github.com/bijanf/ESMB"
+# Once the repo is archived on Zenodo (see README "Citing"), add the minted DOI here:
+# identifiers:
+#   - type: doi
+#     value: 10.5281/zenodo.XXXXXXX
+#     description: "Concept DOI (all versions)"
 keywords:
   - earth system model
   - climate model

@@ -1,0 +1,25 @@
+{
+  "title": "Chronos-ESM: a differentiable, GPU-ready Earth System Model",
+  "description": "Chronos-ESM is a fully differentiable, coupled Earth System Model (ocean, atmosphere, land, sea ice) implemented in JAX at T31 (~3.75 degree) resolution, designed for high-performance climate simulation and gradient-based tuning on GPU/TPU. The v0.1.0 research preview demonstrates a multi-level dinosaur spectral atmosphere, a CO2 forcing response, a verified AMOC tipping point, and a mid-Holocene (6 ka) paleoclimate run with a real seasonal cycle.",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "Apache-2.0",
+  "version": "0.1.0",
+  "creators": [
+    {
+      "name": "Fallah, Bijan",
+      "affiliation": "Potsdam Institute for Climate Impact Research (PIK)"
+    }
+  ],
+  "keywords": [
+    "earth system model",
+    "climate model",
+    "JAX",
+    "differentiable programming",
+    "ocean",
+    "atmosphere",
+    "spectral dynamics",
+    "AMOC",
+    "paleoclimate"
+  ]
+}
