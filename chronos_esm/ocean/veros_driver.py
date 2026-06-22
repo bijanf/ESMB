@@ -75,6 +75,7 @@ def step_ocean(
     prognostic_momentum: bool = False,
     mom_drag: float = 1.0 / (86400.0 * 30.0),
     gm_on: bool = False,
+    thc_amp_override: Optional[jnp.ndarray] = None,
 ) -> OceanState:
 
     # Helpers
@@ -252,6 +253,7 @@ def step_ocean(
         k_vel=thc_k_vel,
         haline_gain=thc_haline_gain,
         contrast_depth_m=thc_contrast_depth_m,
+        amp_override=thc_amp_override,
     )
     v_new = (v_new + v_thc) * maskC
 

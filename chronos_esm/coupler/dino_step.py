@@ -45,8 +45,8 @@ from chronos_esm.config import (
 from chronos_esm.coupler import dino_coupling as dc
 from chronos_esm.ice.driver import IceState, init_ice_state, step_ice
 from chronos_esm.land.driver import LandState, step_land
-from chronos_esm.ocean import veros_driver
-from chronos_esm.ocean.veros_driver import OceanState
+from chronos_esm.ocean import overturning, veros_driver
+from chronos_esm.ocean.veros_driver import OceanState, equation_of_state
 
 
 class DinoCoupledState(NamedTuple):
@@ -59,6 +59,9 @@ class DinoCoupledState(NamedTuple):
     land: object  # chronos_esm.land.driver.LandState
     ice: IceState  # Semtner 0-layer thermodynamic sea ice
     day: float
+    thc_amp: jnp.ndarray = jnp.asarray(jnp.nan)  # carried (inertial) THC overturning
+    # amplitude [m/s]; NaN = uninitialized -> seeded to the instantaneous target on the
+    # first step (also makes pre-inertia checkpoints, which lack this field, load cleanly).
 
 
 class DinoCoupledModel:
@@ -79,6 +82,7 @@ class DinoCoupledModel:
         thc_haline_gain=1.0,
         thc_contrast_depth_m=None,
         thc_k_vel=1.0e-4,
+        thc_inertia_days=730.0,
         prognostic_momentum=False,
         mom_drag=1.0 / (86400.0 * 30.0),
         seasonal=False,
@@ -110,6 +114,12 @@ class DinoCoupledModel:
         # overturning velocity scale; lower -> weaker (more realistic ~15 Sv) on-state,
         # whose smaller freshwater transport tips at a lower hosing F_crit.
         self.thc_k_vel = thc_k_vel
+        # Temporal INERTIA on the THC overturning: relax the carried amplitude toward the
+        # instantaneous density-implied target over this timescale [days]. The real AMOC
+        # has multi-year inertia; without it the closure tracks noisy coupled forcing and
+        # the AMOC swings 0-110 Sv month-to-month (see experiments/diagnose_coupled_amoc.py).
+        # <=0 disables inertia (instantaneous response = legacy behaviour).
+        self.thc_inertia_days = thc_inertia_days
         # P3/S5: opt-in prognostic baroclinic momentum + rigid-lid mass conservation.
         self.prognostic_momentum = prognostic_momentum
         self.mom_drag = mom_drag
@@ -292,6 +302,26 @@ class DinoCoupledModel:
         fluxes = (nh, fw, jnp.zeros_like(nh))
         wind = (tx, ty)
 
+        # THC overturning INERTIA: relax the carried amplitude toward the instantaneous
+        # density-implied target over self.thc_inertia_days, then HOLD it fixed across the
+        # interval's ocean substeps (so the overturning cannot track sub-interval / noisy
+        # density swings). NaN carry (fresh init or pre-inertia checkpoint) seeds at target.
+        amp_target = overturning.thc_target_amplitude(
+            equation_of_state(cstate.ocean.temp, cstate.ocean.salt),
+            cstate.ocean.salt,
+            self.dz,
+            self.ocean_mask_3d,
+            k_vel=self.thc_k_vel,
+            haline_gain=self.thc_haline_gain,
+            contrast_depth_m=self.thc_contrast_depth_m,
+        )
+        prev_amp = jnp.where(jnp.isnan(cstate.thc_amp), amp_target, cstate.thc_amp)
+        if self.thc_inertia_days and self.thc_inertia_days > 0:
+            frac = min(interval / self.thc_inertia_days, 1.0)
+            thc_amp_new = prev_amp + (amp_target - prev_amp) * frac
+        else:
+            thc_amp_new = amp_target
+
         def _ocean(oc, _):
             return (
                 veros_driver.step_ocean(
@@ -307,6 +337,7 @@ class DinoCoupledModel:
                     thc_haline_gain=self.thc_haline_gain,
                     thc_contrast_depth_m=self.thc_contrast_depth_m,
                     thc_k_vel=self.thc_k_vel,
+                    thc_amp_override=thc_amp_new,
                     prognostic_momentum=self.prognostic_momentum,
                     mom_drag=self.mom_drag,
                     hosing_sv=hosing_sv,
@@ -322,6 +353,7 @@ class DinoCoupledModel:
             land=new_land,
             ice=new_ice,
             day=cstate.day + interval,
+            thc_amp=thc_amp_new,
         )
 
     # ---- differentiable, variable-interval step (eager; for gradients / DA) ----
@@ -373,6 +405,7 @@ def save_state(cstate, path_base):
     _save_nt(blob, "land", cstate.land)
     _save_nt(blob, "ice", cstate.ice)
     blob["day"] = np.asarray(float(cstate.day))
+    blob["thc_amp"] = np.asarray(float(cstate.thc_amp))  # carried THC inertia amplitude
     np.savez(path_base + ".npz", **blob)
     dino_save(cstate.atmos, path_base + "_dino.npz")
 
@@ -381,12 +414,19 @@ def load_state(path_base):
     """Inverse of :func:`save_state`. The dino modal state restores ``sim_time=None``
     (the dycore convention; a scalar would break the first resumed ImEx step)."""
     d = np.load(path_base + ".npz", allow_pickle=False)
+    # thc_amp absent in pre-inertia checkpoints -> NaN, re-seeded to the target on resume.
+    thc_amp = (
+        jnp.asarray(float(d["thc_amp"]))
+        if "thc_amp" in d.files
+        else jnp.asarray(jnp.nan)
+    )
     return DinoCoupledState(
         ocean=_load_nt(d, "ocean", OceanState),
         atmos=dino_load(path_base + "_dino.npz"),
         land=_load_nt(d, "land", LandState),
         ice=_load_nt(d, "ice", IceState),
         day=float(d["day"]),
+        thc_amp=thc_amp,
     )
 
 

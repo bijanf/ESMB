@@ -128,6 +128,7 @@ def compute_amoc(
     dz: float = None,
     ocean_mask: jnp.ndarray = None,
     remove_barotropic: bool = True,
+    ocean_mask_3d: jnp.ndarray = None,
 ) -> dict:
     """
     Compute Atlantic Meridional Overturning Circulation (AMOC).
@@ -184,16 +185,29 @@ def compute_amoc(
     mask_3d = jnp.broadcast_to(basin[None, :, :], (nz, ny, nx))
     v_atlantic = jnp.where(mask_3d, state.v, 0.0)
 
-    # Zonal transport per layer: sum_x (v * dx) -> (nz, ny), units m^2/s.
-    v_zonal = jnp.sum(v_atlantic * dx_2d[None, :, :], axis=2)
-
-    if remove_barotropic:
-        # Subtract the depth-mean (barotropic / external-mode) transport per
-        # latitude so the section carries zero net meridional transport and the
-        # streamfunction closes at the bottom.
-        H = jnp.sum(jnp.asarray(dz))
-        barotropic = jnp.sum(v_zonal * dz_col, axis=0, keepdims=True) / H  # (1, ny)
-        v_zonal = v_zonal - barotropic
+    if remove_barotropic and ocean_mask_3d is not None:
+        # PER-COLUMN wet-depth barotropic removal (preferred): subtract each (x,y)
+        # column's wet-depth-mean velocity BEFORE the zonal sum, so the wind-driven
+        # barotropic gyre cannot LEAK into the overturning. The coarse per-latitude /
+        # full-depth removal below mishandles variable bathymetry (a depth-uniform gyre
+        # over land-truncated columns survives), inflating + noising the AMOC by tens of Sv.
+        dz3 = jnp.reshape(jnp.asarray(dz), (-1, 1, 1))
+        wet = ocean_mask_3d.astype(v_atlantic.dtype)
+        wdz = dz3 * wet
+        h_col = jnp.maximum(jnp.sum(wdz, axis=0), jnp.asarray(dz).reshape(-1)[0])
+        v_bar = jnp.sum(v_atlantic * wdz, axis=0) / h_col  # (ny,nx) per-column wet mean
+        v_atlantic = (v_atlantic - v_bar[None, :, :]) * mask_3d
+        v_zonal = jnp.sum(v_atlantic * dx_2d[None, :, :], axis=2)
+    else:
+        # Zonal transport per layer: sum_x (v * dx) -> (nz, ny), units m^2/s.
+        v_zonal = jnp.sum(v_atlantic * dx_2d[None, :, :], axis=2)
+        if remove_barotropic:
+            # Subtract the depth-mean (barotropic / external-mode) transport per
+            # latitude so the section carries zero net meridional transport and the
+            # streamfunction closes at the bottom.
+            H = jnp.sum(jnp.asarray(dz))
+            barotropic = jnp.sum(v_zonal * dz_col, axis=0, keepdims=True) / H  # (1, ny)
+            v_zonal = v_zonal - barotropic
 
     # Overturning streamfunction, sign convention POSITIVE = AMOC (northward NADW
     # upper limb / equatorward deep return), per the RAPID convention.

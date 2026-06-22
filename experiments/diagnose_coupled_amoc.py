@@ -46,7 +46,11 @@ def main_diag(days):
     cstate = model.init_state()
 
     def amoc_up(oc):
-        return float(compute_amoc(oc, ocean_mask=omask)["upper_cell_26N"])
+        return float(
+            compute_amoc(oc, ocean_mask=omask, ocean_mask_3d=model.ocean_mask_3d)[
+                "upper_cell_26N"
+            ]
+        )
 
     print(f"=== Coupled AMOC trajectory (control config, {days} days) ===")
     series = []

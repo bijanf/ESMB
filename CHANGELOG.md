@@ -20,6 +20,33 @@ Apache-2.0. Known limitations are documented, not hidden (single-humidity T31 at
 weak ITCZ; AMOC via closure, prognostic core is research-in-progress; surface-forcing proxy,
 not equilibrium ECS). Details in the dated development entries below.
 
+## [Unreleased] - 2026-06-22g — Coupled-AMOC problem SOLVED (temporal inertia + per-column metric)
+
+Two fixes turn the wildly-noisy coupled AMOC (0–110 Sv month-to-month) into a clean, stable,
+RAPID-like cell (**~13 Sv mean, 8–22 Sv range, std ~4** over a 0.5-yr coupled run):
+
+1. **THC overturning inertia** — the thermohaline closure set the overturning amplitude
+   *instantaneously* (`amp = k_vel·softplus(contrast/drho_scale)`) from the small, noisy
+   subpolar−subtropical density contrast → no temporal inertia. Now `DinoCoupledModel` carries
+   the amplitude (`DinoCoupledState.thc_amp`) and **relaxes it toward the density-implied target
+   over `thc_inertia_days` (default 730 d ≈ the real AMOC's multi-year inertia)**, held fixed
+   across each interval's ocean substeps. `overturning.thc_target_amplitude()` exposes the
+   target; `step_ocean(thc_amp_override=…)` and `thc_overturning_velocity(amp_override=…)` apply
+   it. Density-responsiveness (tipping/paleo) is preserved — on long timescales the amplitude
+   still tracks the contrast. `OceanState` is untouched (the inertia lives at the coupling
+   level); checkpoints carry `thc_amp` (pre-inertia checkpoints reseed from the target on load).
+2. **Per-column AMOC diagnostic** — `compute_amoc(…, ocean_mask_3d=…)` now removes the
+   barotropic transport **per wet column** (wet-depth mean) instead of per-latitude with full
+   depth. The old removal let the **wind-driven barotropic gyre leak** into the overturning over
+   variable bathymetry (a depth-uniform gyre survives a full-depth removal where columns are
+   land-truncated), inflating/noising the AMOC by tens of Sv (verified 38.8 → 13.6 Sv on one
+   state). Backward-compatible (default `None` = old per-latitude behaviour, so the validated
+   tipping/dashboard metrics are unchanged unless they opt in).
+
+Tests: `tests/test_amoc_inertia.py` (target-amp density-responsive; amp_override; per-column
+removal kills a pure-barotropic-gyre leak). The dino checkpoint/resume + differentiability tests
+still pass (bit-exact round-trip of `thc_amp`). See `experiments/diagnose_coupled_amoc.py`.
+
 ## [Unreleased] - 2026-06-22f — Coupled-AMOC problem diagnosed: it's temporal NOISE, not a wrong mean
 
 - **`experiments/diagnose_coupled_amoc.py`** runs the coupled `DinoCoupledModel` (control

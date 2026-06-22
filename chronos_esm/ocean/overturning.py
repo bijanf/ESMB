@@ -32,6 +32,63 @@ def _atlantic_mask(ny, nx):
 BETA_S = 0.78  # haline contraction d(rho)/d(salt) [kg/m^3/psu], for the EOS near 35 psu
 
 
+def _thc_contrast(
+    rho, salt, dz, maskC, *, contrast_depth_m, haline_gain, subpolar, subtropical
+):
+    """Subpolar-minus-subtropical (haline-amplified) upper-ocean density contrast [kg/m^3]
+    over the Atlantic convection layer -- the gate on deep-water formation strength."""
+    nz, ny, nx = rho.shape
+    dz = jnp.asarray(dz)
+    atl = _atlantic_mask(ny, nx).astype(rho.dtype)
+    lat = jnp.linspace(-90.0, 90.0, ny)
+    depth_mid = jnp.cumsum(dz) - 0.5 * dz
+    conv = (depth_mid <= contrast_depth_m).astype(rho.dtype)
+    conv_atl = atl[None, :, :] * maskC * conv[:, None, None]
+
+    def band(field, lohi):
+        bm = ((lat >= lohi[0]) & (lat <= lohi[1])).astype(rho.dtype)[
+            None, :, None
+        ] * conv_atl
+        return jnp.sum(field * bm) / (jnp.sum(bm) + 1e-20)
+
+    drho = band(rho, subpolar) - band(rho, subtropical)
+    dS = band(salt, subpolar) - band(salt, subtropical)
+    return drho + (haline_gain - 1.0) * BETA_S * dS
+
+
+def thc_target_amplitude(
+    rho,
+    salt,
+    dz,
+    maskC,
+    *,
+    k_vel,
+    drho_scale=0.1,
+    upper_depth_m=1100.0,
+    haline_gain=1.0,
+    contrast_depth_m=None,
+    subpolar=(45.0, 65.0),
+    subtropical=(10.0, 30.0),
+):
+    """The INSTANTANEOUS density-implied overturning amplitude [m/s] (>= 0):
+    ``k_vel * softplus(contrast / drho_scale)``. The coupling layer relaxes the carried
+    overturning amplitude toward this target over a multi-year timescale (temporal
+    inertia), so the AMOC cannot track instantaneous density noise (see dino_step)."""
+    if contrast_depth_m is None:
+        contrast_depth_m = upper_depth_m
+    contrast = _thc_contrast(
+        rho,
+        salt,
+        dz,
+        maskC,
+        contrast_depth_m=contrast_depth_m,
+        haline_gain=haline_gain,
+        subpolar=subpolar,
+        subtropical=subtropical,
+    )
+    return k_vel * jax.nn.softplus(contrast / drho_scale)
+
+
 def thc_overturning_velocity(
     rho,
     salt,
@@ -45,6 +102,7 @@ def thc_overturning_velocity(
     contrast_depth_m=None,
     subpolar=(45.0, 65.0),
     subtropical=(10.0, 30.0),
+    amp_override=None,
 ):
     """Depth-integral-zero Atlantic overturning velocity v_thc [m/s] (nz,ny,nx).
 
@@ -73,33 +131,34 @@ def thc_overturning_velocity(
     nz, ny, nx = rho.shape
     dz = jnp.asarray(dz)
     atl = _atlantic_mask(ny, nx).astype(rho.dtype)  # (ny,nx)
-    lat = jnp.linspace(-90.0, 90.0, ny)
     if contrast_depth_m is None:
         contrast_depth_m = upper_depth_m
 
     depth_mid = jnp.cumsum(dz) - 0.5 * dz  # (nz,) cell-centre depth
     upper = (depth_mid <= upper_depth_m).astype(rho.dtype)  # (nz,) overturning limb
-    conv = (depth_mid <= contrast_depth_m).astype(rho.dtype)  # (nz,) convection layer
     H = jnp.sum(dz)
     up_d = jnp.sum(upper * dz)
     dn_d = H - up_d + 1e-20
     # vertical shape: +1 in the upper limb, negative below, depth-integral (dz-wtd) = 0.
     G = upper - (1.0 - upper) * (up_d / dn_d)  # (nz,)
 
-    conv_atl = (
-        atl[None, :, :] * maskC * conv[:, None, None]
-    )  # (nz,ny,nx) contrast layer
-
-    def band(field, lohi):
-        bm = ((lat >= lohi[0]) & (lat <= lohi[1])).astype(rho.dtype)[
-            None, :, None
-        ] * conv_atl
-        return jnp.sum(field * bm) / (jnp.sum(bm) + 1e-20)
-
-    drho = band(rho, subpolar) - band(rho, subtropical)  # [kg/m^3]
-    dS = band(salt, subpolar) - band(salt, subtropical)  # [psu]
-    contrast = drho + (haline_gain - 1.0) * BETA_S * dS  # haline-amplified contrast
-    amp = k_vel * jax.nn.softplus(contrast / drho_scale)  # scalar [m/s], >= 0
+    contrast = _thc_contrast(
+        rho,
+        salt,
+        dz,
+        maskC,
+        contrast_depth_m=contrast_depth_m,
+        haline_gain=haline_gain,
+        subpolar=subpolar,
+        subtropical=subtropical,
+    )
+    # amp [m/s, >=0]: the carried INERTIAL amplitude if supplied (coupling-level temporal
+    # smoothing, see dino_step), else the instantaneous density-implied target.
+    amp = (
+        k_vel * jax.nn.softplus(contrast / drho_scale)
+        if amp_override is None
+        else amp_override
+    )
     v_thc = amp * G[:, None, None] * atl[None, :, :] * maskC
     return v_thc, contrast, amp
 
@@ -127,4 +186,8 @@ def subpolar_hosing_salt_tendency(
     return -(hosing_sv * 1.0e6 * s_ref) / (area * dz0) * region
 
 
-__all__ = ["thc_overturning_velocity", "subpolar_hosing_salt_tendency"]
+__all__ = [
+    "thc_overturning_velocity",
+    "thc_target_amplitude",
+    "subpolar_hosing_salt_tendency",
+]
