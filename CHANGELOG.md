@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased] - 2026-06-22b — Mid-Holocene (6 ka) paleo experiment + real seasonal cycle (P5)
+
+- **P5, the 4th non-negotiable: the model responds to paleo (orbital) boundary conditions.**
+  A PMIP-style mid-Holocene (6 ka) experiment — present-day vs 6 ka orbit, same q-flux + start
+  state, only the orbit differs — gives the correct large-scale fingerprint:
+  **NH summer warming +1.1 K (20–60°N), +1.9 K Arctic** (Arctic-amplified, SH slightly cools,
+  global-annual ≈ 0 as orbital forcing requires), and **monsoon intensification** where the
+  model resolves one (S/SE Asia +31 %, N. America +20 % JJA precip; ITCZ +0.2° north). Figure:
+  `docs/figures/paleo_midholocene.pdf`; full write-up + honest limitations (no "Green Sahara" —
+  the T31 African monsoon is ~absent to begin with) in `docs/paleo_midholocene.md`.
+- **Orbital (Milankovitch) forcing** `chronos_esm/orbital.py`: daily-mean insolation from
+  obliquity/eccentricity/precession (PMIP4 ORBIT_PI, ORBIT_6KA), parameterised by solar
+  longitude (+ Kepler calendar map); validated vs textbook/PMIP4 (`tests/test_orbital.py`, 6),
+  differentiable in every orbital parameter.
+- **Real seasonal cycle** in the active dino coupling: the model was perpetual-equinox
+  (insolation hardcoded at day=80). `DinoCoupledModel(seasonal=True, orbit=...)` recomputes
+  insolation each interval from the model day; gated → default bit-identical. Tests:
+  `tests/test_seasonal_cycle.py` (3) incl. a guard against the albedo double-count bug (raw-TOA
+  override ~2× the ocean SW; fixed). New experiments: `run_paleo_midholocene.py` (free-mode
+  seasonal runner + JJA/DJF accumulator), `plot_paleo_midholocene.py`, `run_paleo_slurm.sh`,
+  and `--seasonal/--orbit` on `run_dino_control.py`.
+
 ## [Unreleased] - 2026-06-22 — S5 prognostic ocean core: wired, rigid-lid projected, and a T31 resolution barrier diagnosed (P3)
 
 - **The prognostic baroclinic momentum core is now wired into `step_ocean`** behind the
