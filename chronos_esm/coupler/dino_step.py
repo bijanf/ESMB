@@ -62,7 +62,8 @@ class DinoCoupledModel:
 
     def __init__(self, ocean_ic="woa", restore_to_woa=True, restore_tau_days=30.0,
                  q_flux=None, interval=1.0, thc_haline_gain=1.0,
-                 thc_contrast_depth_m=None, thc_k_vel=1.0e-4):
+                 thc_contrast_depth_m=None, thc_k_vel=1.0e-4,
+                 prognostic_momentum=False, mom_drag=1.0 / (86400.0 * 30.0)):
         """restore_tau_days/q_flux select the SST flux-correction mode:
           - q_flux=None, tau~30  -> strong Haney restoring to WOA (CONTROL mode);
           - q_flux=<field>, tau long (e.g. 3650) -> frozen q-flux + weak anomaly
@@ -81,6 +82,9 @@ class DinoCoupledModel:
         # overturning velocity scale; lower -> weaker (more realistic ~15 Sv) on-state,
         # whose smaller freshwater transport tips at a lower hosing F_crit.
         self.thc_k_vel = thc_k_vel
+        # P3/S5: opt-in prognostic baroclinic momentum + rigid-lid mass conservation.
+        self.prognostic_momentum = prognostic_momentum
+        self.mom_drag = mom_drag
 
         nz = base.ocean.u.shape[0]
         self.nz = nz
@@ -185,6 +189,7 @@ class DinoCoupledModel:
                 dz=self.dz, nz=self.nz, mask=self.surface_mask,
                 ocean_mask_3d=self.ocean_mask_3d, thc_haline_gain=self.thc_haline_gain,
                 thc_contrast_depth_m=self.thc_contrast_depth_m, thc_k_vel=self.thc_k_vel,
+                prognostic_momentum=self.prognostic_momentum, mom_drag=self.mom_drag,
                 hosing_sv=hosing_sv), None
         body = jax.checkpoint(_ocean) if remat else _ocean
         new_ocean, _ = jax.lax.scan(body, cstate.ocean, None, length=n_sub)

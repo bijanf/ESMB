@@ -46,12 +46,24 @@ def main_cli():
     ap.add_argument("--ckpt-every-days", type=int, default=DAYS_PER_YEAR)
     ap.add_argument("--outdir", default="outputs/dino_control_lib")
     ap.add_argument("--resume", type=int, default=None, help="resume from an absolute day")
+    ap.add_argument("--prognostic", action="store_true",
+                    help="P3/S5: use the prognostic baroclinic momentum ocean core (+rigid-lid "
+                         "projection); also sets thc_k_vel=0 unless --keep-thc")
+    ap.add_argument("--mom-drag-days", type=float, default=30.0,
+                    help="linear momentum drag timescale [days] for --prognostic")
+    ap.add_argument("--keep-thc", action="store_true",
+                    help="keep the THC closure on even with --prognostic")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
     end_day = args.days if args.days > 0 else int(round(args.years * DAYS_PER_YEAR))
 
-    model = DinoCoupledModel(ocean_ic="woa", interval=args.interval)
+    _mom_kw = {}
+    if args.prognostic:
+        _mom_kw = dict(prognostic_momentum=True, mom_drag=1.0 / (86400.0 * args.mom_drag_days))
+        if not args.keep_thc:
+            _mom_kw["thc_k_vel"] = 0.0
+    model = DinoCoupledModel(ocean_ic="woa", interval=args.interval, **_mom_kw)
     omask = model.omask
 
     def sst_mean_C(cstate):
