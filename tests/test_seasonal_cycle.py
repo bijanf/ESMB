@@ -51,15 +51,20 @@ def test_seasonal_insolation_varies_with_day(model):
 
 
 def test_insolation_uses_orbit_and_convention(model):
-    """_insolation must equal the orbital TOA daily-mean for the model's orbit, times the
-    surface-SW factor (1-albedo)*0.60 (same convention as compute_solar_insolation)."""
+    """_insolation must return the SURFACE SW = orbital-TOA(orbit) * (1-albedo) * 0.60 for
+    BOTH the land/ice field and the ocean override (the same convention compute_solar_insolation
+    used, so the ocean's own *(1-ALBEDO_OCEAN) is applied exactly once -- not the raw TOA, which
+    would double-count and ~2x the ocean SW)."""
     day = jnp.asarray(SUMMER_DAY)
-    sw, insol_toa = model._insolation(day)
+    sw, insol_override = model._insolation(day)
     lam = orbital.solar_longitude_from_day(jnp.mod(day, 365.0), orbital.ORBIT_PI)
     ref_toa = orbital.daily_insolation(model.lat_rad, lam, orbital.ORBIT_PI)[:, None]
-    assert np.allclose(np.asarray(insol_toa), np.asarray(ref_toa), rtol=1e-6)
     ref_sw = ref_toa * (1.0 - aphys.compute_albedo(model.lat_rad)[:, None]) * 0.60
+    # the ocean override is the surface SW (NOT raw TOA): guard against the 2x-SW bug
+    assert np.allclose(np.asarray(insol_override), np.asarray(ref_sw), rtol=1e-6)
     assert np.allclose(np.asarray(sw)[:, :1], np.asarray(ref_sw), rtol=1e-6)
+    # surface SW must be well below raw TOA (the bug made them equal)
+    assert float(np.asarray(insol_override).max()) < 0.75 * float(np.asarray(ref_toa).max())
 
 
 def test_seasonal_step_runs_finite(model):

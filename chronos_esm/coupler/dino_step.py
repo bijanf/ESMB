@@ -154,18 +154,20 @@ class DinoCoupledModel:
         """Return (sw_down_2d, insol_override) for the model `day`.
         seasonal=True -> recompute from the day via the orbital forcing (real seasonal cycle,
         orbit-dependent); else the precomputed perpetual-equinox field (legacy, bit-identical).
-        sw_down (nlat,nlon) is the surface SW for land/ice (TOA*(1-albedo)*0.60, matching
-        compute_solar_insolation); insol_override (nlat,1) is the TOA daily-mean the ocean
-        flux applies its own ocean albedo to (None -> ocean uses its legacy day-80 field).
-        self.seasonal is a static Python bool, so the branch resolves at trace time."""
+        Both sw_down (nlat,nlon, land/ice) and insol_override (nlat,1, ocean) are the SURFACE
+        SW TOA*(1-albedo)*0.60 -- the exact field compute_solar_insolation returned, so the
+        ocean path (ocean_fluxes_jax applies its own *(1-ALBEDO_OCEAN) on top) reproduces the
+        legacy perpetual-equinox convention. (Passing raw TOA would DOUBLE-count: the legacy
+        ocean fed compute_solar_insolation -- already *(1-albedo)*0.60 -- then *(1-ocean_alb),
+        so a raw-TOA override is ~2x too large and inflates the q-flux.) self.seasonal is a
+        static Python bool, so the branch resolves at trace time."""
         if not self.seasonal:
             return self.sw_down, None
         lam = orbital.solar_longitude_from_day(jnp.mod(day, 365.0), self.orbit)
         insol_toa = orbital.daily_insolation(self.lat_rad, lam, self.orbit)[:, None]  # (nlat,1)
-        sw_down = jnp.broadcast_to(
-            insol_toa * (1.0 - self._albedo_lat[:, None]) * 0.60,
-            (OCEAN_GRID.nlat, OCEAN_GRID.nlon))
-        return sw_down, insol_toa
+        surf_sw = insol_toa * (1.0 - self._albedo_lat[:, None]) * 0.60               # (nlat,1)
+        sw_down = jnp.broadcast_to(surf_sw, (OCEAN_GRID.nlat, OCEAN_GRID.nlon))
+        return sw_down, surf_sw
 
     # ---- one coupling interval (shared body; jit-friendly) ----
     def _advance(self, cstate, co2_ppm, interval, n_atm, n_sub, remat, hosing_sv=0.0):
