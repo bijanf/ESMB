@@ -30,6 +30,7 @@ from chronos_esm.coupler.dino_step import (DinoCoupledModel, save_state,  # noqa
 from chronos_esm.ocean import flux_correction  # noqa: E402
 from chronos_esm.ocean.diagnostics import compute_amoc  # noqa: E402
 from chronos_esm.config import OCEAN_GRID  # noqa: E402
+from chronos_esm import orbital  # noqa: E402
 
 DAYS_PER_YEAR = 365
 
@@ -53,6 +54,12 @@ def main_cli():
                     help="linear momentum drag timescale [days] for --prognostic")
     ap.add_argument("--keep-thc", action="store_true",
                     help="keep the THC closure on even with --prognostic")
+    ap.add_argument("--seasonal", action="store_true",
+                    help="P5: real seasonal cycle (insolation from the model day) instead of "
+                         "the legacy perpetual-equinox forcing")
+    ap.add_argument("--orbit", choices=["pi", "6ka"], default="pi",
+                    help="P5: orbital configuration for --seasonal (pi=present-day, "
+                         "6ka=mid-Holocene)")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -63,6 +70,12 @@ def main_cli():
         _mom_kw = dict(prognostic_momentum=True, mom_drag=1.0 / (86400.0 * args.mom_drag_days))
         if not args.keep_thc:
             _mom_kw["thc_k_vel"] = 0.0
+    if args.seasonal:
+        _orbit = {"pi": orbital.ORBIT_PI, "6ka": orbital.ORBIT_6KA}[args.orbit]
+        _mom_kw.update(seasonal=True, orbit=_orbit)
+        print(f"SEASONAL cycle ON, orbit={args.orbit} "
+              f"(obliquity {_orbit.obliquity_deg} deg, ecc {_orbit.eccentricity}, "
+              f"perihelion {_orbit.long_perihelion_deg} deg)", flush=True)
     model = DinoCoupledModel(ocean_ic="woa", interval=args.interval, **_mom_kw)
     omask = model.omask
 
