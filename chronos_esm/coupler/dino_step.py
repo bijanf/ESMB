@@ -39,6 +39,7 @@ from chronos_esm.ice.driver import IceState, init_ice_state, step_ice
 from chronos_esm.ocean import veros_driver
 from chronos_esm.ocean.veros_driver import OceanState
 from chronos_esm.coupler import dino_coupling as dc
+from chronos_esm import orbital
 
 
 class DinoCoupledState(NamedTuple):
@@ -63,11 +64,18 @@ class DinoCoupledModel:
     def __init__(self, ocean_ic="woa", restore_to_woa=True, restore_tau_days=30.0,
                  q_flux=None, interval=1.0, thc_haline_gain=1.0,
                  thc_contrast_depth_m=None, thc_k_vel=1.0e-4,
-                 prognostic_momentum=False, mom_drag=1.0 / (86400.0 * 30.0)):
+                 prognostic_momentum=False, mom_drag=1.0 / (86400.0 * 30.0),
+                 seasonal=False, orbit=None):
         """restore_tau_days/q_flux select the SST flux-correction mode:
           - q_flux=None, tau~30  -> strong Haney restoring to WOA (CONTROL mode);
           - q_flux=<field>, tau long (e.g. 3650) -> frozen q-flux + weak anomaly
-            restoring (FREE / forcing-responsive mode; see ocean.flux_correction)."""
+            restoring (FREE / forcing-responsive mode; see ocean.flux_correction).
+        seasonal/orbit (P5 paleo): seasonal=False -> the legacy PERPETUAL-EQUINOX
+        insolation (day=80, bit-identical to before). seasonal=True -> insolation is
+        recomputed each interval from the model day via the orbital forcing
+        (chronos_esm.orbital), giving a real seasonal cycle; orbit (an OrbitalParams,
+        default present-day ORBIT_PI) sets obliquity/eccentricity/precession so a 6 ka
+        (ORBIT_6KA) run drives the mid-Holocene enhanced-NH-summer monsoon."""
         base = main.init_model(ocean_ic=ocean_ic)
         self._ocean0 = base.ocean
         self._land0 = base.land
@@ -108,6 +116,15 @@ class DinoCoupledModel:
             jnp.asarray(lat) * np.pi / 180.0, day_of_year=80.0)), 0.0)[:, None]
         self.sw_down = jnp.asarray(np.broadcast_to(insol, (OCEAN_GRID.nlat, OCEAN_GRID.nlon)))
 
+        # P5 paleo: seasonal-cycle insolation. When seasonal=True the insolation is
+        # recomputed each interval from cstate.day via the orbital forcing; orbit defaults
+        # to present-day. self.lat_rad / self._albedo_lat reproduce compute_solar_insolation's
+        # surface-SW convention (TOA * (1-albedo) * 0.60) for the land/ice sw_down field.
+        self.seasonal = seasonal
+        self.orbit = orbit if orbit is not None else orbital.ORBIT_PI
+        self.lat_rad = jnp.asarray(lat) * np.pi / 180.0
+        self._albedo_lat = aphys.compute_albedo(self.lat_rad)
+
         # remat'd atmosphere interval (n_steps static) so the adjoint fits in memory
         # (used ONLY by the differentiable step(); the forward step_fast does not remat).
         self._atmos_remat = jax.checkpoint(self.atm._run_interval, static_argnums=(2,))
@@ -132,10 +149,31 @@ class DinoCoupledModel:
                                 atmos=self.atm.initial_state(sst0_g),
                                 land=self._land0, ice=ice0, day=0.0)
 
+    # ---- insolation (P5: seasonal/orbital or legacy perpetual-equinox) ----
+    def _insolation(self, day):
+        """Return (sw_down_2d, insol_override) for the model `day`.
+        seasonal=True -> recompute from the day via the orbital forcing (real seasonal cycle,
+        orbit-dependent); else the precomputed perpetual-equinox field (legacy, bit-identical).
+        sw_down (nlat,nlon) is the surface SW for land/ice (TOA*(1-albedo)*0.60, matching
+        compute_solar_insolation); insol_override (nlat,1) is the TOA daily-mean the ocean
+        flux applies its own ocean albedo to (None -> ocean uses its legacy day-80 field).
+        self.seasonal is a static Python bool, so the branch resolves at trace time."""
+        if not self.seasonal:
+            return self.sw_down, None
+        lam = orbital.solar_longitude_from_day(jnp.mod(day, 365.0), self.orbit)
+        insol_toa = orbital.daily_insolation(self.lat_rad, lam, self.orbit)[:, None]  # (nlat,1)
+        sw_down = jnp.broadcast_to(
+            insol_toa * (1.0 - self._albedo_lat[:, None]) * 0.60,
+            (OCEAN_GRID.nlat, OCEAN_GRID.nlon))
+        return sw_down, insol_toa
+
     # ---- one coupling interval (shared body; jit-friendly) ----
     def _advance(self, cstate, co2_ppm, interval, n_atm, n_sub, remat, hosing_sv=0.0):
         atm = self.atm
         sst_lin = cstate.ocean.temp[0]
+
+        # P5 paleo: insolation for THIS interval (seasonal/orbital or legacy perpetual-equinox).
+        sw_down, insol_override = self._insolation(cstate.day)
         # ice-modified ocean surface temp seen by the atmosphere (lagged ice):
         # concentration-weighted blend of open-water SST and the ice skin temp.
         A_prev = cstate.ice.concentration
@@ -160,7 +198,7 @@ class DinoCoupledModel:
         lw_down_l = 0.8 * 5.67e-8 * jnp.maximum(t_air - 10.0, 150.0) ** 4
         wind_sp = jnp.sqrt(u_sfc ** 2 + v_sfc ** 2) + 1.0
         new_land, _ = step_land(
-            cstate.land, t_air=t_air, q_air=q_air, sw_down=self.sw_down,
+            cstate.land, t_air=t_air, q_air=q_air, sw_down=sw_down,
             lw_down=lw_down_l, precip=jnp.maximum(precip_a, 0.0) * 1e-3,
             mask=jnp.asarray(self.land_mask_f), wind_speed=wind_sp,
             drag_coeff=DRAG_COEFF_LAND, dt=86400.0 * interval)
@@ -168,7 +206,7 @@ class DinoCoupledModel:
         # sea ice (Semtner thermodynamic): forced by this interval's atmosphere,
         # returns heat + freshwater fluxes to the ocean. Units: t_air/SST in degC.
         new_ice, (ice_heat, ice_fw) = step_ice(
-            cstate.ice, t_air=t_air - 273.15, sw_down=self.sw_down,
+            cstate.ice, t_air=t_air - 273.15, sw_down=sw_down,
             lw_down=lw_down_l, ocean_temp=sst_lin - 273.15,
             ny=OCEAN_GRID.nlat, nx=OCEAN_GRID.nlon, mask=self.ocean_mask_f)
 
@@ -176,7 +214,8 @@ class DinoCoupledModel:
         nh, fw, tx, ty = dc.ocean_fluxes_jax(
             sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
             ocean_mask=self.omask, sst_target=self.sst_target,
-            restore_tau_days=self.restore_tau_days, q_flux=self.q_flux, co2_ppm=co2_ppm)
+            restore_tau_days=self.restore_tau_days, q_flux=self.q_flux, co2_ppm=co2_ppm,
+            insol_override=insol_override)
         A = new_ice.concentration
         nh = (1.0 - A) * nh + A * ice_heat
         fw = (1.0 - A) * fw + A * ice_fw

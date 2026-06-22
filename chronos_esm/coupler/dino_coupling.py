@@ -135,7 +135,7 @@ def co2_forcing_wm2(co2_ppm, co2_ref=280.0):
 def ocean_fluxes_jax(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, *,
                      balance_heat=True, ocean_mask=None, sst_target=None,
                      restore_tau_days=RESTORE_TAU_DAYS, lat_lin=LAT_LIN, co2_ppm=None,
-                     q_flux=None):
+                     q_flux=None, insol_override=None):
     """Bulk surface fluxes on the linear grid. Returns
     ``(net_heat W/m2, fw kg/m2/s, tau_x Pa, tau_y Pa)``. With ``co2_ppm=None`` and
     ``q_flux=None`` this is numerically identical to ``run_dino_coupled.ocean_fluxes``
@@ -146,8 +146,13 @@ def ocean_fluxes_jax(sst_K, u_sfc, v_sfc, t_air_K, q_air, precip_atm, *,
     """
     wlat = jnp.cos(jnp.deg2rad(lat_lin))[:, None]
 
-    insol = aphys.compute_solar_insolation(lat_lin * jnp.pi / 180.0,
-                                           day_of_year=80.0)[:, None]
+    # P5 paleo: insol_override (a seasonal/orbital TOA daily-mean insolation, (nlat,1))
+    # replaces the legacy fixed perpetual-equinox (day=80) field when seasonal mode is on.
+    if insol_override is not None:
+        insol = insol_override
+    else:
+        insol = aphys.compute_solar_insolation(lat_lin * jnp.pi / 180.0,
+                                               day_of_year=80.0)[:, None]
     sw_net = jnp.maximum(insol, 0.0) * (1.0 - ALBEDO_OCEAN)
     lw_down = 0.8 * 5.67e-8 * jnp.maximum(t_air_K - 10.0, 150.0) ** 4
     lw_up = 0.98 * 5.67e-8 * sst_K ** 4
