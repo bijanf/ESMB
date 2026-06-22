@@ -1,4 +1,334 @@
-\chapter{Installation and Running}
-\label{chap:appD_running}
+\chapter{Installation and Running}\label{chap:appD_running}
 
-\emph{[This chapter is under construction.]}
+This appendix is the practical companion to the conceptual chapters: how to
+install \model, stage its input data, and run it on three increasingly large
+targets --- a laptop CPU, a single GPU, and a SLURM cluster. Every command below
+is taken from the repository (\code{README.md}, \code{requirements.txt}, and the
+SLURM scripts under \code{experiments/}) and should be run from the repository
+root unless stated otherwise. Because \model{} is research software, treat these
+instructions as a recipe that is validated against the pinned dependency stack
+(see Appendix~\ref{chap:appB_parameters} for parameter values and
+Appendix~\ref{chap:appC_codemap} for the code map).
+
+\section{Software stack and the JAX pin}
+
+\model{} is a \jax{} program. The single most important constraint is that the
+JAX version is \emph{pinned}: the multi-level atmosphere is built on the
+\dino{} dycore (\code{dinosaur-dycore==1.2.1}), which uses fast-moving private
+JAX APIs and breaks on newer JAX releases. The repository therefore pins
+
+\begin{lstlisting}[language=bash]
+jax==0.8.1
+jaxlib==0.8.1
+dinosaur-dycore==1.2.1
+\end{lstlisting}
+
+\noindent Do \emph{not} upgrade JAX to chase a newer feature: doing so silently
+breaks the \dino{} core. The remaining dependencies are standard scientific
+Python --- \code{numpy}, \code{scipy}, \code{xarray}, \code{netCDF4},
+\code{matplotlib}, and \code{pooch} (which manages the automatic data cache,
+Section~\ref{sec:appD-data}). The optional \code{cdsapi} is needed only for
+ERA5 validation downloads.
+
+\section{Cloning and a CPU install}
+
+The default install gives you a \emph{CPU} build of JAX, which is the right
+choice for a laptop, for the test suite, and for short experiments. Clone the
+repository, create a virtual environment, and install the pinned requirements:
+
+\begin{lstlisting}[language=bash]
+git clone https://github.com/bijanf/ESMB.git && cd ESMB
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+\end{lstlisting}
+
+\noindent This installs CPU JAX. Verify the install by asking JAX which devices
+it can see; on a CPU-only box you should see a \code{CpuDevice}:
+
+\begin{lstlisting}[language=bash]
+python -c "import jax; print(jax.devices())"
+\end{lstlisting}
+
+\section{The GPU (CUDA) build}\label{sec:appD-gpu}
+
+\code{requirements.txt} deliberately installs CPU JAX so the package is usable
+everywhere. For GPU you must additionally install the matching CUDA wheel
+\emph{at the same JAX version} --- mismatched versions are the most common cause
+of a silent fall-back to CPU or an import error. The robust idiom reads the
+installed version and pins the CUDA build to it:
+
+\begin{lstlisting}[language=bash]
+pip install "jax[cuda12]==$(python -c 'import jax; print(jax.__version__)')"
+\end{lstlisting}
+
+\noindent This pulls the bundled \code{nvidia-*} wheels, so you do not need a
+system-wide CUDA toolkit for the libraries themselves (you still need a
+compatible NVIDIA driver). Confirm the GPU is visible before launching any long
+run:
+
+\begin{lstlisting}[language=bash]
+python -c "import jax; print(jax.devices())"   # expect a CudaDevice / gpu
+\end{lstlisting}
+
+\noindent On a single T31 GPU the model runs roughly $280$ simulated years per
+day; the coupled \dino{}$\leftrightarrow$ocean control runs near $30$
+model-years per hour. The GPU jobs enable double precision via
+\code{JAX\_ENABLE\_X64=True}.
+
+\section{Staging the input data}\label{sec:appD-data}
+
+The model's input datasets are \emph{not} committed to the repository. On first
+use they download automatically through \code{pooch} and cache to
+\code{\textasciitilde/.cache/chronos\_esm/} (\code{pooch.os\_cache("chronos\_esm")}).
+Two datasets are required for any run, a third only for validation:
+
+\begin{center}
+\begin{tabular}{@{}llrl@{}}
+\toprule
+Dataset & Used for & Size & Source \\
+\midrule
+WOA18 T+S ($5^\circ$) & ocean IC + validation & $\sim 8$ MB & NOAA NCEI \\
+ETOPO1 bathymetry & land mask + orography & $\sim 900$ MB & SOCIB THREDDS \\
+ERA5 monthly means & validation only & $\sim$ MBs & Copernicus CDS \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent WOA18 supplies the ocean initial $\Temp$/$\Salt$ fields and the
+validation target; ETOPO1 supplies the variable-depth bathymetry (the ocean land
+mask) and the atmospheric orography. ERA5 is needed only when you pass
+\code{--era5} to a validation script, and it requires a Copernicus CDS account
+configured in \code{\textasciitilde/.cdsapirc}.
+
+You rarely need to stage data by hand for a local CPU run --- the first model
+build downloads what it needs. The explicit staging tool,
+\codref{experiments/prefetch_data.py}{the data-cache prefetcher}, exists mainly
+for clusters (Section~\ref{sec:appD-slurm}) but is useful anywhere:
+
+\begin{lstlisting}[language=bash]
+python experiments/prefetch_data.py          # fetch WOA18 + ETOPO1 into the cache
+python experiments/prefetch_data.py --era5   # also fetch ERA5 (needs ~/.cdsapirc)
+python experiments/prefetch_data.py --build  # + build the model once (full preflight)
+python experiments/prefetch_data.py --check  # verify the cache only; exit 1 if missing
+\end{lstlisting}
+
+\noindent If your \code{\$HOME} is space-constrained, redirect the cache by
+exporting \code{XDG\_CACHE\_HOME} to a larger filesystem \emph{before} both the
+prefetch and the run, so they agree on the path.
+
+\section{Running locally on CPU}\label{sec:appD-cpu}
+
+For development and small experiments, run on CPU and force the platform
+explicitly so a stray CUDA install cannot change behaviour. The repository idiom
+prepends the repo root to \code{PYTHONPATH} (the experiment scripts also do this
+internally, but it makes ad-hoc invocations robust) and pins the platform with
+\code{JAX\_PLATFORMS=cpu}:
+
+\begin{lstlisting}[language=bash]
+PYTHONPATH=$PWD JAX_PLATFORMS=cpu python experiments/run_century_physics.py \
+    --years 1 --ocean-ic woa
+\end{lstlisting}
+
+\noindent A one-year (or a few-day) run is the natural smoke test: it exercises
+the full coupled step, downloads any missing data, and finishes in minutes on a
+laptop. For the multi-level coupled control run, the same pattern applies:
+
+\begin{lstlisting}[language=bash]
+# a short coupled dinosaur <-> ocean control run on CPU:
+PYTHONPATH=$PWD JAX_PLATFORMS=cpu python experiments/run_dino_coupled.py --days 5
+# resume an existing run toward a larger total (here, toward day 36500):
+PYTHONPATH=$PWD JAX_PLATFORMS=cpu python experiments/run_dino_coupled.py \
+    --years 100 --resume 36500
+\end{lstlisting}
+
+\noindent The harness \codref{experiments/run_dino_coupled.py}{the coupled
+control-run driver} is checkpointing and resumable: \code{--years}/\code{--days}
+give the \emph{absolute} total, \code{--resume <day>} restarts from a saved day,
+and \code{--ckpt-every-days} sets the checkpoint cadence (yearly by default).
+Each checkpoint writes both the ocean state (\code{state\_d<DAY>.nc}) and the
+\dino{} modal atmosphere (\code{state\_d<DAY>\_dino.npz}). Resuming restores the
+prognostic state (ocean $\Temp$/$\Salt$ and the modal dynamics) exactly;
+diagnostic fields --- the ocean streamfunction warm-start, density $\dens$,
+vertical velocity $\ww$, and DIC --- are recomputed, so a restart is
+state-complete but not bit-reproducible (a divergence of order $0.03$ K/week,
+far below any climate signal).
+
+\section{Running on a single GPU}
+
+On a machine with a GPU, install the CUDA build (Section~\ref{sec:appD-gpu})
+and simply omit the \code{JAX\_PLATFORMS=cpu} pin so JAX selects the GPU. The
+GPU jobs set double precision and the resolution explicitly:
+
+\begin{lstlisting}[language=bash]
+export CHRONOS_RESOLUTION=T31
+export JAX_PLATFORM_NAME=gpu
+export JAX_ENABLE_X64=True
+python experiments/run_dino_coupled.py --years 100 --outdir outputs/dino_control
+\end{lstlisting}
+
+\noindent Always confirm the GPU is actually in use before committing to a long
+run --- a model that silently fell back to CPU will be orders of magnitude
+slower:
+
+\begin{lstlisting}[language=bash]
+python -c "import jax; print(jax.devices())"   # must list a gpu device
+\end{lstlisting}
+
+\section{Submitting to a SLURM cluster}\label{sec:appD-slurm}
+
+Compute nodes on most clusters have \emph{no internet}, so the workflow is:
+stage the data once on a login node (which does have internet), then submit the
+job, which reads from the shared cache. The full login-node sequence is:
+
+\begin{lstlisting}[language=bash]
+git clone https://github.com/bijanf/ESMB.git && cd ESMB
+module load anaconda cuda/12.3.1            # site-specific module names
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+# GPU JAX is REQUIRED on the cluster (the SLURM script aborts without a GPU):
+pip install "jax[cuda12]==$(python -c 'import jax; print(jax.__version__)')"
+
+# stage WOA18 + ETOPO1 into ~/.cache/chronos_esm on the LOGIN node:
+python experiments/prefetch_data.py         # add --era5 to also stage validation data
+\end{lstlisting}
+
+\noindent Then submit. The control-run script,
+\codref{experiments/run_dino_control_slurm.sh}{the SLURM control-run wrapper},
+forwards all arguments to \code{run\_dino\_coupled.py}:
+
+\begin{lstlisting}[language=bash]
+sbatch experiments/run_dino_control_slurm.sh --years 100
+tail -f logs/dino_control_*.log
+\end{lstlisting}
+
+\subsection{What the SLURM script does for you}
+
+The wrapper encodes several cluster conventions that are worth understanding,
+because you will likely need to adapt them to your site. Its resource request is
+a single GPU node:
+
+\begin{lstlisting}[language=bash]
+#SBATCH --partition=gpu
+#SBATCH --qos=gpumedium
+#SBATCH --account=poem
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --mem=64G
+#SBATCH --time=23:00:00
+\end{lstlisting}
+
+\noindent \textbf{Adjust for your site:} the \code{--account}, \code{--partition},
+and \code{--qos} lines (the defaults \code{poem}/\code{gpu}/\code{gpumedium} are
+PIK-specific) and the \code{module load} names. The script then:
+
+\begin{enumerate}
+\item \textbf{Loads modules and the venv.} It loads \code{python/3.12.3} (must
+match the Python the venv was built with) and \code{cuda/12.6.0} (must match the
+\code{jax[cuda12]} build), then activates \code{venv}. It also prepends the
+bundled \code{nvidia-*} wheel library paths to \code{LD\_LIBRARY\_PATH}.
+
+\item \textbf{Runs a GPU preflight.} A tiny Python snippet asserts that JAX sees
+a GPU device and aborts the job immediately if not, so a multi-hour allocation
+is never wasted on a CPU fall-back.
+
+\item \textbf{Runs a data-cache guard.} It calls
+\code{prefetch\_data.py --check}; if WOA18/ETOPO1 are not staged, the job fails
+fast with instructions to run the prefetch on a login node, rather than hanging
+on a blocked download.
+
+\item \textbf{Writes output to scratch, never \texttt{\$HOME}.} Output goes to
+\code{\$CHRONOS\_OUTDIR} (PIK default \code{/p/tmp/\$USER/dino\_control});
+override it by exporting \code{CHRONOS\_OUTDIR} to your own scratch path.
+
+\item \textbf{Auto-resumes across jobs.} If you do not pass \code{--resume}, the
+script scans the output directory for the latest \code{state\_d<DAY>.nc}
+checkpoint and resumes from it. This is what lets you chain back-to-back $23$-hour
+jobs against a single \code{--years} target until the run completes:
+\end{enumerate}
+
+\begin{lstlisting}[language=bash]
+# first job (fresh): runs until walltime, checkpointing yearly to scratch
+sbatch experiments/run_dino_control_slurm.sh --years 100
+# subsequent jobs (same command): AUTO-RESUME from the latest checkpoint
+sbatch experiments/run_dino_control_slurm.sh --years 100
+# explicit resume overrides the auto-detect:
+sbatch experiments/run_dino_control_slurm.sh --years 200 --resume 36500
+\end{lstlisting}
+
+\noindent If your \code{\$HOME} quota is small, export
+\code{XDG\_CACHE\_HOME=/path/on/shared/scratch} \emph{before both} the prefetch
+and the \code{sbatch} --- the cache must be the same path, visible from both the
+login and compute nodes.
+
+\subsection{The AMOC hosing sweep}
+
+A second SLURM wrapper,
+\codref{experiments/run_amoc_hosing_slurm.sh}{the AMOC hosing/hysteresis sweep},
+drives the freshwater-hosing experiment behind the bistability and tipping
+results of Chapter~\ref{chap:ch17_amoc_tipping}. It uses the same module/venv/GPU
+preflight preamble but requests a preemptible QOS and forwards all arguments to
+\code{run\_amoc\_hosing.py}, which auto-resumes from per-hosing-level
+checkpoints (so a \code{--requeue} after preemption continues rather than
+re-spinning up):
+
+\begin{lstlisting}[language=bash]
+sbatch --dependency=afterok:<control_jobid> --requeue \
+    experiments/run_amoc_hosing_slurm.sh \
+    --ckpt /p/tmp/$USER/dino_control_thc/state_d036500 \
+    --fmax 1.0 --nsteps 5 --hold-years 15 \
+    --outdir /p/tmp/$USER/amoc_hosing
+\end{lstlisting}
+
+\noindent The sweep ramps the subpolar freshwater hosing up to \code{--fmax}
+(in \Sv) in \code{--nsteps} stages, holding each for \code{--hold-years} so the
+overturning equilibrates; the \code{--dependency=afterok} chains it after a
+finished control run.
+
+\section{Scoring a run against observations}
+
+Once a run has written checkpoints, score them against WOA18 (ocean
+$\Temp$/$\Salt$) and ERA5 (near-surface atmosphere) with the validation
+pipeline (Chapter~\ref{chap:ch16_climatology}). It accepts a glob of checkpoints,
+which it averages into a climatology:
+
+\begin{lstlisting}[language=bash]
+# score saved checkpoints (scorecard + bias maps + zonal means):
+python experiments/validate_control.py --states "outputs/dino_control/state_d*.nc" --era5
+# or exercise the pipeline on a short in-process run:
+python experiments/validate_control.py --demo 200 --era5
+# refresh the README dashboard figures from a saved glob:
+python experiments/make_readme_figures.py "outputs/dino_control/state_d*.nc" \
+    --label "dino control"
+\end{lstlisting}
+
+\noindent A perfect model scores bias $0$, correlation $1$, and standard-deviation
+ratio $1$; the current scorecards (and their honest limitations) are discussed in
+Chapters~\ref{chap:ch16_climatology}--\ref{chap:ch19_tropics_monsoon}.
+
+\section{Running the test suite}
+
+The test suite under \code{tests/} is the fastest way to confirm an install is
+healthy and to guard changes. It runs on CPU; use the same platform pin as for
+local runs:
+
+\begin{lstlisting}[language=bash]
+PYTHONPATH=$PWD JAX_PLATFORMS=cpu python -m pytest
+\end{lstlisting}
+
+\noindent The tests cover the ocean and atmosphere components, the coupler and
+flux correction, the AMOC and momentum diagnostics, the \dino{} coupling and
+time step, the CO$_2$ warming end-to-end path, and --- crucially for a
+differentiable model --- the adjoint/gradient checks. Run a single module, for
+example the adjoint tests, with the usual pytest selector:
+
+\begin{lstlisting}[language=bash]
+PYTHONPATH=$PWD JAX_PLATFORMS=cpu python -m pytest tests/test_adjoint.py -q
+\end{lstlisting}
+
+\noindent The pytest configuration in \code{pyproject.toml} fixes the test path
+to \code{tests/} and silences deprecation warnings, so a bare \code{pytest}
+invocation from the repository root behaves identically. With the test suite
+green and a short coupled run completing without NaNs, the install is ready for
+the experiments of Part~III.

@@ -18,6 +18,7 @@
 \usepackage{caption}
 \usepackage{microtype}
 \usepackage{enumitem}
+\usepackage[strings]{underscore}   % literal _ in text (paths); still subscript in math
 
 % --- colours -------------------------------------------------------
 \definecolor{NavyBlue}{RGB}{0,51,153}
@@ -91,5 +92,5 @@
 \newcommand{\jax}{\textsc{jax}}
 \newcommand{\dino}{\textsc{dinosaur}}
 \newcommand{\model}{Chronos-ESM}
-\newcommand{\softplus}{\operatorname{softplus}}
-\newcommand{\Sv}{\,\mathrm{Sv}}                % Sverdrup
+\newcommand{\softplus}{\ensuremath{\operatorname{softplus}}}  % usable in text or math
+\newcommand{\Sv}{\ensuremath{\,\mathrm{Sv}}}   % Sverdrup, usable in text or math

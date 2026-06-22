@@ -1,4 +1,318 @@
-\chapter{Parameter Reference}
-\label{chap:appB_parameters}
+\chapter{Parameter Reference}\label{chap:appB_parameters}
 
-\emph{[This chapter is under construction.]}
+\providecommand{\val}[1]{\ensuremath{#1}}
+
+This appendix is a single-place reference for the physical and numerical
+parameters that define a \model{} run. Every value listed here is the
+\emph{actual} default in the source code as of writing; where a parameter is a
+keyword argument of a step routine, the default shown is the one that fires when
+the caller passes nothing. The intent is that a reader can reproduce, or
+sensibly perturb, a control integration without re-deriving constants from the
+governing equations. The physics behind each group is developed in the body
+chapters, which we cross-reference throughout: the ocean equations in
+\ref{chap:ch04_ocean_equations}, mixing and the Gent--McWilliams parameterization
+in \ref{chap:ch05_ocean_mixing}, ocean numerics in \ref{chap:ch06_ocean_numerics},
+the overturning closure in \ref{chap:ch08_ocean_overturning}, the multi-level
+atmosphere in \ref{chap:ch09_atmosphere_multilevel}, and the coupler and forcing
+in \ref{chap:ch13_coupler_fluxes} and \ref{chap:ch14_forcing_response}.
+
+A standing caveat: \model{} is research software, and several of these numbers
+are not first-principles constants but \emph{tuning knobs} chosen for numerical
+stability or for plausible large-scale behaviour at T31. The thermohaline
+closure (\ref{chap:ch08_ocean_overturning}) in particular is an interim
+box-model-style parameterization, and its coefficients have no observational
+counterpart; they are calibrated so that the AMOC sits in a realistic range and
+so that the salt-advection feedback can be pushed across a bifurcation in tipping
+experiments (\ref{chap:ch17_amoc_tipping}). Read those entries as control
+parameters, not measured quantities.
+
+Symbols in the ``Code symbol'' column are the literal identifiers in the source;
+the home file is given so a value can be traced and changed at its definition.
+
+% ===================================================================
+\section{Grid and resolution}
+% ===================================================================
+
+The horizontal grid is selected at import time from the environment variable
+\code{CHRONOS\_RESOLUTION} (default \code{T31}); both the ocean and the
+single-level atmosphere share the same regular latitude--longitude mesh, while
+the active \dino{} atmosphere runs on its own Gaussian grid at the same spectral
+truncation. The ocean uses a stretched vertical grid with a thin surface layer so
+that the surface heat capacity is realistic and SST responds to fluxes on the
+right timescale (\ref{chap:ch06_ocean_numerics}).
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+Parameter (code symbol) & Value & Units & Meaning \\
+\midrule
+Truncation \code{RESOLUTION} & T31 & --- & spectral truncation (default) \\
+Latitudes \code{NLAT} & 48 & --- & ocean/atmos grid rows ($\approx 3.75^\circ$) \\
+Longitudes \code{NLON} & 96 & --- & ocean/atmos grid columns \\
+Ocean levels \code{NZ\_OCEAN} & 15 & --- & vertical $\dep$-levels \\
+Total depth \code{OCEAN\_TOTAL\_DEPTH} & 5000 & m & ocean column depth \\
+Stretch \code{stretch} & 1.7 & --- & vertical grid stretching exponent \\
+\dino{} layers \code{layers} & 24 & --- & atmosphere $\sigma$-levels \\
+\dino{} truncation \code{truncation} & T31 & --- & atmosphere spectral truncation \\
+Earth radius \code{EARTH\_RADIUS}, $\Erad$ & $6.371\times10^{6}$ & m & planetary radius \\
+\bottomrule
+\end{tabular}
+\caption{Grid and resolution. Interfaces are placed at
+$\dep\,(k/\mathrm{NZ})^{1.7}$, giving a $\sim 50$~m surface layer that thickens
+with depth; \code{OCEAN\_DZ} and \code{OCEAN\_DEPTH\_CENTERS} are derived from
+this and stay mutually consistent.}
+\label{tab:appB_grid}
+\end{table}
+
+\codref{chronos\_esm/config.py}{resolution, vertical grid, grid configs}
+
+% ===================================================================
+\section{Time steps and physical constants}
+% ===================================================================
+
+\model{} sub-cycles the ocean and atmosphere inside an hourly coupling interval
+(\ref{chap:ch13_coupler_fluxes}). The single-level atmosphere uses a very short
+$30$~s step (forward Euler on gravity waves, see \ref{chap:ch10_atmosphere_singlelevel});
+the active \dino{} atmosphere uses an ImEx-RK3 scheme at a $20$~min step
+(\ref{chap:ch09_atmosphere_multilevel}). Both can be overridden from the
+environment for tuning.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+Parameter (code symbol) & Value & Units & Meaning \\
+\midrule
+Ocean step \code{DT\_OCEAN} & 900 & s & ocean time step (15 min) \\
+Atmos step \code{DT\_ATMOS} & 30 & s & single-level atmosphere step \\
+\dino{} step \code{dt\_minutes} & 20 & min & multi-level atmosphere step \\
+Coupling \code{COUPLING\_INTERVAL} & 3600 & s & ocean--atmos exchange interval \\
+CG tol.\ \code{CG\_TOL} & $10^{-6}$ & --- & conjugate-gradient tolerance \\
+CG max iter \code{CG\_MAX\_ITER} & 1000 & --- & CG iteration cap \\
+Softplus sharpness \code{EPSILON\_SMOOTH} & $10^{-3}$ & --- & $\softplus$ scale (precip) \\
+Gravity \code{GRAVITY}, $\grav$ & 9.81 & m\,s$^{-2}$ & gravitational acceleration \\
+Rotation \code{OMEGA}, $\Om$ & $7.2921\times10^{-5}$ & rad\,s$^{-1}$ & Earth angular velocity \\
+Seawater density \code{RHO\_WATER}, $\densz$ & 1025 & kg\,m$^{-3}$ & reference seawater density \\
+Air density \code{RHO\_AIR} & 1.225 & kg\,m$^{-3}$ & reference air density \\
+$c_{p,\mathrm{air}}$ \code{CP\_AIR} & 1004 & J\,kg$^{-1}$\,K$^{-1}$ & specific heat of dry air \\
+$c_{p,\mathrm{sea}}$ \code{CP\_WATER} & 3985 & J\,kg$^{-1}$\,K$^{-1}$ & specific heat of seawater \\
+$R_{\mathrm{air}}$ \code{R\_AIR} & 287 & J\,kg$^{-1}$\,K$^{-1}$ & gas constant, dry air \\
+$L_v$ \code{LATENT\_HEAT\_VAPORIZATION} & $2.5\times10^{6}$ & J\,kg$^{-1}$ & latent heat of vaporization \\
+$\sigma$ \code{STEFAN\_BOLTZMANN} & $5.67\times10^{-8}$ & W\,m$^{-2}$\,K$^{-4}$ & Stefan--Boltzmann constant \\
+$p_0$ \code{P0} & $10^{5}$ & Pa & reference pressure \\
+\bottomrule
+\end{tabular}
+\caption{Time steps, solver tolerances, and physical constants.
+$\kappa = R_{\mathrm{air}}/c_{p,\mathrm{air}}$ is derived. Note that the
+hourly coupling interval is sub-cycled by both the ocean ($900$~s) and the
+atmosphere.}
+\label{tab:appB_time}
+\end{table}
+
+\codref{chronos\_esm/config.py}{time stepping, constants, tuning coefficients}
+
+% ===================================================================
+\section{Ocean physics}
+% ===================================================================
+
+These are the defaults of \code{step\_ocean} (the ocean stepper). They set the
+viscous and diffusive closure (\ref{chap:ch05_ocean_mixing}), the Gent--McWilliams
+eddy-bolus coefficient \citep{gentmcwilliams1990}, the bottom drag entering the
+geostrophic balance, and the safety clamps that keep the integration physical
+(\ref{chap:ch06_ocean_numerics}). The equation of state is the linear form
+$\dens = \densz - \alpha(\Temp - \Temp_0) + \beta(\Salt - \Salt_0)$ used
+throughout \ref{chap:ch04_ocean_equations}.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+Parameter (code symbol) & Value & Units & Meaning \\
+\midrule
+Lateral viscosity \code{Ah} & $2.0\times10^{5}$ & m$^{2}$\,s$^{-1}$ & harmonic momentum viscosity \\
+Biharmonic visc.\ \code{Ab} & 0 & m$^{4}$\,s$^{-1}$ & biharmonic viscosity (off) \\
+GM coefficient \code{kappa\_gm} & 1000 & m$^{2}$\,s$^{-1}$ & Gent--McWilliams bolus \\
+Tracer diff.\ \code{kappa\_h} & 500 & m$^{2}$\,s$^{-1}$ & interior horizontal diffusivity \\
+Biharmonic tracer \code{kappa\_bi} & 0 & m$^{4}$\,s$^{-1}$ & biharmonic tracer diff.\ (off) \\
+Smagorinsky \code{smag\_constant} & 0.1 & --- & dynamic-viscosity constant \\
+Bottom drag \code{r\_drag} & $5.0\times10^{-2}$ & s$^{-1}$ & linear drag in geostrophy \\
+Barotropic drag \code{r\_drag\_bt} & $1/(86400\cdot25)$ & s$^{-1}$ & Stommel 25-day drag \\
+Shapiro filter \code{shapiro\_strength} & 0 & --- & $2\Delta x$ noise cleanup (off) \\
+Polar diffusivity (interior) & 20000 & m$^{2}$\,s$^{-1}$ & enhanced diff.\ at $|\,\lat\,|$ poles \\
+EOS $\alpha$ & 0.2 & kg\,m$^{-3}$\,K$^{-1}$ & thermal expansion \\
+EOS $\beta$ & 0.8 & kg\,m$^{-3}$\,psu$^{-1}$ & haline contraction \\
+EOS $\Temp_0$ & 283.15 & K & reference temperature \\
+EOS $\Salt_0$ & 35.0 & psu & reference salinity \\
+Salinity clip & $[30,\,38]$ & psu & hard stability clamp \\
+Temperature clip & $[250,\,320]$ & K & hard stability clamp \\
+Freezing floor & 271.35 & K & $\approx-1.8^\circ$C sea-ice stub \\
+Sponge salinity \code{S\_REF} & 35.0 & psu & high-lat sponge target \\
+Sponge timescale \code{tau\_sponge} & 180 & days & polar ($>65^\circ$) relaxation \\
+Global relax \code{tau\_global} & 3 & yr & weak global salinity relaxation \\
+Global mean \code{S\_REF\_GLOBAL} & 34.7 & psu & conserved volume-mean salinity \\
+\bottomrule
+\end{tabular}
+\caption{Ocean physics defaults from \code{step\_ocean}. The two-tier salinity
+treatment (a strong $6$-month polar sponge plus a weak $3$-year global
+relaxation, with the volume mean renormalized each step) is described in
+\ref{chap:ch07_ocean_prognostic_core}; the clamps are stability nets and are not
+hit in a healthy control run.}
+\label{tab:appB_ocean}
+\end{table}
+
+\codref{chronos\_esm/ocean/veros\_driver.py}{step\_ocean defaults, EOS, sponges, clamps}
+
+% ===================================================================
+\section{Thermohaline-closure knobs}
+% ===================================================================
+
+The thermohaline overturning closure
+(\code{thc\_overturning\_velocity}, \ref{chap:ch08_ocean_overturning}) adds a
+depth-integral-zero Atlantic meridional cell whose strength scales as
+$\code{thc\_k\_vel}\cdot\softplus(\text{contrast}/\code{drho\_scale})$, where the
+contrast is the subpolar-minus-subtropical upper-ocean density difference,
+optionally haline-amplified. Because the cell carries no net transport it
+survives the barotropic corrector and gives density a clean pathway to the
+$26.5^\circ$N overturning, so that $\partial(\mathrm{AMOC})/\partial(\dens)$ is
+nonzero and sign-correct. Raising \code{thc\_haline\_gain} above unity amplifies
+the salt-advection feedback past a loop gain of one, making the AMOC bistable for
+the tipping experiments in \ref{chap:ch17_amoc_tipping}
+\citep{stommel1961, rahmstorf2005, marotzke1991}. These are control knobs, not
+observed constants.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+Parameter (code symbol) & Value & Units & Meaning \\
+\midrule
+Velocity scale \code{thc\_k\_vel} & $1.0\times10^{-4}$ & m\,s$^{-1}$ & overturning strength scale \\
+Haline gain \code{thc\_haline\_gain} & 1.0 & --- & salt-feedback amplification ($1=$ off) \\
+Contrast depth \code{thc\_contrast\_depth\_m} & None ($\to$ \code{upper\_depth\_m}) & m & layer for density contrast \\
+Limb depth \code{upper\_depth\_m} & 1100 & m & overturning-cell upper-limb depth \\
+Contrast scale \code{drho\_scale} & 0.1 & kg\,m$^{-3}$ & $\softplus$ contrast normalization \\
+Haline coeff.\ \code{BETA\_S} & 0.78 & kg\,m$^{-3}$\,psu$^{-1}$ & $\partial\dens/\partial\Salt$ for amplification \\
+Subpolar band \code{subpolar} & $(45,\,65)$ & $^\circ$N & dense-water-formation band \\
+Subtropical band \code{subtropical} & $(10,\,30)$ & $^\circ$N & reference band \\
+Hosing \code{hosing\_sv} & 0 & \unskip$\Sv$ & subpolar freshwater forcing \\
+Hosing band \code{band} & $(45,\,65)$ & $^\circ$N & hosing footprint \\
+\bottomrule
+\end{tabular}
+\caption{Thermohaline-closure and AMOC-hosing knobs. \code{thc\_k\_vel=0}
+disables the closure entirely. A shallow \code{thc\_contrast\_depth\_m}
+($\sim300$~m) gives a surface freshwater hosing more leverage on deep-water
+formation than the default $0$--$1100$~m mean; see
+\ref{chap:ch17_amoc_tipping}.}
+\label{tab:appB_thc}
+\end{table}
+
+\codref{chronos\_esm/ocean/overturning.py}{thc\_overturning\_velocity, subpolar\_hosing\_salt\_tendency}
+
+% ===================================================================
+\section{Atmosphere}
+% ===================================================================
+
+The active atmosphere is the \dino{} differentiable spectral primitive-equation
+dycore (\ref{chap:ch09_atmosphere_multilevel}), run with Held--Suarez-style
+forcing \citep{heldsuarez1994} and the architecture behind NeuralGCM
+\citep{kochkov2024neuralgcm}. The defaults below are the \code{DinoAtmosphere}
+constructor arguments. The eddy-permitting tuning is deliberate: the
+hyperdiffusion timescale is weak enough ($6$~h) that T31 baroclinic eddies can
+grow, and a small rotational wind seed breaks the exactly axisymmetric
+equilibrium so that mid-latitude surface westerlies are earned dynamically
+(\ref{chap:ch18_jets_stormtracks}). The legacy single-level path
+(\ref{chap:ch10_atmosphere_singlelevel}) is retained but is not the active
+atmosphere.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+Parameter (code symbol) & Value & Units & Meaning \\
+\midrule
+Diffusion timescale \code{diffusion\_tau\_hours} & 6.0 & h & hyperdiffusion damping time \\
+Diffusion order \code{diffusion\_order} & 2 & --- & $\lap$-order of the filter \\
+Boundary-layer top \code{sigma\_b} & 0.7 & --- & $\sigma$ of friction layer top \\
+Friction rate \code{kf\_per\_day} & 1.0 & day$^{-1}$ & boundary-layer Rayleigh drag \\
+Free-trop.\ relax \code{ka\_per\_day} & $1/40$ & day$^{-1}$ & Newtonian cooling rate \\
+Surface relax \code{ks\_per\_day} & $1/4$ & day$^{-1}$ & near-surface relaxation rate \\
+Min.\ equil.\ temp.\ \code{minT} & 200 & K & stratospheric $\Temp_{eq}$ floor \\
+Horizontal $\Delta\Temp$ \code{dThz} & 10 & K & equator--pole $\Temp_{eq}$ contrast \\
+Condensation time \code{tau\_cond\_hours} & 3.0 & h & large-scale precip relaxation \\
+Initial RH \code{init\_rh} & 0.5 & --- & initial relative humidity \\
+Seed wind \code{seed\_wind\_ms} & 2.0 & m\,s$^{-1}$ & symmetry-breaking vorticity seed \\
+Orography \code{orography} & True & --- & ETOPO topography on/off \\
+\bottomrule
+\end{tabular}
+\caption{\dino{} atmosphere defaults (\code{DinoAtmosphere.\_\_init\_\_}).
+The time step and truncation appear in Tables~\ref{tab:appB_grid} and
+\ref{tab:appB_time}.}
+\label{tab:appB_atmos}
+\end{table}
+
+\codref{chronos\_esm/atmos/dino\_atmos.py}{DinoAtmosphere constructor, forcing, seed}
+
+% ===================================================================
+\section{Coupler and forcing}
+% ===================================================================
+
+The coupler (\ref{chap:ch13_coupler_fluxes}) computes bulk surface fluxes,
+applies an SST flux correction, and injects external radiative forcing. The CO$_2$
+forcing follows the logarithmic Myhre form
+$F = 5.35\,\ln(C/C_0)$~W\,m$^{-2}$ \citep{myhre1998}, zero at the preindustrial
+reference $C_0 = 280$~ppm, and is the channel for the forcing-response and CMIP-style
+experiments (\ref{chap:ch14_forcing_response}, \ref{chap:ch20_cmip7})
+\citep{eyring2016cmip6}. The flux correction has two modes: a strong Haney
+restoring of SST to the WOA target ($\tau\approx30$~days, control mode), or a
+frozen q-flux with weak anomaly restoring ($\tau$ long, free / forcing-responsive
+mode).
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+Parameter (code symbol) & Value & Units & Meaning \\
+\midrule
+CO$_2$ coefficient & 5.35 & W\,m$^{-2}$ & Myhre log-forcing coefficient \\
+CO$_2$ reference \code{co2\_ref} & 280 & ppm & preindustrial reference (zero forcing) \\
+Restoring time \code{RESTORE\_TAU\_DAYS} & 30 & days & control-mode SST restoring \\
+Free-mode restoring \code{restore\_tau\_days} & 3650 & days & q-flux anomaly restoring \\
+Drag coeff.\ \code{CD} & $1.3\times10^{-3}$ & --- & bulk wind-stress drag \\
+Coupler air density \code{RHO\_AIR} & 1.2 & kg\,m$^{-3}$ & bulk-flux air density \\
+Ocean drag \code{DRAG\_COEFF\_OCEAN} & $1.2\times10^{-3}$ & --- & surface drag over ocean \\
+Land drag \code{DRAG\_COEFF\_LAND} & $2.0\times10^{-3}$ & --- & surface drag over land \\
+Ocean albedo \code{ALBEDO\_OCEAN} & 0.07 & --- & shortwave albedo, ocean \\
+Land albedo \code{ALBEDO\_LAND} & 0.30 & --- & shortwave albedo, land \\
+Land emissivity \code{EMISSIVITY\_LAND} & 0.96 & --- & longwave emissivity, land \\
+Wind-stress clip & $\pm0.3$ & Pa & $\tau_x,\tau_y$ safety clamp \\
+Net-heat clip & $\pm1500$ & W\,m$^{-2}$ & surface heat-flux clamp \\
+Coupling interval \code{interval} & 1.0 & day & coupled-step interval \\
+\bottomrule
+\end{tabular}
+\caption{Coupler and forcing parameters. The two restoring timescales select the
+flux-correction mode; in control runs the model restores SST strongly to WOA
+($30$~days), while forcing-response runs freeze a diagnosed q-flux and restore
+only anomalies on a multi-year timescale.}
+\label{tab:appB_coupler}
+\end{table}
+
+\codref{chronos\_esm/coupler/dino\_coupling.py}{co2\_forcing\_wm2, ocean\_fluxes\_jax, restoring}
+\codref{chronos\_esm/coupler/dino\_step.py}{DinoCoupledModel: interval, thc/flux-correction wiring}
+
+% ===================================================================
+\section{A note on provenance and reproducibility}
+% ===================================================================
+
+Two practical points close this reference. First, the resolution, both
+atmospheric time steps, and the contrast depth can be overridden at run time
+(\code{CHRONOS\_RESOLUTION}, \code{CHRONOS\_DT\_ATMOS}, and constructor keywords),
+so a reproduced run should record the environment and the explicit keyword
+arguments, not merely cite this table. Second, several values --- the THC knobs,
+the salinity sponge and global-relaxation timescales, the ocean clamps, and the
+hyperdiffusion time --- are pragmatic choices that trade physical fidelity against
+the stability of a low-resolution, partly diagnostic ocean. They are documented
+here so that they can be changed honestly and with their consequences understood,
+which is the point of running a fully differentiable model
+(\ref{chap:ch03_differentiable}, \ref{chap:ch15_differentiable_applications})
+\citep{jax2018, vallis2017, griffies2004, semtner1976}.

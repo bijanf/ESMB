@@ -1,4 +1,445 @@
-\chapter{Toward CMIP7 Participation}
-\label{chap:ch20_cmip7}
+\chapter{Toward CMIP7 Participation}\label{chap:ch20_cmip7}
 
-\emph{[This chapter is under construction.]}
+% --- local symbols (minimal, chapter-scoped) ---------------------------
+\providecommand{\degr}{^{\circ}}             % degree symbol in math mode
+\providecommand{\Wm}{\,\mathrm{W\,m^{-2}}}   % radiative-forcing units
+
+The Coupled Model Intercomparison Project (CMIP) is the organising backbone of
+modern climate science: a community agreement that, whatever model you build, you
+will run it through a common set of experiments and publish the output in a common
+format, so that dozens of independently developed models can be compared
+apples-to-apples and synthesised into assessments such as the IPCC reports. CMIP6
+\citep{eyring2016cmip6} formalised this into a small, mandatory core (the
+\emph{DECK}) plus a federation of opt-in Model Intercomparison Projects (MIPs);
+CMIP7 inherits and extends that design. This chapter asks an honest, instructive
+question: \emph{what would it take for \model{} --- a T31, partially idealised,
+research-preview model --- to participate in CMIP7?} We are not claiming that it
+can today. The value of the exercise is pedagogical: it forces us to lay the
+model's existing capabilities (Chapters~\ref{chap:ch13_coupler_fluxes},
+\ref{chap:ch14_forcing_response}, \ref{chap:ch16_climatology},
+\ref{chap:ch17_amoc_tipping}) against a community standard and to name, precisely,
+the gaps between a teaching model and a CMIP-class one.
+
+We proceed in four steps. \S\ref{sec:c20_deck} explains the DECK and the
+historical/ScenarioMIP simulations. \S\ref{sec:c20_map} maps \model{}'s existing
+experiments onto these entry points: the flux-corrected control as a
+\code{piControl} analogue, and the abrupt-CO\textsubscript{2} / q-flux machinery of
+Chapter~\ref{chap:ch14_forcing_response} as an \code{abrupt-4xCO2} /
+\code{1pctCO2} analogue. \S\ref{sec:c20_gaps} is the candid accounting: data
+standards (CF, CMOR, the data request, ESGF) and the scientific gaps (no full
+radiative transfer, a TCR-proxy rather than a true ECS, coarse resolution).
+\S\ref{sec:c20_roadmap} frames a realistic roadmap and the genuinely distinctive
+value \model{} brings --- speed, differentiability, and classroom accessibility.
+
+\begin{remark}[A caveat about a moving target]
+CMIP7 is, at the time of writing, still being specified by the WCRP CMIP Panel and
+its task teams: the precise experiment list, the data-request variables, and the
+governance of forcing datasets are evolving. We therefore describe CMIP7 at the
+level of its \emph{stable design principles} --- which are continuous with CMIP6
+\citep{eyring2016cmip6} --- and flag explicitly where details remain provisional.
+Treat the specific experiment names and variable counts as illustrative of the
+\emph{structure}, not as a frozen specification.
+\end{remark}
+
+% ======================================================================
+\section{The CMIP DECK and the standard simulations}\label{sec:c20_deck}
+% ======================================================================
+
+The CMIP design separates a small \emph{entry card} that every participating model
+must run from a large menu of topical MIPs that each model may join. The entry
+card is the \textbf{DECK} --- the ``Diagnostic, Evaluation and Characterization of
+Klima'' --- four experiments chosen because, between them, they characterise a
+coupled model's baseline behaviour and its response to the canonical
+CO\textsubscript{2} perturbations \citep{eyring2016cmip6}.
+
+\begin{description}[leftmargin=1.5em,style=nextline]
+\item[\code{piControl} --- pre-industrial control.]
+  A long (multi-century) coupled integration with forcings fixed at their
+  pre-industrial (nominally 1850, $C_0\approx 280\,$ppm) values. It establishes the
+  model's \emph{unforced baseline}: its mean climate, its internal variability, and
+  its drift. Every forced experiment is read as an anomaly \emph{relative to}
+  \code{piControl}, so a stable, well-characterised control is the foundation on
+  which all other DECK experiments rest.
+\item[\code{abrupt-4xCO2}.]
+  CO\textsubscript{2} is \emph{instantaneously quadrupled} from the control value
+  and held there while the coupled system adjusts. The transient of global-mean
+  surface temperature against top-of-atmosphere (TOA) energy imbalance --- the
+  \emph{Gregory regression} --- yields the effective radiative forcing, the net
+  climate-feedback parameter $\lambda$, and an estimate of the equilibrium climate
+  sensitivity (ECS). It is the single most diagnostic experiment for a model's
+  sensitivity.
+\item[\code{1pctCO2}.]
+  CO\textsubscript{2} increases at $1\%$ per year (compounding), reaching a
+  doubling near year~70 and a quadrupling near year~140. The warming at the year of
+  doubling defines the \emph{transient climate response} (TCR). Because the forcing
+  ramps rather than jumps, it samples the coupled system's response on the
+  decadal-to-century timescale that is most policy-relevant.
+\item[AMIP --- atmosphere-only.]
+  The atmosphere (and land) model is run with \emph{observed} sea-surface
+  temperature and sea-ice prescribed as lower boundary conditions over the
+  historical period. This isolates atmospheric and land skill from coupled-ocean
+  biases --- exactly the logic of our atmosphere-only forced benchmark in
+  Chapter~\ref{chap:ch16_climatology}.
+\end{description}
+
+Beyond the DECK, two further simulation families are so widely used that they are
+effectively standard:
+
+\begin{description}[leftmargin=1.5em,style=nextline]
+\item[\code{historical}.]
+  A coupled run from $\sim$1850 to the near-present, forced by the observed
+  evolution of greenhouse gases, aerosols, volcanic and solar forcing, and land
+  use. It is the run compared directly against the instrumental record, and it
+  bridges \code{piControl} to the future.
+\item[ScenarioMIP.]
+  Future projections under shared socioeconomic pathways (SSPs) --- emissions and
+  concentration trajectories spanning low-mitigation to high-emission worlds
+  --- branched from the end of \code{historical}. These produce the spread of
+  twenty-first-century outcomes that anchor adaptation and mitigation assessments.
+\end{description}
+
+The unifying logic is a chain: \code{piControl} fixes the baseline,
+\code{abrupt-4xCO2} and \code{1pctCO2} characterise sensitivity, AMIP isolates the
+atmosphere, \code{historical} validates against observations, and ScenarioMIP
+projects forward. A model that can credibly run this chain --- and publish it in
+the common format --- is, operationally, a CMIP model.
+
+% ======================================================================
+\section{Mapping \model{}'s existing capabilities}\label{sec:c20_map}
+% ======================================================================
+
+\model{} already possesses, in prototype form, analogues of three DECK entry
+points. We describe each honestly, naming both the correspondence and where the
+analogy breaks.
+
+% ----------------------------------------------------------------------
+\subsection{The flux-corrected control as a \code{piControl} analogue}\label{sec:c20_picontrol}
+% ----------------------------------------------------------------------
+
+The 100-year coupled control of Chapter~\ref{chap:ch16_climatology}
+--- the multi-level \dino{} atmosphere coupled to the $z$-level ocean,
+driven by \codref{experiments/run\_dino\_control.py}{the library coupled
+control harness} --- is \model{}'s structural counterpart to \code{piControl}.
+It runs at fixed $C_0=280\,$ppm (the driver steps the control with
+\code{co2\_ppm=280.0}), it is integrated for a century with yearly checkpoints,
+and it equilibrates to a stable mean state (global SST $\approx 18\,\degr$C,
+SSS $\approx 34.7$, both flat over the run). That stability and the resumable
+checkpoint/restart machinery are exactly the properties \code{piControl} demands:
+a baseline against which a forced anomaly can be defined.
+
+There is, however, a load-bearing difference, and it must be stated up front: our
+control is \emph{flux-corrected}. The surface heat flux restores SST toward the
+WOA18 climatology with a Haney term (Chapter~\ref{chap:ch14_forcing_response},
+$\tau=30\,$d, $\lambda\approx 79\Wm\,\mathrm{K^{-1}}$) to suppress a structural
+cold-tongue bias. A modern CMIP \code{piControl} is expected to be \emph{free of
+flux correction} --- the practice was largely abandoned after CMIP2 precisely
+because it masks model error and contaminates the forced response. So the analogy
+is structural (a stable, fixed-forcing baseline with the right bookkeeping) but not
+yet methodological (the surface is constrained, not free).
+
+The escape from that constraint is the \emph{q-flux} construction of
+Chapter~\ref{chap:ch14_forcing_response}: the time-mean restoring flux over the
+converged control is frozen into a fixed field $\overline{Q}$ and the strong
+restoring is replaced by a weak, long-$\tau$ anomaly term, freeing SST to respond.
+The control harness already accumulates and writes this $\overline{Q}$ per
+checkpoint (\code{state\_d<DAY>\_qflux.npy}). This is the bridge from a
+flux-corrected control to a forcing-responsive experiment --- and it is exactly the
+machinery the next two analogues use.
+
+% ----------------------------------------------------------------------
+\subsection{Abrupt and ramped CO\texorpdfstring{$_2$}{2} as DECK-sensitivity analogues}\label{sec:c20_co2}
+% ----------------------------------------------------------------------
+
+\model{}'s forced-CO\textsubscript{2} experiment
+(Chapter~\ref{chap:ch14_forcing_response},
+\codref{experiments/run\_dino\_co2.py}{the q-flux forced driver}) is a direct
+prototype of the CMIP CO\textsubscript{2} experiments. It branches two free-mode
+trajectories from a common control state and frozen $\overline{Q}$ --- a
+baseline at $C_0$ and a forced branch at an elevated $C$ --- and reads the warming
+as the drift-cancelling difference of their ocean-mean SST. The Myhre forcing
+$F(C)=5.35\ln(C/C_0)\Wm$ \citep{myhre1998} is the same logarithmic law CMIP models
+use to set the CO\textsubscript{2} radiative forcing.
+
+The mapping onto the DECK is one of \emph{protocol shape}:
+
+\begin{description}[leftmargin=1.5em,style=nextline]
+\item[\code{abrupt-NxCO2}.]
+  The driver imposes a step change in $C$ and holds it --- precisely the
+  \code{abrupt} protocol. The completed run is an abrupt-$2\times$CO\textsubscript{2}
+  experiment, which gave a warming
+  \begin{equation}
+    \Delta\mathrm{SST} \approx +1.58\,\mathrm{K}, \qquad
+    \frac{\Delta\mathrm{SST}}{F} \approx 0.43\,\mathrm{K}\,(\Wm)^{-1},
+    \label{eq:c20_2x}
+  \end{equation}
+  with $F=5.35\ln 2\approx 3.71\Wm$. Reaching the DECK's nominal
+  \code{abrupt-4xCO2} requires only $C=4C_0=1120\,$ppm
+  (Exercise~\ref{ex:c20_4x}); the harness already accepts an arbitrary
+  \code{--co2}, so the experiment is a one-flag change, not new physics.
+\item[\code{1pctCO2}.]
+  A compounding $1\%\,\mathrm{yr^{-1}}$ ramp is a time-dependent schedule
+  $C(t)=C_0\,(1.01)^{t}$ fed to the same forced driver. The model is differentiable
+  and fast enough that a 140-year ramp is cheap; the missing piece is only the
+  scheduling loop, not the response mechanism.
+\end{description}
+
+The break in the analogy is what Equation~\eqref{eq:c20_2x} \emph{measures}. As
+Chapter~\ref{chap:ch14_forcing_response} establishes at length, the
+$0.43\,\mathrm{K}\,(\Wm)^{-1}$ slope is a \textbf{transient, surface-forcing proxy
+for TCR --- not an ECS}. The forcing enters as a fixed surface-heat term with no
+TOA energy closure, so the Gregory regression that defines effective forcing and
+$\lambda$ in a real \code{abrupt-4xCO2} cannot be performed: there is no
+top-of-atmosphere imbalance to regress against. \model{} can produce a number with
+the right \emph{name} and a defensible sign and order of magnitude, but not the
+feedback decomposition that is the scientific payload of the DECK sensitivity
+experiments.
+
+% ----------------------------------------------------------------------
+\subsection{An AMIP analogue, and what is genuinely missing}\label{sec:c20_amip}
+% ----------------------------------------------------------------------
+
+The atmosphere-only forced benchmark of Chapter~\ref{chap:ch16_climatology} ---
+the \dino{} atmosphere run with SST held to climatology, scored against ERA5 --- is
+methodologically an AMIP run in miniature: it isolates atmospheric skill from
+coupled-ocean bias. A true AMIP simulation would prescribe the \emph{observed,
+time-varying} monthly SST and sea-ice over the full historical period (rather than
+a fixed climatology) and run the resolved seasonal cycle; the infrastructure (an
+SST-forced \dino{} atmosphere with prognostic moisture and an ITCZ) already exists,
+so the gap is observational forcing data and a seasonal driver, not dynamics.
+
+\code{historical} and ScenarioMIP, by contrast, are not yet within reach. Both
+require the full suite of time-varying forcings --- aerosols, ozone, volcanic and
+solar variability, land use --- none of which \model{} currently ingests; it has a
+single radiative channel, CO\textsubscript{2}
+(Chapter~\ref{chap:ch14_forcing_response}). Adding even concentration-driven
+greenhouse-gas histories is tractable; the aerosol and land-use forcings are
+substantial work. These are honestly out of scope for the research preview.
+
+\begin{table}[ht]
+\centering
+\caption{CMIP entry experiments and \model{}'s current standing. ``Analogue'' = a
+prototype with the right protocol shape but a documented methodological gap;
+``infrastructure'' = the dynamics exist but the forcing data / driver do not;
+``out of scope'' = missing forcings or physics.}
+\label{tab:c20_map}
+\begin{tabular}{lll}
+\toprule
+CMIP experiment & \model{} status & Key gap \\
+\midrule
+\code{piControl}    & Analogue (flux-corrected) & not yet flux-correction-free \\
+\code{abrupt-4xCO2} & Analogue (ran $2\times$)  & TCR-proxy, no TOA/ECS \\
+\code{1pctCO2}      & Infrastructure            & ramp scheduler only \\
+AMIP                & Analogue (climatological) & needs observed time-varying SST \\
+\code{historical}   & Out of scope              & no aerosol/solar/volcanic/land-use \\
+ScenarioMIP         & Out of scope              & SSP forcings + \code{historical} branch \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ======================================================================
+\section{What genuine participation requires}\label{sec:c20_gaps}
+% ======================================================================
+
+Running experiments that \emph{resemble} the DECK is necessary but far from
+sufficient. CMIP is as much a data-standards project as a science project. We
+separate the requirements into a data-engineering tier and a scientific tier, and
+treat both candidly.
+
+% ----------------------------------------------------------------------
+\subsection{Data standards: CF, CMOR, the data request, ESGF}\label{sec:c20_data}
+% ----------------------------------------------------------------------
+
+For output to be usable by the community --- and ingestible by the analysis tools
+that produce IPCC figures --- it must be \emph{CMOR-ised}: rewritten by (or to the
+standard of) the Climate Model Output Rewriter so that it is CF-compliant.
+Concretely:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{CF conventions.} Every variable carries a controlled
+  \code{standard\_name}, canonical units, and complete coordinate metadata; the
+  files are self-describing netCDF that any CF-aware tool can read without bespoke
+  code. \model{} already writes netCDF, but with internal names and conventions
+  --- it is not CF-compliant out of the box.
+\item \textbf{The CMIP data request.} CMIP specifies, per experiment, exactly which
+  variables to archive, at which frequencies (monthly, daily, sub-daily), on which
+  realms (atmos, ocean, land, seaice), and on which standardised grids. This is the
+  contract: a participating model must deliver \emph{this} list, named and shaped
+  \emph{this} way. Mapping \model{}'s state (modal spectral atmosphere; $z$-level
+  ocean on the model grid) onto the requested variables and grids is a non-trivial
+  diagnostics-and-regridding layer that does not yet exist.
+\item \textbf{Standard grids.} Output is typically requested on the native grid
+  \emph{and} regridded to a common grid. \model{}'s atmosphere is spectral (modal
+  state; physical fields recovered on a Gaussian grid, Chapter~%
+  \ref{chap:ch09_atmosphere_multilevel}) and its ocean is on a stretched
+  lat--lon $z$-grid; a conservative regridder to the request grids would be needed.
+\item \textbf{ESGF publication.} Finally, the CMOR-ised output is published to the
+  Earth System Grid Federation with the full controlled vocabulary of global
+  attributes (\code{source\_id}, \code{experiment\_id}, \code{variant\_label},
+  tracking IDs, license, and citation). Registering a \code{source\_id} and meeting
+  the publication QC is itself a formal process.
+\end{itemize}
+
+None of this is scientifically deep, but all of it is mandatory, and collectively
+it is a real engineering project. It is also the most \emph{tractable} part of the
+gap: it is well-specified, tooling exists (the CMOR library, the CF checker), and it
+could be added as a post-processing layer without touching the model physics.
+
+% ----------------------------------------------------------------------
+\subsection{Scientific gaps}\label{sec:c20_sci}
+% ----------------------------------------------------------------------
+
+The harder gaps are physical, and the model's own validation record
+(Chapters~\ref{chap:ch16_climatology}--\ref{chap:ch19_tropics_monsoon}) names them
+plainly.
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{No full radiative transfer, hence no ECS.} \model{}'s CO\textsubscript{2}
+  forcing is a single surface-heat channel (Chapter~\ref{chap:ch14_forcing_response});
+  there is no multi-band, multi-species radiation scheme and no TOA energy budget.
+  Without TOA closure there is no Gregory regression, no effective radiative forcing,
+  no feedback parameter $\lambda$, and therefore \emph{no true ECS} --- only the
+  TCR-flavoured surface proxy of Equation~\eqref{eq:c20_2x}. This is the single
+  largest scientific gap to CMIP-class sensitivity science.
+\item \textbf{The TCR-proxy is not a calibrated TCR.} Even read as a transient
+  measure, $0.43\,\mathrm{K}\,(\Wm)^{-1}$ omits the water-vapour, lapse-rate, cloud
+  and albedo feedbacks that amplify the response in a full GCM, and is computed
+  about a cold-tropics base state. It is a \emph{lower-bound-flavoured} estimate, not
+  a number that can stand beside CMIP TCR values.
+\item \textbf{Resolution.} At T31 ($\sim 3.75\degr$) the model cannot resolve SST
+  fronts, mesoscale ocean eddies, tropical cyclones, or sharp orographic
+  precipitation. The smoothed equator-to-pole SST gradient is too weak to build
+  observed mid-latitude surface westerlies from the resolved eddy momentum flux
+  (Chapter~\ref{chap:ch18_jets_stormtracks}), and mean sea-level-pressure pattern
+  skill stays low. CMIP-class models run at far finer resolution; coarse resolution
+  is an honest, structural limitation of a model designed to run hundreds of years
+  per GPU-day.
+\item \textbf{Ocean dynamics and the AMOC.} The overturning is still produced by an
+  interim density-driven closure rather than a fully prognostic-momentum core
+  (Chapters~\ref{chap:ch07_ocean_prognostic_core},
+  \ref{chap:ch08_ocean_overturning}, \ref{chap:ch17_amoc_tipping}); the AMOC is
+  $\sim 15\text{--}34\Sv$ but noisy. A clean CMIP ocean response would need the
+  prognostic core under construction.
+\item \textbf{Component completeness.} The carbon cycle, atmospheric chemistry,
+  dynamic vegetation and ice sheets that define the \emph{Earth System} tier of
+  CMIP are absent or stubbed. \model{} is a coupled physical climate model, not yet
+  a full ESM in the CMIP sense.
+\end{enumerate}
+
+The discipline of this section is the discipline of the whole manual: a research
+model earns trust by being explicit about what it does \emph{not} do. None of these
+gaps is hidden; each is documented and several have a stated path forward.
+
+% ======================================================================
+\section{A realistic roadmap, and the value \model{} brings}\label{sec:c20_roadmap}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{An incremental roadmap}\label{sec:c20_steps}
+% ----------------------------------------------------------------------
+
+The gaps fall into a natural difficulty ordering, and the cheapest, most
+instructive steps come first.
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Run the CO\textsubscript{2} DECK shape (low cost).} Extend the
+  completed $2\times$ run to \code{abrupt-4xCO2} ($C=1120\,$ppm) and add a
+  $1\%\,\mathrm{yr^{-1}}$ ramp scheduler for a \code{1pctCO2} analogue. Both are
+  driver-level changes on existing physics (Exercise~\ref{ex:c20_4x}).
+\item \textbf{A free (flux-correction-free) control (medium).} Use the frozen
+  q-flux as the \emph{only} surface correction and demonstrate a stably drifting
+  free control --- the methodological step from a flux-corrected to a
+  CMIP-shaped \code{piControl}.
+\item \textbf{A CMOR/CF export layer (medium, well-specified).} A post-processing
+  module that maps \model{}'s diagnostics to a subset of the data request, writes
+  CF-compliant netCDF on a standard grid, and passes the CF checker. This is the
+  single highest-leverage engineering step.
+\item \textbf{A seasonal AMIP driver (medium).} Prescribe observed time-varying SST
+  to the \dino{} atmosphere and run the seasonal cycle for an AMIP-style benchmark.
+\item \textbf{TOA radiation and a true sensitivity (high).} Add a radiation scheme
+  with a TOA budget so the Gregory regression --- and hence effective forcing,
+  $\lambda$, and ECS --- becomes possible. This is the deep scientific upgrade.
+\item \textbf{Forcing breadth and Earth-system components (high).} Aerosol, solar,
+  volcanic and land-use forcings for \code{historical}/ScenarioMIP, and the
+  biogeochemical components for the ESM tier.
+\end{enumerate}
+
+The honest framing is that steps 1--4 are achievable add-ons that would let
+\model{} run \emph{CMIP-shaped} experiments and publish standards-compliant output;
+steps 5--6 are the research that would make it CMIP-\emph{class}. A textbook model
+that completes 1--4 is already an excellent vehicle for teaching the CMIP workflow.
+
+% ----------------------------------------------------------------------
+\subsection{The distinctive value \model{} brings}\label{sec:c20_value}
+% ----------------------------------------------------------------------
+
+\model{} is not, and need not be, a competitor to operational ESMs. Its value lies
+in three properties that the big models largely lack.
+
+\begin{description}[leftmargin=1.5em,style=nextline]
+\item[Speed.] At $\sim$280 simulated years per GPU-day (T31), the multi-century
+  integrations that take an operational model weeks on a supercomputer take \model{}
+  hours on a single accelerator. A student can run the entire DECK shape in an
+  afternoon and \emph{see} the chain of cause and effect.
+\item[Differentiability.] Built end-to-end in \jax{}
+  (Chapter~\ref{chap:ch03_differentiable}), \model{} can return the gradient of any
+  scalar diagnostic with respect to any parameter or forcing. The 50-year
+  abrupt-CO\textsubscript{2} difference of Chapter~\ref{chap:ch14_forcing_response}
+  collapses to a single \code{jax.grad} evaluation
+  (Chapter~\ref{chap:ch15_differentiable_applications}). For sensitivity analysis,
+  calibration, and inverse problems this is a capability the CMIP ensemble does not
+  have --- and it is the same property behind differentiable emulators such as
+  NeuralGCM \citep{kochkov2024neuralgcm}, on whose \dino{} dycore \model{}'s
+  atmosphere is built.
+\item[Classroom accessibility.] The model is small, open (Apache-2.0), readable,
+  and documented equation-by-equation in this manual, with each equation tied to its
+  source line. It is a model a student can run, modify, break, and understand --- a
+  laboratory for \emph{learning} how a coupled model and the CMIP protocol work,
+  rather than a black box to be trusted.
+\end{description}
+
+The realistic conclusion, then, is not ``\model{} will join CMIP7'' but ``\model{}
+is the ideal place to \emph{learn} what joining CMIP7 means.'' It can run the
+experiments in the shape of the DECK, it makes the forcing--response logic
+transparent and differentiable, and it is honest about every gap to the standard.
+For a university course, that combination is worth more than another opaque
+production model.
+
+% ======================================================================
+\section*{Exercises}
+% ======================================================================
+
+\begin{exercise}[From $2\times$ to the DECK \code{abrupt-4xCO2}]\label{ex:c20_4x}
+The completed experiment quadrupled neither concentration nor forcing: it ran
+$C=560\,$ppm. (a) Using the Myhre law $F(C)=5.35\ln(C/C_0)$ with $C_0=280\,$ppm,
+compute the forcing for the DECK's \code{abrupt-4xCO2} ($C=1120\,$ppm) and confirm
+it is exactly twice the $2\times$ value. (b) If the surface response stayed linear
+in forcing at the proxy slope of Equation~\eqref{eq:c20_2x}, what $\Delta$SST would
+you predict for $4\times$? (c) Give one physical reason the \emph{true} response is
+unlikely to be exactly linear, and state whether your prediction is more likely an
+over- or under-estimate, citing the missing-feedback argument of
+Chapter~\ref{chap:ch14_forcing_response}.
+\end{exercise}
+
+\begin{exercise}[Why a flux-corrected control is not a \code{piControl}]
+Our control restores SST toward WOA18 with $\lambda\approx 79\Wm\,\mathrm{K^{-1}}$.
+(a) Explain in two or three sentences why this disqualifies it as a CMIP
+\code{piControl}, referring to how the restoring would interact with an imposed
+forcing (use the steady-balance argument $\Delta\mathrm{SST}=F/\lambda$ from
+Chapter~\ref{chap:ch14_forcing_response}). (b) Describe how the frozen q-flux
+$\overline{Q}$, written per checkpoint by the control harness, converts this into a
+flux-correction-\emph{free} control suitable as a CMIP baseline. (c) What single
+diagnostic would you monitor to demonstrate that the resulting free control does
+not drift unacceptably over a century?
+\end{exercise}
+
+\begin{exercise}[Scoping a CMOR export]
+Pick three output variables --- one each from the atmosphere, ocean, and land ---
+that a CMIP data request would demand (e.g.\ near-surface air temperature,
+sea-surface temperature, precipitation). For each, name (a) the CF
+\code{standard\_name} and canonical unit, (b) the \model{} state field or
+diagnostic it would be derived from (cite a chapter or a code path from
+Appendix~\ref{chap:appC_codemap}), and (c) the regridding step needed to put the
+spectral-atmosphere or stretched-ocean field onto a standard lat--lon grid. Then
+argue, in a sentence, why this export layer is the \emph{highest-leverage} step
+toward participation despite involving no new physics.
+\end{exercise}

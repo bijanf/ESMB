@@ -1,4 +1,161 @@
-\chapter{Notation and Symbols}
-\label{chap:appA_notation}
+\chapter{Notation and Symbols}\label{chap:appA_notation}
 
-\emph{[This chapter is under construction.]}
+This appendix is a quick-reference for the mathematical notation used throughout
+the book. It is deliberately terse: each entry gives the printed symbol, the
+\LaTeX{} source macro defined in the manual preamble, the meaning of the symbol,
+and the typical SI units in which it appears. All math in the manual is built
+from the macros listed here, so that a symbol always renders the same way and
+always means the same thing. If you are reading the source, you will find these
+macros defined once in \code{docs/manual/preamble.tex}; chapter authors are asked
+to use them rather than redefine local notation.
+
+A few conventions hold book-wide. Vectors are set in bold (for example the
+horizontal velocity $\uvec=(\uu,\vv)$); scalars are set in italic. Horizontal
+operators act in the $(\lon,\lat)$ plane on the sphere unless a chapter states
+otherwise. The material derivative $\Dt{}$ follows a fluid parcel and expands as
+$\Dt{q} = \pd{q}{t} + \uvec\!\cdot\!\grad q + \ww\,\pd{q}{z}$.
+Where a quantity has both a continuous (textbook) meaning and a discrete
+(code) counterpart, the continuous symbol is used in the equations and the
+mapping to the implementation is given in the relevant chapter and in
+Appendix~\ref{chap:appC_codemap}; numerical values of constants and tunable
+parameters are collected in Appendix~\ref{chap:appB_parameters}.
+
+The governing equations that motivate this notation are introduced in
+\ref{chap:ch04_ocean_equations} (ocean) and
+\ref{chap:ch09_atmosphere_multilevel} (atmosphere); the standard references for
+the symbols and their physical meaning are \citep{vallis2017} and, for the
+overturning and box-model variables, \citep{stommel1961,marotzke1991}.
+
+% ------------------------------------------------------------------
+\section{Calculus and operators}
+% ------------------------------------------------------------------
+
+These are the differential operators used in the conservation laws. The
+horizontal gradient, divergence, and curl are understood on the sphere of
+radius $\Erad$; their discrete spherical forms (with the metric factors
+$\cos\lat$ and the polar treatment) are given in
+\ref{chap:ch06_ocean_numerics}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Calculus and differential operators.}
+  \label{tab:appA_operators}
+  \begin{tabular}{@{}llp{0.42\linewidth}l@{}}
+    \toprule
+    Symbol & Macro & Meaning & Acts on \\
+    \midrule
+    $\pd{q}{t}$        & \code{\textbackslash pd}   & Partial derivative (local rate of change)            & scalar/field \\
+    $\pdd{q}{x}$       & \code{\textbackslash pdd}  & Second partial derivative                            & scalar/field \\
+    $\dt{q}$           & \code{\textbackslash dt}   & Ordinary (total) time derivative                     & function of $t$ \\
+    $\Dt{q}$           & \code{\textbackslash Dt}   & Material (advective) derivative following a parcel    & field \\
+    $\grad q$          & \code{\textbackslash grad} & Gradient operator $\boldsymbol{\nabla}$              & scalar $\to$ vector \\
+    $\diver\uvec$      & \code{\textbackslash diver}& Divergence $\grad\!\cdot\!\uvec$                     & vector $\to$ scalar \\
+    $\curl\uvec$       & \code{\textbackslash curl} & Curl $\grad\!\times\!\uvec$                          & vector $\to$ vector \\
+    $\lap q$           & \code{\textbackslash lap}  & Laplacian $\nabla^{2}q$                              & scalar/field \\
+    $\dd x$            & \code{\textbackslash dd}   & Differential (integration / line element)            & --- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ------------------------------------------------------------------
+\section{Fields and state variables}
+% ------------------------------------------------------------------
+
+These are the prognostic and diagnostic fields carried in the model state. The
+velocity components $(\uu,\vv,\ww)$ are zonal, meridional, and vertical
+respectively; potential temperature $\Temp$ and salinity $\Salt$ set the density
+$\dens$ through the equation of state, with $\densz$ a constant reference used in
+the Boussinesq approximation (see \ref{chap:ch04_ocean_equations}). The
+streamfunction $\psib$ is used both for the horizontal barotropic flow and,
+reinterpreted as a meridional overturning streamfunction, for the AMOC
+diagnostic in \ref{chap:ch08_ocean_overturning}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Fields and state variables.}
+  \label{tab:appA_fields}
+  \begin{tabular}{@{}llp{0.40\linewidth}l@{}}
+    \toprule
+    Symbol & Macro & Meaning & Typical units \\
+    \midrule
+    $\uvec$    & \code{\textbackslash uvec}  & Horizontal velocity vector $(\uu,\vv)$        & m\,s$^{-1}$ \\
+    $\uu$      & \code{\textbackslash uu}    & Zonal (eastward) velocity                     & m\,s$^{-1}$ \\
+    $\vv$      & \code{\textbackslash vv}    & Meridional (northward) velocity               & m\,s$^{-1}$ \\
+    $\ww$      & \code{\textbackslash ww}    & Vertical velocity                             & m\,s$^{-1}$ \\
+    $\Temp$    & \code{\textbackslash Temp}  & Potential temperature                         & K ($^{\circ}$C) \\
+    $\Salt$    & \code{\textbackslash Salt}  & Salinity                                      & psu (g\,kg$^{-1}$) \\
+    $\dens$    & \code{\textbackslash dens}  & Density                                        & kg\,m$^{-3}$ \\
+    $\densz$   & \code{\textbackslash densz} & Reference (Boussinesq) density                & kg\,m$^{-3}$ \\
+    $\pres$    & \code{\textbackslash pres}  & Pressure                                       & Pa \\
+    $\psib$    & \code{\textbackslash psib}  & Streamfunction (barotropic / overturning)      & m$^{3}$\,s$^{-1}$ ($\Sv$) \\
+    $\vort$    & \code{\textbackslash vort}  & Relative vorticity $\curl\uvec\!\cdot\!\kvec$  & s$^{-1}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{remark}
+The overturning streamfunction is reported in Sverdrups
+($1\Sv = 10^{6}\,\mathrm{m^{3}\,s^{-1}}$, macro \code{\textbackslash Sv}); the
+AMOC strength at $26.5^{\circ}$N is the central scalar diagnostic of
+\ref{chap:ch08_ocean_overturning} and \ref{chap:ch17_amoc_tipping}.
+\end{remark}
+
+% ------------------------------------------------------------------
+\section{Parameters and constants}
+% ------------------------------------------------------------------
+
+These are the geometric, rotational, and gravitational quantities that
+parameterise the equations. The Coriolis parameter is $\Cor = 2\Om\sin\lat$ and
+its meridional gradient is $\beq = \pd{\Cor}{y}$; on the sphere
+$y = \Erad\,\lat$, so $\beq = (2\Om/\Erad)\cos\lat$. The latitude $\lat$ and
+longitude $\lon$ are the horizontal coordinates, and $\dep$ denotes the ocean
+depth or column thickness. Standard numerical values are tabulated in
+Appendix~\ref{chap:appB_parameters}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Parameters, constants, and coordinates.}
+  \label{tab:appA_parameters}
+  \begin{tabular}{@{}llp{0.38\linewidth}l@{}}
+    \toprule
+    Symbol & Macro & Meaning & Typical units / value \\
+    \midrule
+    $\Cor$   & \code{\textbackslash Cor}   & Coriolis parameter $2\Om\sin\lat$        & s$^{-1}$ \\
+    $\beq$   & \code{\textbackslash beq}   & Coriolis gradient $\pd{\Cor}{y}$         & m$^{-1}$\,s$^{-1}$ \\
+    $\Erad$  & \code{\textbackslash Erad}  & Earth radius                              & $6.371\times10^{6}$\,m \\
+    $\Om$    & \code{\textbackslash Om}    & Earth rotation rate                        & $7.292\times10^{-5}$\,s$^{-1}$ \\
+    $\grav$  & \code{\textbackslash grav}  & Gravitational acceleration                 & $9.81$\,m\,s$^{-2}$ \\
+    $\lat$   & \code{\textbackslash lat}   & Latitude                                   & rad ($^{\circ}$) \\
+    $\lon$   & \code{\textbackslash lon}   & Longitude                                  & rad ($^{\circ}$) \\
+    $\dep$   & \code{\textbackslash dep}   & Ocean depth / column thickness             & m \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ------------------------------------------------------------------
+\section{Software notation}
+% ------------------------------------------------------------------
+
+A handful of macros keep references to the implementation consistent. Inline
+source identifiers are set in a monospace font with the \code{\textbackslash code}
+macro; the model itself is \model, written in \jax{} (the array/autodiff
+framework, \citealp{jax2018}), with the multi-level atmospheric dynamical core
+provided by \dino{}. The smooth rectifier $\softplus(x)=\log(1+e^{x})$ appears
+where a positivity constraint must remain differentiable. Pointers from an
+equation to the file that implements it use the code-callout macro, for example:
+
+\codref{chronos\_esm/ocean/diagnostics.py}{AMOC streamfunction $\psib$ and the $26.5^{\circ}$N metric.}
+
+\noindent A complete map from symbols and equations to source files is given in
+Appendix~\ref{chap:appC_codemap}, and instructions for running the model in
+Appendix~\ref{chap:appD_running}.
+
+\begin{remark}
+\model{} is research software. Several components documented in this book are
+deliberate simplifications (for example the single-level atmosphere of
+\ref{chap:ch10_atmosphere_singlelevel} and the box-model view of the overturning
+in \ref{chap:ch17_amoc_tipping}). Where a symbol stands for an idealised or
+parameterised quantity rather than a fully resolved one, the chapter that
+introduces it says so explicitly; this appendix only fixes the notation, not the
+fidelity of the physics it denotes.
+\end{remark}

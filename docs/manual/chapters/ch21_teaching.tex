@@ -1,4 +1,334 @@
-\chapter{Teaching with Chronos-ESM}
-\label{chap:ch21_teaching}
+\chapter{Teaching with Chronos-ESM}\label{chap:ch21_teaching}
 
-\emph{[This chapter is under construction.]}
+\providecommand{\labweek}[1]{\textbf{Week #1}}
+
+Most graduate climate courses teach Earth System Models the way one teaches an opaque
+instrument: students read the governing equations on a chalkboard, then run a community model
+(CESM, MOM6, an EC-Earth configuration) as a black box on a remote queue, waiting hours or days
+for output they did not generate and cannot fully read. The pedagogy and the software pull in
+opposite directions --- the equations are transparent but inert, the model is alive but
+inscrutable. \model{} was not built to be a teaching model, but several of its design choices
+make it an unusually good one. This chapter argues why, lays out a 12--14 week graduate course
+that uses the model as a weekly laboratory, gives concrete lab assignments drawn from the
+\emph{real} experiment scripts in the repository, and closes with notes for instructors.
+
+A standing caveat frames everything below. \model{} is research software --- a research preview,
+not a production climate model (Chapter~\ref{chap:ch01_introduction}). Some components are
+validated against observations (ocean T/S structure, the single-level surface winds, the
+multi-level ITCZ); others are explicit simplifications or carry documented biases (the
+single-level atmosphere has no synoptic eddies; the interim AMOC closure is a box-model
+parameterization, not prognostic momentum). This is a feature for teaching, not a bug: a model
+whose limitations are written down is a model whose limitations a student can \emph{discover},
+which is the most durable lesson a climate course can deliver.
+
+\section{Why \model{} teaches well}
+
+\subsection{Minutes-to-hours runtime closes the experiment loop within one session}
+
+The single most important pedagogical property of \model{} is speed. On a single GPU the coupled
+model integrates roughly $280$ simulated years per day (Chapter~\ref{chap:appD_running}), so a
+multi-decadal control run finishes in tens of minutes and a short forced experiment in single
+minutes. Even on a laptop CPU the differentiable kernels are fast enough for the short probes the
+labs below use. The consequence is that a student can \emph{conceive, run, plot, and interpret} a
+numerical experiment inside one three-hour lab. The hypothesis-to-result loop --- the actual
+engine of scientific learning --- closes before the student leaves the room, rather than across a
+week-long queue wait during which the original question is forgotten. This is the difference
+between an experiment a student \emph{owns} and a figure a student \emph{receives}.
+
+\subsection{Full source legibility}
+
+\model{} is a few tens of thousands of lines of readable \jax{}/Python, not millions of lines of
+Fortran accreted over three decades. A student can open \code{chronos\_esm/ocean/veros\_driver.py}
+and read, in one sitting, the actual tracer advection their experiment exercises; they can open
+\code{chronos\_esm/ocean/overturning.py} and see the exact line where the salt-advection feedback
+gain enters (Chapter~\ref{chap:ch08_ocean_overturning}). The equation on the lecture slide and the
+line of code that integrates it are separated by minutes of reading, not by an institutional
+firewall. This collapses the chalkboard/black-box gap described above: the model \emph{is} the
+lecture notes, executable. Throughout the book the \emph{Code:} margin pointers exist precisely so
+a reader can jump from a result to its source.
+
+\subsection{Differentiability makes sensitivity and inverse methods first-class}
+
+\model{} is end-to-end differentiable (Chapters~\ref{chap:ch03_differentiable},
+\ref{chap:ch15_differentiable_applications}): \jax{}'s reverse-mode autodiff
+\citep{jax2018} returns the exact gradient of any scalar diagnostic with respect to any input ---
+a parameter, a boundary condition, an initial state. In a conventional course, ``sensitivity'' is
+taught as a finite-difference afterthought (run the model twice, subtract, divide). Here a student
+can compute $\partial(\text{AMOC})/\partial(\text{subpolar salinity})$ as a single backward pass
+and cross-check it against a central finite difference in the same script
+(\code{experiments/verify\_gradient.py}, \code{experiments/p0\_amoc\_gradient\_baseline.py}). This
+turns abstract topics --- adjoint sensitivity, 4D-Var data assimilation, gradient-based parameter
+calibration, the envelope theorem at a bifurcation --- into things a student can \emph{run}. Few
+teaching models can do this at all; fewer can do it in a script short enough to read in a lab.
+
+\section{A 12--14 week graduate course}
+
+The course below maps one lecture block per week to the book's chapters and pairs each with a
+computer lab that uses the model. It is sized for a one-semester graduate course (12 core weeks
+plus 2 optional project weeks) and assumes a parallel track of problem sets on the analytic
+material. The arc is deliberate: build the ocean first (it is the validated core), add the
+atmosphere, couple, then spend the back half on the three things differentiability and speed make
+uniquely teachable --- forcing response, tipping, and inverse methods.
+
+\begin{description}[leftmargin=0pt,style=nextline]
+  \item[\labweek{1} --- Orientation and the differentiable paradigm.]
+    Lecture: Chapters~\ref{chap:ch01_introduction}, \ref{chap:ch02_preliminaries},
+    \ref{chap:ch03_differentiable}. What an ESM is; the model hierarchy; why ``differentiable''
+    changes what you can ask. Lab: install, run a short control
+    (\code{run\_century\_physics.py --years 5}), open three source files and trace one tracer
+    through the code. Deliverable: a plot of global-mean SST settling, with a paragraph on what
+    the student read in the source.
+  \item[\labweek{2} --- Ocean governing equations.]
+    Lecture: Chapter~\ref{chap:ch04_ocean_equations}. Primitive equations, hydrostatic and
+    Boussinesq approximations, the equation of state. Lab~A (below): perturb the EOS and watch the
+    circulation respond.
+  \item[\labweek{3} --- Ocean mixing and parameterization.]
+    Lecture: Chapter~\ref{chap:ch05_ocean_mixing}. Vertical mixing, isopycnal diffusion, the
+    Gent--McWilliams eddy parameterization \citep{gentmcwilliams1990}. Lab: vary \code{kappa\_gm}
+    and \code{kappa\_h} in a short control; compare the resulting thermocline depth.
+  \item[\labweek{4} --- Ocean numerics.]
+    Lecture: Chapter~\ref{chap:ch06_ocean_numerics}. The C-grid, flux-form advection, the
+    z-level staircase bathymetry, stability and the CFL condition \citep{griffies2004}. Lab:
+    halve the time step and the grid masking; observe stability limits and conservation.
+  \item[\labweek{5} --- The prognostic ocean core.]
+    Lecture: Chapter~\ref{chap:ch07_ocean_prognostic_core}. Diagnostic versus prognostic
+    momentum; why the current ocean's velocities are reconstructed and what that costs
+    (the $\partial(\text{AMOC})/\partial\dens\approx0$ blocker). This is the week to be honest
+    about a research model's frontier. Lab: run \code{p0\_amoc\_gradient\_baseline.py} and
+    measure the blocker directly.
+  \item[\labweek{6} --- Overturning and the AMOC.]
+    Lecture: Chapter~\ref{chap:ch08_ocean_overturning}. The overturning streamfunction; the
+    Stommel two-box model \citep{stommel1961}; the interim density-driven closure. Lab~C (below):
+    hose the AMOC.
+  \item[\labweek{7} --- The atmosphere I: multi-level dynamics.]
+    Lecture: Chapter~\ref{chap:ch09_atmosphere_multilevel}. Spectral primitive equations,
+    sigma coordinates, baroclinic instability, the \dino{} dycore behind NeuralGCM
+    \citep{kochkov2024neuralgcm}; the Held--Suarez idealized benchmark \citep{heldsuarez1994}.
+    Lab: run \code{dino\_held\_suarez.py}; recover the twin midlatitude jet from rest.
+  \item[\labweek{8} --- The atmosphere II: the single level and its limits.]
+    Lecture: Chapter~\ref{chap:ch10_atmosphere_singlelevel}. The barotropic single level, the
+    eddy-momentum-flux relaxation, why a single level has no synoptic systems. Lab: score the
+    atmosphere against ERA5 with \code{validate\_control.py --demo}; read the skill table
+    honestly (where it wins, where it fails).
+  \item[\labweek{9} --- Sea ice, land, and the coupler.]
+    Lecture: Chapters~\ref{chap:ch11_seaice}, \ref{chap:ch12_land},
+    \ref{chap:ch13_coupler_fluxes}. Thermodynamic ice, the bucket land model, bulk-formula
+    surface fluxes, flux correction. Lab: run a short coupled \dino{}$\leftrightarrow$ocean
+    control (\code{run\_dino\_coupled.py --days 30}) and inspect the surface energy budget.
+  \item[\labweek{10} --- Forcing and response.]
+    Lecture: Chapter~\ref{chap:ch14_forcing_response}. Radiative forcing of CO$_2$
+    \citep{myhre1998}, transient versus equilibrium response, feedbacks, why \model{}'s warming is
+    a forcing-vs-warming \emph{proxy} not an ECS. Lab~D (below): double CO$_2$.
+  \item[\labweek{11} --- Differentiable applications.]
+    Lecture: Chapter~\ref{chap:ch15_differentiable_applications}. Adjoint sensitivity,
+    gradient-based calibration, 4D-Var, calibrating a bifurcation by AD fold-continuation.
+    Lab~E (below): take a gradient and an inverse.
+  \item[\labweek{12} --- Evaluating a model: climatology and CMIP.]
+    Lecture: Chapters~\ref{chap:ch16_climatology}, \ref{chap:ch20_cmip7}. Skill metrics, Taylor
+    diagrams, model intercomparison \citep{eyring2016cmip6}. Lab~B (below): build and read a
+    validation scorecard.
+  \item[\labweek{13--14} --- Selected phenomena / project work.]
+    Lecture (pick by interest): Chapters~\ref{chap:ch17_amoc_tipping} (tipping),
+    \ref{chap:ch18_jets_stormtracks} (jets and storm tracks),
+    \ref{chap:ch19_tropics_monsoon} (tropics). Lab: supervised work on the term project
+    (Section~\ref{sec:teach-project}). Reference appendices throughout:
+    \ref{chap:appA_notation} (notation), \ref{chap:appB_parameters} (parameters),
+    \ref{chap:appC_codemap} (code map), \ref{chap:appD_running} (running).
+\end{description}
+
+\section{Lab assignments}
+
+The six labs below are drawn directly from runnable scripts in \code{experiments/}. Each gives a
+learning goal, the command to run, what to plot, and discussion questions. All are sized to finish
+within one lab session. Commands assume the repository root and an activated environment
+(Chapter~\ref{chap:appD_running}); paths and flags match the scripts as shipped.
+
+\subsection{Lab A --- Run a control and perturb the equation of state}
+
+\textbf{Learning goal.} Connect the equation of state to the large-scale circulation: density
+sets pressure gradients, which drive flow. Establish what a ``control'' run is and how to read a
+spin-up.
+
+\textbf{Run.}
+\begin{quote}\small
+\code{python experiments/run\_century\_physics.py --years 10 --ocean-ic woa}
+\end{quote}
+Then re-run with a perturbed thermal-expansion or haline-contraction coefficient in the EOS
+(\code{chronos\_esm/ocean/}; a one-line edit the source-legibility property makes easy), saving to
+a second output directory.
+\codref{experiments/run\_century\_physics.py}{WOA-seeded control / spin-up}
+
+\textbf{Plot.} Global-mean SST and SSS time series for control versus perturbed; a surface-current
+or streamfunction map for each; the difference map.
+
+\textbf{Discussion.} Which way did the gyres shift when you made seawater more (or less) sensitive
+to temperature? Did the perturbation change the \emph{mean} state or the \emph{spatial pattern}
+more? The control still relaxes salinity in a high-latitude sponge --- how does that constrain
+what your perturbation can do?
+
+\subsection{Lab B --- Score the model against observations}
+
+\textbf{Learning goal.} Learn what ``validation'' means quantitatively: bias, RMSE, pattern
+correlation, standard-deviation ratio, and the Taylor framework
+(Chapter~\ref{chap:ch16_climatology}). Learn to read a model's skill \emph{honestly}.
+
+\textbf{Run.}
+\begin{quote}\small
+\code{python experiments/validate\_control.py --demo 200 --era5}
+\end{quote}
+(or, against saved checkpoints, \code{--states "outputs/century\_physics/year\_*.nc" --era5}).
+\codref{experiments/validate\_control.py}{score a run against WOA18 + ERA5}
+
+\textbf{Plot.} The auto-generated scorecard table, the bias maps, and the zonal-mean comparisons
+the script writes.
+
+\textbf{Discussion.} The single-level atmosphere scores surface zonal-wind correlation near $0.7$
+but mean-sea-level-pressure pattern correlation near $0$ --- why does it get winds right and
+pressure wrong? (Hint: eddies.) Which fields are \emph{predicted} and which are \emph{imposed}
+(in the flux-corrected coupled control, SST correlation is $1.00$ by construction)? Pick the
+field you trust least and defend why.
+
+\subsection{Lab C --- Hose the AMOC and find a tipping point}
+
+\textbf{Learning goal.} Reproduce a saddle-node bifurcation with hysteresis from the
+salt-advection feedback \citep{stommel1961}; understand why a rate-dependent sweep is ambiguous
+and a fixed-forcing on/off test is rigorous (Chapter~\ref{chap:ch17_amoc_tipping}).
+
+\textbf{Run.} A short self-contained quasi-static sweep:
+\begin{quote}\small
+\code{python experiments/run\_amoc\_hosing.py --spinup-years 20 --fmax 0.8 --nsteps 6}\\
+\code{\ \ --hold-years 15 --haline-gain 6 --k-vel 6e-5 --contrast-depth 300}
+\end{quote}
+\codref{experiments/run\_amoc\_hosing.py}{quasi-static subpolar freshwater hosing sweep}
+
+\textbf{Plot.} AMOC at $26.5^\circ$N versus hosing $F$ for the up-leg and down-leg on one axis ---
+the hysteresis loop. The calibrated configuration opens a window $\approx[0.38,\,0.75]\Sv$
+centered near $0.6\Sv$.
+
+\textbf{Discussion.} Why does the down-leg sit below the up-leg over a finite $F$ window, and what
+physical feedback makes the ``off'' state self-sustaining? The branches are noisy
+($\pm\sim10\Sv$) --- is that numerical noise or a genuine relaxation oscillation, and how would
+you tell? Why is the interim closure a box-model parameterization rather than prognostic momentum,
+and what would a clean bifurcation require (Chapter~\ref{chap:ch07_ocean_prognostic_core})?
+
+\subsection{Lab D --- Double CO$_2$ and measure the warming}
+
+\textbf{Learning goal.} Separate radiative \emph{forcing} from climate \emph{response}
+\citep{myhre1998}; understand what a transient forcing-vs-warming slope is and why it is
+\emph{not} equilibrium climate sensitivity in this model.
+
+\textbf{Run.} From a converged control checkpoint, two branches (control ppm and $2\times$):
+\begin{quote}\small
+\code{python experiments/run\_dino\_co2.py --ckpt <control\_ckpt> --co2 560 --years 50}
+\end{quote}
+\codref{experiments/run\_dino\_co2.py}{abrupt-2$\times$CO$_2$ on the freed q-flux model}
+
+\textbf{Plot.} The two SST time series and their difference $\Delta\text{SST}(t)=$ forced $-$
+baseline (drift cancels in the difference).
+
+\textbf{Discussion.} The script reports $\Delta\text{SST}\approx+1.6$~K, about
+$0.43$~K per W\,m$^{-2}$. Why is this a \emph{proxy} and not ECS? (No top-of-atmosphere energy
+closure, no atmospheric radiative-feedback amplification, a cold-tropics base state.) Which
+feedbacks present in a full GCM are absent here, and which way would each move the number? Why is
+taking the \emph{difference} of two branches more trustworthy than either branch alone?
+
+\subsection{Lab E --- Take a gradient and run an inverse}
+
+\textbf{Learning goal.} Use differentiability directly: compute an exact sensitivity by
+reverse-mode autodiff \citep{jax2018}, cross-check it against finite differences, and use a
+gradient to \emph{calibrate} a target (Chapter~\ref{chap:ch15_differentiable_applications}).
+
+\textbf{Run.} The sensitivity baseline, then a calibration:
+\begin{quote}\small
+\code{python experiments/p0\_amoc\_gradient\_baseline.py}\\
+\code{python experiments/calibrate\_amoc\_fold.py --target 0.6 --kvel-rel 0.6}
+\end{quote}
+\codref{experiments/p0\_amoc\_gradient\_baseline.py}{$\partial(\text{AMOC})/\partial(\text{density})$ by grad + finite difference}
+\codref{experiments/calibrate\_amoc\_fold.py}{AD fold-continuation calibration of $F_{\mathrm{crit}}$}
+
+\textbf{Plot.} The grad value next to the finite-difference value (agreement check); the
+calibrated $(\code{haline\_gain},\code{k\_vel})$ that places the fold at the target $F_{\mathrm{crit}}$.
+
+\textbf{Discussion.} The baseline finds $\partial(\text{AMOC})/\partial(\text{density})\approx0$
+on the diagnostic-velocity ocean --- what does a \emph{zero} sensitivity tell you about the
+model's physics, and why is recording a zero a legitimate scientific result? Why can a tipping
+threshold \emph{not} be tuned by backpropagating through the hosing sweep itself (the sensitivity
+diverges \emph{at} the fold), and how does fold-continuation via the envelope theorem get an exact
+gradient anyway? Rank \code{k\_vel} versus \code{haline\_gain} as levers from the gradient.
+
+\subsection{Lab F --- Recover a jet from rest (idealized dynamics)}
+
+\textbf{Learning goal.} See baroclinic instability and the eddy-driven jet emerge from a
+controlled idealized forcing, decoupled from observational boundary conditions
+\citep{heldsuarez1994} (Chapters~\ref{chap:ch09_atmosphere_multilevel},
+\ref{chap:ch18_jets_stormtracks}).
+
+\textbf{Run.}
+\begin{quote}\small
+\code{python experiments/dino\_held\_suarez.py}
+\end{quote}
+\codref{experiments/dino\_held\_suarez.py}{\dino{} dry dycore with Held--Suarez forcing}
+
+\textbf{Plot.} The zonal-mean zonal wind: twin upper-tropospheric midlatitude westerlies
+($\sim22$~m/s) over surface trades.
+
+\textbf{Discussion.} Where does the eddy momentum flux that builds the surface westerlies come
+from, and why can the single-level model (Lab~B) not produce it? Why does the textbook jet emerge
+here from an \emph{isothermal} start but the realistic coupled run needs a symmetry-breaking seed?
+What does Held--Suarez deliberately leave out, and why is that the point?
+
+\section{An assessment / term-project idea}
+\label{sec:teach-project}
+
+\textbf{Project: a small intercomparison of one tunable knob.} Each student (or pair) picks one
+model parameter --- the GM coefficient \code{kappa\_gm}, the salinity-sponge timescale, the
+\code{haline\_gain}, the diffusion $\tau$ of the multi-level atmosphere --- and conducts a
+miniature, self-contained intercomparison in the spirit of CMIP \citep{eyring2016cmip6}. The
+deliverable is a short paper with: (i) a physical hypothesis for how the knob should change the
+climate; (ii) a 3--5 member ensemble of short runs spanning the knob; (iii) a validation scorecard
+(Lab~B) for each member; (iv) where differentiability applies, the \emph{gradient} of one target
+diagnostic with respect to the knob, cross-checked against the ensemble's finite difference; and
+(v) an honest discussion of which observed feature the knob improved, which it degraded, and what
+the model's documented limitations mean for the result. The runtime budget makes a real ensemble
+feasible inside a term, and the validation framework supplies a common, reproducible scoring
+standard so the class can pool results into one Taylor diagram.
+
+A lighter alternative for a shorter course: reproduce one published figure from the book
+(the AMOC hysteresis loop, the Held--Suarez jet, the $2\times$CO$_2$ warming curve) from scratch,
+and write a one-page critique of what the figure does and does not establish.
+
+\section{Notes and exercises for instructors}
+
+A teaching model is only as good as the honesty with which it is taught. \model{}'s greatest
+classroom value is that its failures are documented and reproducible: a student who measures the
+$\partial(\text{AMOC})/\partial\dens\approx0$ blocker, or reads the near-zero MSLP pattern
+correlation, has learned more about how models work than one handed a polished CESM figure. Design
+the labs so the model is allowed to be wrong, and grade the interpretation, not the agreement.
+
+\begin{description}[leftmargin=0pt,style=nextline]
+  \item[Instructor Exercise 1 --- Calibrate the difficulty of Lab~C.]
+    Before assigning the hosing lab, run the sweep yourself at two or three \code{haline\_gain}
+    values (e.g.\ $4$, $6$, $8$) and time each on your teaching hardware. Identify a configuration
+    that (a) opens a clearly visible hysteresis loop and (b) finishes inside your lab session.
+    Write a half-page rubric distinguishing a student who found a \emph{real} loop from one who
+    mistook the $\pm10\Sv$ branch noise for one.
+  \item[Instructor Exercise 2 --- Build an answer key for the honest-validation discussion.]
+    Run Lab~B yourself and, for each of the seven scored fields, write one sentence stating
+    whether the model's skill is \emph{earned}, \emph{imposed}, or \emph{absent}, with the
+    physical reason. (Worked starting points: SST in the flux-corrected control is imposed; the
+    ITCZ precipitation in the multi-level atmosphere is earned; the MSLP pattern is absent for
+    lack of synoptic eddies.) Use it to grade interpretation rather than memorized numbers, which
+    drift as the model is refined.
+  \item[Instructor Exercise 3 --- Map your syllabus onto the model's frontier.]
+    The model is actively developed; some labs above exercise validated components and some
+    exercise the research frontier (the prognostic ocean core, the multi-level atmosphere's
+    surface winds). Before the term, classify each lab as \emph{settled} or \emph{frontier} for
+    your offering, and decide explicitly which frontier results you will present as
+    open questions rather than as answers. Document one place where the model has changed since
+    this chapter was written, and adjust the affected lab.
+\end{description}
+
+The recurring meta-lesson across all three is the same one the labs teach the students: an Earth
+System Model is an argument, not an oracle. Teaching with a model whose source you can read, whose
+runs finish before the bell, and whose gradients you can take, lets a student examine that
+argument from the inside --- which is the whole point.

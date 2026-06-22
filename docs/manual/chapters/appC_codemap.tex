@@ -1,4 +1,207 @@
-\chapter{Code Map: Module to Chapter}
-\label{chap:appC_codemap}
+\chapter{Code Map: Module to Chapter}\label{chap:appC_codemap}
 
-\emph{[This chapter is under construction.]}
+This appendix is a directory: it maps every source module in the \code{chronos\_esm/}
+package to the chapter(s) of this book that develop its theory and numerics, with a
+one-line statement of the module's role in the model. The intent is to let a reader who
+is staring at a piece of code jump to the place where it is explained --- and,
+conversely, to let a reader who has just absorbed a chapter find the file that turns
+those equations into running \jax. Where a single module spans more than one chapter
+(\code{veros\_driver.py}, for instance, touches the ocean equations, the mixing
+parameterizations, and the numerics) all relevant chapter links are given.
+
+\bigskip
+\noindent\textbf{Honesty note.}\quad \model{} is research software, and the package
+contains code at three distinct maturity levels. (i) \emph{Live} modules are wired into
+the integrated model and validated against observations. (ii) \emph{Standalone /
+prototype} modules (the prognostic-momentum ocean core, the differentiable \dino{}
+coupler) are validated against analytic balances but not yet the default path; they are
+the building blocks of the working-ESM roadmap. (iii) \emph{Dead / superseded} modules
+(\code{atmos/qtcm.py}, the \code{jcm} adapter) are kept only for historical reference.
+The status column below states which is which, so the reader is never misled about what
+the code actually does.
+
+% ===================================================================
+\section{Top-level and infrastructure}
+% ===================================================================
+
+These modules glue the components together, hold the global configuration, and handle
+data, I/O, and forcing. They are documented diffusely across the book; the
+``primary'' chapter is the one where each is first put to substantive use.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}p{0.27\textwidth} p{0.16\textwidth} p{0.49\textwidth}@{}}
+\toprule
+\textbf{Module} & \textbf{Chapter(s)} & \textbf{Role / status} \\
+\midrule
+\code{main.py} & \ref{chap:ch13_coupler_fluxes} & Integrated time loop coupling ocean, single-level atmosphere, ice, and land; the legacy \code{step\_coupled} path. \emph{Live}. \\
+\code{config.py} & \ref{chap:appB_parameters} & Resolution switch (T31/T63), grids, physical constants, default time steps. \emph{Live}. \\
+\code{data.py} & \ref{chap:ch16_climatology}, \ref{chap:appD_running} & Downloads + regrids initial conditions and boundary data (WOA18, ETOPO) with periodic-longitude interpolation. \emph{Live}. \\
+\code{forcing.py} & \ref{chap:ch14_forcing_response} & Time-dependent external forcing ($\mathrm{CO_2}$, solar, volcanic AOD) for historical/scenario runs. \emph{Live}. \\
+\code{io.py} & \ref{chap:appD_running} & Saves/loads the coupled state to/from NetCDF (including \code{phi\_s} topography). \emph{Live}. \\
+\code{log\_utils.py} & \ref{chap:appD_running} & Logging configuration. \emph{Utility}. \\
+\code{profile\_model.py} & \ref{chap:appD_running} & Throughput/timing harness for a coupled step. \emph{Utility}. \\
+\code{verify\_stability.py} & \ref{chap:ch06_ocean_numerics}, \ref{chap:appD_running} & Smoke test: integrates and checks for NaNs / clamp hits / drift. \emph{Utility}. \\
+\bottomrule
+\end{tabular}
+\caption{Top-level and infrastructure modules.}
+\end{table}
+
+% ===================================================================
+\section{Ocean}
+% ===================================================================
+
+The ocean is the most developed component. The \emph{live} ocean is the
+z-level, diagnostic-velocity driver in \code{veros\_driver.py} (Chapters
+\ref{chap:ch04_ocean_equations}--\ref{chap:ch06_ocean_numerics}); the \emph{prototype}
+prognostic-momentum core (\code{barotropic.py}, \code{momentum.py}) and the interim
+thermohaline closure (\code{overturning.py}) are the subject of Chapters
+\ref{chap:ch07_ocean_prognostic_core}--\ref{chap:ch08_ocean_overturning}.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}p{0.27\textwidth} p{0.16\textwidth} p{0.49\textwidth}@{}}
+\toprule
+\textbf{Module} & \textbf{Chapter(s)} & \textbf{Role / status} \\
+\midrule
+\code{ocean/veros\_driver.py} & \ref{chap:ch04_ocean_equations}, \ref{chap:ch05_ocean_mixing}, \ref{chap:ch06_ocean_numerics} & Z-level primitive-equation ocean: tracer ($\Temp,\Salt$) advection-diffusion (RK4), diagnostic thermal-wind $\uvec$, high-lat salinity sponge. The \emph{live} ocean. \\
+\code{ocean/mixing.py} & \ref{chap:ch05_ocean_mixing} & Isopycnal (Redi) diffusion + Gent--McWilliams eddy parameterization with differentiable slope limiters \citep{gentmcwilliams1990}. \emph{Live}. \\
+\code{ocean/solver.py} & \ref{chap:ch06_ocean_numerics} & AD-safe conjugate-gradient elliptic solver for $\diver(H^{-1}\grad\psib)=\vort$ (variable-coefficient invert). \emph{Live}. \\
+\code{ocean/bathymetry.py} & \ref{chap:ch06_ocean_numerics} & Turns a depth field $\dep(\lon,\lat)$ into static 3-D wet masks (full-cell ``staircase'' coasts/floor) for no-flux boundaries \citep{griffies2004}. \emph{Live}. \\
+\code{ocean/barotropic.py} & \ref{chap:ch07_ocean_prognostic_core} & Prototype prognostic barotropic vorticity core: $\dt{\vort}=-\beq\,\pd{\psib}{x}-r\vort+F+\nu\lap\vort$. Standalone, validated vs analytic gyres. \emph{Prototype}. \\
+\code{ocean/momentum.py} & \ref{chap:ch07_ocean_prognostic_core} & Prototype prognostic baroclinic momentum: time-integrated $\dt{\uvec}$ with Coriolis, hydrostatic PGF from $\dens$, friction. Standalone, validated vs thermal wind. \emph{Prototype}. \\
+\code{ocean/overturning.py} & \ref{chap:ch08_ocean_overturning} & Interim Stommel/Marotzke box-style thermohaline closure giving $\dens$ a pathway to a coherent AMOC \citep{stommel1961,marotzke1991}. \emph{Interim closure}. \\
+\code{ocean/diagnostics.py} & \ref{chap:ch08_ocean_overturning} & Meridional / Atlantic overturning streamfunctions and the AMOC@$26.5^\circ$N scalar metric (in $\Sv$). \emph{Live}. \\
+\code{ocean/flux\_correction.py} & \ref{chap:ch13_coupler_fluxes}, \ref{chap:ch14_forcing_response} & SST flux correction: Haney restoring (control) vs.\ frozen q-flux $+$ weak anomaly restoring (forcing-responsive free run). \emph{Prototype}. \\
+\code{ocean/utils.py} & \ref{chap:ch03_differentiable} & Differentiable \code{soft\_clip} (tanh) replacing hard clips so gradients survive at bounds. \emph{Utility}. \\
+\bottomrule
+\end{tabular}
+\caption{Ocean modules. The live ocean uses diagnostic velocities; the prognostic core
+is the standalone successor under development.}
+\end{table}
+
+% ===================================================================
+\section{Atmosphere}
+% ===================================================================
+
+Two atmosphere paths coexist. The \emph{multi-level} path wraps Google's \dino{}
+spectral primitive-equation dycore (Chapter \ref{chap:ch09_atmosphere_multilevel}) and
+is the active control-run atmosphere. The \emph{single-level} barotropic path (Chapter
+\ref{chap:ch10_atmosphere_singlelevel}) is the one inside the legacy
+\code{main.step\_coupled}. The \code{qtcm.py} adapter is superseded.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}p{0.27\textwidth} p{0.16\textwidth} p{0.49\textwidth}@{}}
+\toprule
+\textbf{Module} & \textbf{Chapter(s)} & \textbf{Role / status} \\
+\midrule
+\code{atmos/dino\_atmos.py} & \ref{chap:ch09_atmosphere_multilevel}, \ref{chap:ch18_jets_stormtracks}, \ref{chap:ch19_tropics_monsoon} & Multi-level atmosphere on the \dino{} dycore (T31, $\sigma$-levels, ImEx-RK3): SST-coupled Held--Suarez forcing $+$ prognostic moisture \citep{heldsuarez1994,kochkov2024neuralgcm}. \emph{Active control-run atmosphere}. \\
+\code{atmos/spectral.py} & \ref{chap:ch09_atmosphere_multilevel}, \ref{chap:ch10_atmosphere_singlelevel} & Spherical-harmonic / FFT spectral transforms and the (unused) Helmholtz solver for the single-level dynamics. \emph{Support / partially live}. \\
+\code{atmos/dynamics.py} & \ref{chap:ch10_atmosphere_singlelevel} & Single-level (barotropic) primitive-equation step: $\vort$, divergence, $\Temp$, $\ln p_s$, advected $q$/$\mathrm{CO_2}$; wind relaxed to a climatological jet; strong hyperdiffusion. \emph{Live (legacy path)}. \\
+\code{atmos/physics.py} & \ref{chap:ch10_atmosphere_singlelevel}, \ref{chap:ch14_forcing_response} & Single-level physics: \softplus{} precipitation (convection), radiative cooling, $\mathrm{CO_2}$ forcing \citep{myhre1998}. \emph{Live (legacy path)}. \\
+\code{atmos/qtcm.py} & \ref{chap:ch10_atmosphere_singlelevel} & Quasi-equilibrium tropical circulation stepper. \emph{Superseded / dead}. \\
+\bottomrule
+\end{tabular}
+\caption{Atmosphere modules. The \dino{} multi-level path is active for control runs;
+the single-level path drives the legacy coupled loop.}
+\end{table}
+
+% ===================================================================
+\section{Sea ice and land}
+% ===================================================================
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}p{0.27\textwidth} p{0.16\textwidth} p{0.49\textwidth}@{}}
+\toprule
+\textbf{Module} & \textbf{Chapter(s)} & \textbf{Role / status} \\
+\midrule
+\code{ice/thermodynamics.py} & \ref{chap:ch11_seaice} & Semtner 0-layer thermodynamic ice: surface energy-balance solver, growth/melt, albedo \citep{semtner1976}. \emph{Live}. \\
+\code{ice/driver.py} & \ref{chap:ch11_seaice} & Sea-ice component driver advancing the thermodynamic state each ocean step. \emph{Live}. \\
+\code{land/driver.py} & \ref{chap:ch12_land} & Land surface: bucket soil moisture, surface energy balance, runoff routed to coastal ocean. \emph{Live}. \\
+\code{land/vegetation.py} & \ref{chap:ch12_land} & Prognostic dynamic vegetation (leaf-area index) responding to temperature and soil moisture. \emph{Live}. \\
+\bottomrule
+\end{tabular}
+\caption{Sea-ice and land-surface modules.}
+\end{table}
+
+% ===================================================================
+\section{Coupler}
+% ===================================================================
+
+The coupler regrids fields between component grids and assembles the surface fluxes.
+The two \code{dino\_*} modules are the differentiable multi-level coupling path
+(working-ESM roadmap), distinct from the numpy-helper standalone harness.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}p{0.27\textwidth} p{0.16\textwidth} p{0.49\textwidth}@{}}
+\toprule
+\textbf{Module} & \textbf{Chapter(s)} & \textbf{Role / status} \\
+\midrule
+\code{coupler/state.py} & \ref{chap:ch13_coupler_fluxes} & \code{CoupledState} / \code{FluxState} pytrees: the exchanged heat, freshwater, wind-stress, SST, and carbon fluxes. \emph{Live}. \\
+\code{coupler/regrid.py} & \ref{chap:ch13_coupler_fluxes} & Dense-matrix conservative remapping between atmosphere and ocean grids. \emph{Live}. \\
+\code{coupler/dino\_coupling.py} & \ref{chap:ch13_coupler_fluxes}, \ref{chap:ch03_differentiable} & Pure-\jax{} (graph-uncut) coupling primitives: SST$\to$\dino{}$\to$bulk fluxes$\to$ocean, fully differentiable. \emph{Prototype (P0)}. \\
+\code{coupler/dino\_step.py} & \ref{chap:ch13_coupler_fluxes}, \ref{chap:ch09_atmosphere_multilevel} & One jittable/differentiable multi-level coupling interval carrying the \dino{} modal state alongside ocean/land. \emph{Prototype (P1)}. \\
+\bottomrule
+\end{tabular}
+\caption{Coupler modules. Flux correction itself lives in \code{ocean/flux\_correction.py}
+(see the Ocean table) and is documented in Chapter \ref{chap:ch13_coupler_fluxes}.}
+\end{table}
+
+% ===================================================================
+\section{Validation and proxy / data assimilation}
+% ===================================================================
+
+The validation suite scores the model against WOA18 and ERA5 and produces the
+scorecard and figures; the proxy modules supply the forward operators and losses used
+in the differentiable data-assimilation experiments of Chapter
+\ref{chap:ch15_differentiable_applications}.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}p{0.27\textwidth} p{0.16\textwidth} p{0.49\textwidth}@{}}
+\toprule
+\textbf{Module} & \textbf{Chapter(s)} & \textbf{Role / status} \\
+\midrule
+\code{validation/grid.py} & \ref{chap:ch16_climatology} & Model grid helpers; regrids observations onto the model grid (bilinear, periodic-longitude). \emph{Live}. \\
+\code{validation/obs.py} & \ref{chap:ch16_climatology} & Observation/reanalysis loaders (WOA18, ERA5, RAPID AMOC) on native grids \citep{rahmstorf2005}. \emph{Live}. \\
+\code{validation/metrics.py} & \ref{chap:ch16_climatology} & Area-weighted skill metrics (bias, RMSE, pattern correlation, std-ratio) with NaN masking. \emph{Live}. \\
+\code{validation/scorecard.py} & \ref{chap:ch16_climatology} & Orchestrates obs-vs-model scoring into the printable validation scorecard. \emph{Live}. \\
+\code{validation/plots.py} & \ref{chap:ch16_climatology}, \ref{chap:ch21_teaching} & Validation figures styled for Nature-family submission (vector PDF). \emph{Live}. \\
+\code{proxy/forward\_ops.py} & \ref{chap:ch15_differentiable_applications} & Forward operators mapping state ($\Temp,\Salt$) to proxies (e.g.\ $\delta^{18}\mathrm{O}$). \emph{Live}. \\
+\code{proxy/sensor.py} & \ref{chap:ch15_differentiable_applications} & Sparse-observation sensor masking and interpolation. \emph{Live}. \\
+\code{proxy/loss.py} & \ref{chap:ch15_differentiable_applications}, \ref{chap:ch03_differentiable} & Differentiable loss functions for gradient-based (4D-Var-style) data assimilation \citep{jax2018}. \emph{Live}. \\
+\bottomrule
+\end{tabular}
+\caption{Validation and proxy / data-assimilation modules. CMIP-style output
+conventions are discussed in Chapter \ref{chap:ch20_cmip7} \citep{eyring2016cmip6}.}
+\end{table}
+
+% ===================================================================
+\section{Where the climate test cases live}
+% ===================================================================
+
+The canonical experiments of Part~IV are driven from the \code{experiments/} directory
+rather than the package itself, but they exercise specific modules. The AMOC
+hysteresis/tipping case (Chapter \ref{chap:ch17_amoc_tipping}) drives
+\code{ocean/overturning.py}, \code{ocean/diagnostics.py}, and
+\code{ocean/flux\_correction.py}; the jets-and-storm-tracks case (Chapter
+\ref{chap:ch18_jets_stormtracks}) and the tropics/monsoon case (Chapter
+\ref{chap:ch19_tropics_monsoon}) both exercise \code{atmos/dino\_atmos.py} via the
+\dino{} control harness \citep{vallis2017}. The forcing-response experiments (Chapter
+\ref{chap:ch14_forcing_response}) couple \code{forcing.py}, \code{atmos/physics.py}, and
+\code{ocean/flux\_correction.py}.
+
+\begin{remark}
+The single source of truth is the code itself. Where this map and a module's docstring
+disagree about status, trust the docstring --- the package evolves faster than the book,
+and each module's leading docstring states its current maturity and known limitations.
+\end{remark}
