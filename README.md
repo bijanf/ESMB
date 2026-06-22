@@ -182,11 +182,16 @@ field (corr −0.35): the T31 single-gradient atmosphere has little synoptic ski
 ![mslp zonal mean](docs/figures/control/zonal_mslp.png)
 
 #### AMOC (Atlantic overturning)
-Model max 34.2 Sv vs RAPID ~17 Sv at 26.5°N — closer than the pre-Panama 54 Sv, but still
-high. The AMOC is weak/noisy and **not** spin-up-limited; the root cause is a spurious net
-meridional transport in the ocean velocity field (mass not conserved at basin scale), so a
-clean overturning streamfunction is unattainable until that ocean-dynamics issue is fixed
-(see **Project Status**).
+Model max 34.2 Sv vs RAPID ~17 Sv at 26.5°N. This "max" is a **noisy single-snapshot**
+maximum: the 26.5°N cell is a clean textbook shape at any instant (smooth ~20 Sv max near
+900 m, closing at the floor), but its *amplitude* oscillates strongly over the run while SST
+stays flat (so it is **not** an SST-drift signal). The diagnostic thermal wind is negligible
+(~0.1 Sv, drag-damped); the AMOC is the density-driven **thermohaline closure**, which sets
+the overturning *instantaneously* from the small subpolar−subtropical density contrast and so
+has **no temporal inertia**. (The earlier "spurious net transport" is fixed — basin net
+transport is ~0.) Time-mean AMOC is ≈20 Sv; the planned fix adds multi-year inertia to the
+closure (relax the overturning amplitude over τ~1–3 yr) — see
+[`experiments/diagnose_coupled_amoc.py`](experiments/diagnose_coupled_amoc.py).
 ![AMOC streamfunction](docs/figures/control/amoc_streamfunction.png)
 <!-- CONTROL:END -->
 
@@ -238,7 +243,7 @@ _Validation of the dino control run (130 yr) against WOA18 + ERA5, auto-generate
 ![mslp zonal mean](docs/figures/zonal_mslp.png)
 
 ### AMOC (Atlantic overturning)
-Model max 75.8 Sv vs RAPID ~17 Sv at 26.5N. The AMOC is weak/noisy and **not** spin-up-limited; the root cause is a spurious net meridional transport in the ocean velocity field (mass not conserved at basin scale), so a clean overturning streamfunction is unattainable until that ocean-dynamics issue is fixed (see Project Status).
+Model max 75.8 Sv vs RAPID ~17 Sv at 26.5N. This "max" is a **noisy single-snapshot** maximum of the overturning streamfunction; the cell is a clean ~20 Sv shape at any instant but its amplitude oscillates (the density-driven thermohaline closure responds instantaneously, with no temporal inertia — basin net transport is ~0, already fixed). Time-mean AMOC is ≈20 Sv; the planned fix adds multi-year inertia to the closure (see `experiments/diagnose_coupled_amoc.py`).
 ![AMOC streamfunction](docs/figures/amoc_streamfunction.png)
 _(Time series appears once a multi-year run writes yearly checkpoints.)_
 

@@ -20,6 +20,27 @@ Apache-2.0. Known limitations are documented, not hidden (single-humidity T31 at
 weak ITCZ; AMOC via closure, prognostic core is research-in-progress; surface-forcing proxy,
 not equilibrium ECS). Details in the dated development entries below.
 
+## [Unreleased] - 2026-06-22f — Coupled-AMOC problem diagnosed: it's temporal NOISE, not a wrong mean
+
+- **`experiments/diagnose_coupled_amoc.py`** runs the coupled `DinoCoupledModel` (control
+  config) and logs the AMOC. **Finding:** the 26.5 N overturning is a clean, textbook cell at
+  any instant (smooth ~20 Sv max near 900 m, closing at the floor), but its **amplitude
+  oscillates violently** over the run — e.g. 9, 22, 50, 0, 110, 18 Sv month-to-month — while
+  SST stays flat (~14 °C, restored). So the AMOC "problem" is **noise/variance, not the mean**
+  (time-mean ≈20 Sv is reasonable).
+- **Root cause:** the diagnostic thermal wind is negligible (~0.1 Sv, drag-damped); the entire
+  AMOC is the **thermohaline closure** (`overturning.py`), which sets the overturning amplitude
+  **instantaneously** (`amp = k_vel·softplus(contrast/drho_scale)`) from the small
+  subpolar−subtropical density contrast. Coupled-forcing + convection noise makes that contrast
+  cross zero, and softplus near zero swings `amp` 0→large — the overturning has **no temporal
+  inertia**. (The README's old "spurious net transport / weak-noisy / 34–75 Sv too high"
+  captions are **stale** — the net transport was already fixed by `rigid_lid_project`; basin net
+  is ~0. Corrected the caption template in `make_readme_figures.py` + the rendered README.)
+- **Planned fix:** the real AMOC has multi-year inertia — relax the THC overturning amplitude
+  toward its density-implied target over τ~1–3 yr, carried at the coupling level
+  (`DinoCoupledState`, leaving `OceanState` untouched), so it can't track instantaneous density
+  noise while staying density-driven on long timescales (tipping/paleo preserved).
+
 ## [Unreleased] - 2026-06-22e — Surface-pressure reference settled: NOT the AMOC lever (P3)
 
 - **`experiments/diagnose_amoc_barotropic.py`** decomposes the prognostic-momentum AMOC into
