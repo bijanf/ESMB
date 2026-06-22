@@ -18,7 +18,7 @@ from chronos_esm.config import (  # noqa: F401
     OMEGA,
     RHO_WATER,
 )
-from chronos_esm.ocean import mixing, solver, overturning
+from chronos_esm.ocean import mixing, solver, overturning, momentum
 
 
 class OceanState(NamedTuple):
@@ -46,7 +46,7 @@ def equation_of_state(temp: jnp.ndarray, salt: jnp.ndarray) -> jnp.ndarray:
     return rho_0 - alpha * (temp - t0) + beta * (salt - s0)
 
 
-@partial(jax.jit, static_argnames=["nz", "ny", "nx", "dt"])
+@partial(jax.jit, static_argnames=["nz", "ny", "nx", "dt", "prognostic_momentum"])
 def step_ocean(
     state: OceanState,
     surface_fluxes: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
@@ -72,6 +72,8 @@ def step_ocean(
     thc_haline_gain: float = 1.0,
     thc_contrast_depth_m: Optional[float] = None,
     hosing_sv: float = 0.0,
+    prognostic_momentum: bool = False,
+    mom_drag: float = 1.0 / (86400.0 * 30.0),
 ) -> OceanState:
 
     # Helpers
@@ -162,6 +164,29 @@ def step_ocean(
 
     u_new = (u_bt[None, :, :] + u_bc) * maskC
     v_new = (v_bt[None, :, :] + v_bc) * maskC
+
+    # --- S5: prognostic baroclinic momentum (opt-in; default off => no regression) ---
+    # Replace the diagnostic thermal-wind baroclinic velocity with a TIME-INTEGRATED
+    # du/dt (semi-implicit Coriolis + hydrostatic pressure-gradient force from density +
+    # linear drag + viscosity, chronos_esm/ocean/momentum.py). state.u/v carry the
+    # velocity across steps, so the overturning is a prognostic, density-driven cell --
+    # giving density a dynamical pathway to the 26.5N overturning (d(AMOC)/d(density) =/= 0
+    # for the right reason), unlike the local thermal-wind diagnostic. The wind-driven
+    # barotropic streamfunction (u_bt/v_bt) is retained; the corrector + THC below still
+    # apply. This is P3/S5 -- the clean replacement for the interim THC closure.
+    if prognostic_momentum:
+        u_mom, v_mom = momentum.step_momentum(
+            state.u, state.v, rho, f=f_3d, dx=dx, dy=dy, dz=dz, dt=dt,
+            r=mom_drag, nu=Ah, mask=maskC)
+        # Keep only the BAROCLINIC part: the bare hydrostatic PGF has no barotropic
+        # (surface-pressure) balance, so the unbalanced depth-mean would accelerate without
+        # bound. Remove the wet-column mean (the diagnostic path does the same) -> a bounded,
+        # time-integrated baroclinic shear; the wind-driven barotropic u_bt supplies the
+        # depth-mean flow, and the corrector below enforces zero net transport.
+        u_mom_bar = jnp.sum(u_mom * wet_dz, axis=0) / H_col
+        v_mom_bar = jnp.sum(v_mom * wet_dz, axis=0) / H_col
+        u_new = (u_bt[None, :, :] + (u_mom - u_mom_bar[None, :, :])) * maskC
+        v_new = (v_bt[None, :, :] + (v_mom - v_mom_bar[None, :, :])) * maskC
 
     # --- Barotropic mass-conservation corrector ------------------------------------
     # A flat-bottom velocity streamfunction (Stommel) applied over VARIABLE bathymetry
