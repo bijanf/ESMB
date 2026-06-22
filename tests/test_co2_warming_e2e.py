@@ -9,10 +9,21 @@ real SST warming through the full dinosaur<->ocean<->land<->ice coupled step. It
 marked ``slow`` (builds the real model from WOA) but is sized to run in ~1-2 min on CPU.
 """
 
+import os
+
 import jax.numpy as jnp
+import pooch
 import pytest
 
 from chronos_esm.config import OCEAN_GRID
+
+# Builds the real DinoCoupledModel from WOA + DinoAtmosphere(orography) -> ~900 MB
+# ETOPO; skip if not cached (CI). Matches the guard on the other dino tests. Stage
+# with experiments/prefetch_data.py.
+pytestmark = pytest.mark.skipif(
+    not os.path.exists(os.path.join(pooch.os_cache("chronos_esm"), "etopo1.nc")),
+    reason="ETOPO1 (~900 MB) not cached; run experiments/prefetch_data.py to enable",
+)
 
 
 def _ocean_sst_mean(model, cstate):

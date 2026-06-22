@@ -13,9 +13,20 @@ Heavy DinoCoupledModel build is module-scoped (per the OOM-segfault gotcha). Def
 (seasonal=False) is covered by tests/test_dino_step.py — that path is untouched.
 """
 
+import os
+
 import jax.numpy as jnp
 import numpy as np
+import pooch
 import pytest
+
+# The module-scoped DinoCoupledModel fixture builds init_model() (WOA) +
+# DinoAtmosphere(orography) -> ~900 MB ETOPO; skip if not cached (CI). Matches the
+# guard on the other dino tests. Stage with experiments/prefetch_data.py.
+pytestmark = pytest.mark.skipif(
+    not os.path.exists(os.path.join(pooch.os_cache("chronos_esm"), "etopo1.nc")),
+    reason="ETOPO1 (~900 MB) not cached; run experiments/prefetch_data.py to enable",
+)
 
 from chronos_esm import orbital
 from chronos_esm.atmos import physics as aphys
