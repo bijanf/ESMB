@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.0] - 2026-06-22 — First public research-preview release
+
+Chronos-ESM is a differentiable, JAX coupled Earth System Model (multi-level `dinosaur`
+atmosphere ↔ z-level ocean ↔ slab/bucket land ↔ Semtner sea ice) on a T31 grid, GPU/CPU.
+This first public release demonstrates all four working-ESM milestones, each with documented
+limitations (see README **Project Status** and **Validation**):
+
+- **Active multi-level atmosphere** — the `dinosaur` spectral primitive-equation dycore is the
+  coupled atmosphere (differentiable end-to-end through one coupling interval).
+- **CO₂ forcing response** — free-ocean (q-flux) abrupt-2×CO₂ warms +1.58 K (TCR-like proxy).
+- **AMOC tipping** — a verified saddle-node hysteresis window (~[0.38, 0.75] Sv hosing) via a
+  density-driven thermohaline closure.
+- **Paleo (mid-Holocene 6 ka)** — a real seasonal cycle + orbital forcing reproduce the
+  correct fingerprint (NH summer warming, monsoon intensification).
+
+Differentiable throughout (the design goal: `d(climate)/d(parameter)` via `jax.grad`).
+Apache-2.0. Known limitations are documented, not hidden (single-humidity T31 atmosphere →
+weak ITCZ; AMOC via closure, prognostic core is research-in-progress; surface-forcing proxy,
+not equilibrium ECS). Details in the dated development entries below.
+
 ## [Unreleased] - 2026-06-22b — Mid-Holocene (6 ka) paleo experiment + real seasonal cycle (P5)
 
 - **P5, the 4th non-negotiable: the model responds to paleo (orbital) boundary conditions.**
