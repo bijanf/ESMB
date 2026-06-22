@@ -5,6 +5,7 @@ numpy harness helpers they replace, and (b) actually differentiable end-to-end
 through one ocean coupling interval — the foundation every downstream workstream
 (forcing, tipping, paleo-DA, carbon) depends on.
 """
+
 import os
 import sys
 
@@ -28,6 +29,7 @@ sys.path.insert(0, os.path.join(_REPO, "experiments"))
 @pytest.fixture(scope="module")
 def atm():
     from chronos_esm.atmos.dino_atmos import DinoAtmosphere
+
     return DinoAtmosphere()
 
 
@@ -35,26 +37,29 @@ def atm():
 def dino_state(atm):
     # a non-trivial state: 2 days of evolution under a simple SST gradient so winds,
     # humidity and precip are all populated (exercises every diagnostic field).
-    sst_g = jnp.asarray(300.0 - 35.0 * atm.sin_lat ** 2)   # (nlon, nlat) K
+    sst_g = jnp.asarray(300.0 - 35.0 * atm.sin_lat**2)  # (nlon, nlat) K
     return atm.step(atm.initial_state(sst_g), sst_g, n_days=2)
 
 
 def test_diagnostics_jax_matches_numpy(atm, dino_state):
     from chronos_esm.coupler.dino_coupling import dino_diagnostics_jax
-    ref = atm.diagnostics(dino_state)                 # numpy/pint reference
-    got = dino_diagnostics_jax(atm, dino_state)        # jnp port
+
+    ref = atm.diagnostics(dino_state)  # numpy/pint reference
+    got = dino_diagnostics_jax(atm, dino_state)  # jnp port
     for k in ("u_sfc", "v_sfc", "t_sfc", "q_sfc", "surface_pressure", "mslp", "precip"):
         a = np.asarray(ref[k])
         b = np.asarray(got[k])
         assert a.shape == b.shape, f"{k} shape {a.shape} vs {b.shape}"
         # float32 spectral transforms -> match to a tight relative tolerance.
-        np.testing.assert_allclose(b, a, rtol=2e-4, atol=1e-3,
-                                   err_msg=f"jnp diagnostics[{k}] != numpy")
+        np.testing.assert_allclose(
+            b, a, rtol=2e-4, atol=1e-3, err_msg=f"jnp diagnostics[{k}] != numpy"
+        )
 
 
 def test_regridders_match_numpy(atm):
     import run_dino_coupled as rdc
-    from chronos_esm.coupler.dino_coupling import make_regridders_jax, LAT_LIN
+
+    from chronos_esm.coupler.dino_coupling import LAT_LIN, make_regridders_jax
 
     np_l2g, np_g2l = rdc.make_regridders(atm.lat_deg)
     jx_l2g, jx_g2l = make_regridders_jax(atm.lat_deg)
@@ -64,15 +69,18 @@ def test_regridders_match_numpy(atm):
     f_lin = rng.standard_normal((nlat_lin, atm.nlon)).astype(np.float32)
     f_g = rng.standard_normal((atm.nlon, atm.nlat)).astype(np.float32)
 
-    np.testing.assert_allclose(np.asarray(jx_l2g(jnp.asarray(f_lin))),
-                               np_l2g(f_lin), rtol=1e-5, atol=1e-4)
-    np.testing.assert_allclose(np.asarray(jx_g2l(jnp.asarray(f_g))),
-                               np_g2l(f_g), rtol=1e-5, atol=1e-4)
+    np.testing.assert_allclose(
+        np.asarray(jx_l2g(jnp.asarray(f_lin))), np_l2g(f_lin), rtol=1e-5, atol=1e-4
+    )
+    np.testing.assert_allclose(
+        np.asarray(jx_g2l(jnp.asarray(f_g))), np_g2l(f_g), rtol=1e-5, atol=1e-4
+    )
 
 
 def test_ocean_fluxes_match_numpy(atm):
     import run_dino_coupled as rdc
-    from chronos_esm.coupler.dino_coupling import ocean_fluxes_jax, LAT_LIN
+
+    from chronos_esm.coupler.dino_coupling import LAT_LIN, ocean_fluxes_jax
 
     nlat, nlon = LAT_LIN.shape[0], atm.nlon
     rng = np.random.default_rng(1)
@@ -82,20 +90,35 @@ def test_ocean_fluxes_match_numpy(atm):
     ta = (288.0 + 5.0 * rng.standard_normal((nlat, nlon))).astype(np.float32)
     qa = np.abs(rng.standard_normal((nlat, nlon)).astype(np.float32)) * 1e-3
     pr = np.abs(rng.standard_normal((nlat, nlon)).astype(np.float32)) * 1e-4
-    omask = (rng.standard_normal((nlat, nlon)) > 0.0)
+    omask = rng.standard_normal((nlat, nlon)) > 0.0
     sst_t = sst + 0.5
 
     # both code paths: SST flux-correction (sst_target) and ocean-mean balance.
-    for kwargs in (dict(sst_target=sst_t, ocean_mask=omask),
-                   dict(balance_heat=True, ocean_mask=omask)):
+    for kwargs in (
+        dict(sst_target=sst_t, ocean_mask=omask),
+        dict(balance_heat=True, ocean_mask=omask),
+    ):
         ref = rdc.ocean_fluxes(sst, u, v, ta, qa, pr, **kwargs)
-        got = ocean_fluxes_jax(jnp.asarray(sst), jnp.asarray(u), jnp.asarray(v),
-                               jnp.asarray(ta), jnp.asarray(qa), jnp.asarray(pr),
-                               **{k: (jnp.asarray(val) if isinstance(val, np.ndarray) else val)
-                                  for k, val in kwargs.items()})
+        got = ocean_fluxes_jax(
+            jnp.asarray(sst),
+            jnp.asarray(u),
+            jnp.asarray(v),
+            jnp.asarray(ta),
+            jnp.asarray(qa),
+            jnp.asarray(pr),
+            **{
+                k: (jnp.asarray(val) if isinstance(val, np.ndarray) else val)
+                for k, val in kwargs.items()
+            },
+        )
         for name, a, b in zip(("net_heat", "fw", "tau_x", "tau_y"), ref, got):
-            np.testing.assert_allclose(np.asarray(b), np.asarray(a), rtol=1e-4, atol=1e-3,
-                                       err_msg=f"ocean_fluxes[{name}] mismatch ({kwargs.keys()})")
+            np.testing.assert_allclose(
+                np.asarray(b),
+                np.asarray(a),
+                rtol=1e-4,
+                atol=1e-3,
+                err_msg=f"ocean_fluxes[{name}] mismatch ({kwargs.keys()})",
+            )
 
 
 @pytest.fixture(scope="module")
@@ -109,10 +132,10 @@ def ocean_interval_f():
 
 def _ocean_interval_fn(n_sub=6):
     from chronos_esm import main
-    from chronos_esm.config import OCEAN_DZ, OCEAN_GRID, EARTH_RADIUS
+    from chronos_esm.config import EARTH_RADIUS, OCEAN_DZ, OCEAN_GRID
+    from chronos_esm.coupler.dino_coupling import amoc_strength
     from chronos_esm.ocean import veros_driver
     from chronos_esm.ocean.diagnostics import create_atlantic_mask
-    from chronos_esm.coupler.dino_coupling import amoc_strength
 
     state = main.init_model(ocean_ic="woa")
     ocean = state.ocean
@@ -135,9 +158,20 @@ def _ocean_interval_fn(n_sub=6):
 
     @jax.checkpoint
     def body(oc, _):
-        return veros_driver.step_ocean(
-            oc, surface_fluxes=fluxes, wind_stress=wind, dx=dx, dy=dy, dz=dz,
-            nz=nz, mask=surface_mask, ocean_mask_3d=ocean_mask_3d), None
+        return (
+            veros_driver.step_ocean(
+                oc,
+                surface_fluxes=fluxes,
+                wind_stress=wind,
+                dx=dx,
+                dy=dy,
+                dz=dz,
+                nz=nz,
+                mask=surface_mask,
+                ocean_mask_3d=ocean_mask_3d,
+            ),
+            None,
+        )
 
     def f(eps):
         # subpolar freshening: add eps psu to surface salinity in the subpolar Atlantic

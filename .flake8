@@ -1,6 +1,12 @@
 [flake8]
 max-line-length = 88
-extend-ignore = E203, W503
+# E203/W503: black compatibility. E501: line length is owned by black (88), so flake8's
+# duplicate check is redundant. E731/E741: minor stylistic (lambda assignment / single-char
+# name) accepted in this research code. E402: the `jax.config`/`sys.path` setup-before-import
+# pattern is intentional and pervasive (tests/experiments add the repo root to sys.path first).
+# F841: unused locals are tolerated (often intentional intermediates / debugging aids, and
+# auto-removal is unsafe where the RHS has side effects).
+extend-ignore = E203, W503, E501, E731, E741, E402, F841
 exclude =
     .git,
     __pycache__,

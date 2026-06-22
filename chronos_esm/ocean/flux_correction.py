@@ -14,9 +14,10 @@ ABSORBS any imposed forcing, so the coupled model cannot respond to CO2. The q-f
 
 All pure jnp -> differentiable (d(climate)/d(forcing) survives the flux correction).
 """
+
 import jax.numpy as jnp
 
-from chronos_esm.config import RHO_WATER, CP_WATER, OCEAN_DZ
+from chronos_esm.config import CP_WATER, OCEAN_DZ, RHO_WATER
 
 
 def restoring_lambda(tau_days, dz_surf=float(OCEAN_DZ[0])):
@@ -26,7 +27,8 @@ def restoring_lambda(tau_days, dz_surf=float(OCEAN_DZ[0])):
 
 def restoring_flux(sst_K, sst_target_K, tau_days):
     """Haney restoring heat flux [W/m^2] = lambda*(target - SST) (positive = into ocean
-    where it is colder than target). Its time-mean over a converged control IS the q-flux."""
+    where it is colder than target). Its time-mean over a converged control IS the q-flux.
+    """
     return restoring_lambda(tau_days) * (jnp.asarray(sst_target_K) - sst_K)
 
 

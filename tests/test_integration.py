@@ -16,7 +16,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from chronos_esm import main  # noqa: E402
-from chronos_esm.atmos import dynamics  # noqa: E402
 from chronos_esm.coupler import state as coupled_state  # noqa: E402
 
 # init_model() pulls the ~900 MB ETOPO bathymetry; skip if it isn't cached (e.g. in

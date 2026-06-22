@@ -12,8 +12,9 @@ here we check the WIRING:
 Heavy DinoCoupledModel build is module-scoped (per the OOM-segfault gotcha). Default
 (seasonal=False) is covered by tests/test_dino_step.py — that path is untouched.
 """
-import numpy as np
+
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from chronos_esm import orbital
@@ -33,6 +34,7 @@ def _at(arr, deg, axis_mean=True):
 @pytest.fixture(scope="module")
 def model():
     from chronos_esm.coupler.dino_step import DinoCoupledModel
+
     return DinoCoupledModel(seasonal=True, orbit=orbital.ORBIT_PI, interval=1.0)
 
 
@@ -64,7 +66,9 @@ def test_insolation_uses_orbit_and_convention(model):
     assert np.allclose(np.asarray(insol_override), np.asarray(ref_sw), rtol=1e-6)
     assert np.allclose(np.asarray(sw)[:, :1], np.asarray(ref_sw), rtol=1e-6)
     # surface SW must be well below raw TOA (the bug made them equal)
-    assert float(np.asarray(insol_override).max()) < 0.75 * float(np.asarray(ref_toa).max())
+    assert float(np.asarray(insol_override).max()) < 0.75 * float(
+        np.asarray(ref_toa).max()
+    )
 
 
 def test_seasonal_step_runs_finite(model):
@@ -77,11 +81,15 @@ def test_seasonal_step_runs_finite(model):
 
 if __name__ == "__main__":
     from chronos_esm.coupler.dino_step import DinoCoupledModel
+
     m = DinoCoupledModel(seasonal=True, orbit=orbital.ORBIT_PI)
     test_seasonal_insolation_varies_with_day(m)
     test_insolation_uses_orbit_and_convention(m)
     test_seasonal_step_runs_finite(m)
     sw_s, _ = m._insolation(jnp.asarray(SUMMER_DAY))
     sw_w, _ = m._insolation(jnp.asarray(WINTER_DAY))
-    print("NH 45N surface SW: summer %.0f  winter %.0f W/m^2" % (_at(sw_s, 45), _at(sw_w, 45)))
+    print(
+        "NH 45N surface SW: summer %.0f  winter %.0f W/m^2"
+        % (_at(sw_s, 45), _at(sw_w, 45))
+    )
     print("all seasonal-cycle wiring tests passed")

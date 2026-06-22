@@ -37,8 +37,8 @@ def woa18_surface():
     sst = ds_t.t_mn.isel(time=0, depth=0).values.astype(float)
     sss = ds_s.s_mn.isel(time=0, depth=0).values.astype(float)
     return {
-        "sst": sst,           # degC
-        "sss": sss,           # psu
+        "sst": sst,  # degC
+        "sss": sss,  # psu
         "lat": ds_t.lat.values.astype(float),
         "lon": ds_t.lon.values.astype(float),
     }
@@ -50,7 +50,7 @@ def woa18_3d():
     ds_t = xr.open_dataset(path_t, decode_times=False)
     ds_s = xr.open_dataset(path_s, decode_times=False)
     return {
-        "temp": ds_t.t_mn.isel(time=0).values.astype(float),   # (depth, lat, lon)
+        "temp": ds_t.t_mn.isel(time=0).values.astype(float),  # (depth, lat, lon)
         "salt": ds_s.s_mn.isel(time=0).values.astype(float),
         "depth": ds_t.depth.values.astype(float),
         "lat": ds_t.lat.values.astype(float),
@@ -147,8 +147,10 @@ def era5_climatology_fields(path=None, **fetch_kwargs):
     ds = _open_era5_dataset(path)
 
     # Average over all time steps (months x years) -> annual climatology.
-    tdim = next((d for d in ("valid_time", "time", "forecast_reference_time")
-                 if d in ds.dims), None)
+    tdim = next(
+        (d for d in ("valid_time", "time", "forecast_reference_time") if d in ds.dims),
+        None,
+    )
     if tdim is not None:
         ds = ds.mean(dim=tdim, keep_attrs=True)
 
@@ -159,17 +161,19 @@ def era5_climatology_fields(path=None, **fetch_kwargs):
         for n in names:
             if n in ds:
                 return ds[n].values.astype(float)
-        raise KeyError(f"None of {names} found in ERA5 file (have {list(ds.data_vars)})")
+        raise KeyError(
+            f"None of {names} found in ERA5 file (have {list(ds.data_vars)})"
+        )
 
     tp = get("tp")  # m (mean daily accumulation in monthly-means)
     precip = tp * 1000.0 / 86400.0  # m/day -> mm/day -> kg/m^2/s
 
     return {
-        "t2m": get("t2m"),       # K
-        "u10": get("u10"),       # m/s
-        "v10": get("v10"),       # m/s
-        "msl": get("msl"),       # Pa
-        "precip": precip,        # kg/m^2/s
+        "t2m": get("t2m"),  # K
+        "u10": get("u10"),  # m/s
+        "v10": get("v10"),  # m/s
+        "msl": get("msl"),  # Pa
+        "precip": precip,  # kg/m^2/s
         "lat": ds[latname].values.astype(float),
         "lon": ds[lonname].values.astype(float),
     }

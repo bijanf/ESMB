@@ -9,8 +9,6 @@ from typing import NamedTuple, Optional, Tuple
 import jax
 import jax.numpy as jnp
 
-from chronos_esm.ocean.utils import soft_clip
-
 from chronos_esm.config import (  # noqa: F401
     DT_OCEAN,
     GRAVITY,
@@ -18,7 +16,7 @@ from chronos_esm.config import (  # noqa: F401
     OMEGA,
     RHO_WATER,
 )
-from chronos_esm.ocean import mixing, solver, overturning, momentum, barotropic
+from chronos_esm.ocean import barotropic, mixing, momentum, overturning, solver
 
 
 class OceanState(NamedTuple):
@@ -90,6 +88,7 @@ def step_ocean(
             fp = jnp.pad(f, ((0, 0), (1, 1), (0, 0)), mode="edge")
             d2y = fp[:, 2:, :] - 2 * f + fp[:, :-2, :]
             return d2x + d2y
+
         # del^4 = lap(lap); /16 so strength~0.25 fully removes a 2dx mode.
         return field - (strength / 16.0) * _lap(_lap(field))
 
@@ -101,7 +100,7 @@ def step_ocean(
     is_pole = (ny_idx < 5) | (ny_idx >= ny - 5)
     interior_mask_3d = jnp.where(is_pole, 0.0, 1.0)[None, :, None]
     pole_mask_3d = 1.0 - interior_mask_3d
-    
+
     sx, sy = mixing.compute_isopycnal_slopes(rho, dx, dy, dz)
     kappa_gm_eff = kappa_gm * interior_mask_3d
     u_bolus, v_bolus, _ = mixing.compute_gm_bolus_velocity(kappa_gm_eff, sx, sy, dz)
@@ -112,12 +111,14 @@ def step_ocean(
     curl_tau = (jnp.roll(tau_y, -1, axis=1) - jnp.roll(tau_y, 1, axis=1)) / (2 * dx) - (
         jnp.roll(tau_x, -1, axis=0) - jnp.roll(tau_x, 1, axis=0)
     ) / (2 * dy)
-    
+
     H_total = jnp.sum(dz)
-    r_drag_bt = 1.0 / (86400.0 * 25.0) # Tuned 25-day drag
+    r_drag_bt = 1.0 / (86400.0 * 25.0)  # Tuned 25-day drag
     rhs_psi = curl_tau / (RHO_WATER * H_total * r_drag_bt)
 
-    psi_new, _ = solver.solve_poisson_2d(rhs_psi, dx, dy, max_iter=100, tol=1e-4, mask=mask, x0=state.psi)
+    psi_new, _ = solver.solve_poisson_2d(
+        rhs_psi, dx, dy, max_iter=100, tol=1e-4, mask=mask, x0=state.psi
+    )
     u_bt = -(jnp.roll(psi_new, -1, axis=0) - jnp.roll(psi_new, 1, axis=0)) / (2 * dy)
     v_bt = (jnp.roll(psi_new, -1, axis=1) - jnp.roll(psi_new, 1, axis=1)) / (2 * dx)
 
@@ -125,18 +126,22 @@ def step_ocean(
     rho_anom = rho - RHO_WATER
     dz_3d = dz.reshape(-1, 1, 1)
     pressure_hydro = jnp.cumsum(GRAVITY * rho_anom * dz_3d, axis=0)
-    dp_dx = (jnp.roll(pressure_hydro, -1, axis=2) - jnp.roll(pressure_hydro, 1, axis=2)) / (2 * dx)
-    dp_dy = (jnp.roll(pressure_hydro, -1, axis=1) - jnp.roll(pressure_hydro, 1, axis=1)) / (2 * dy)
-    
+    dp_dx = (
+        jnp.roll(pressure_hydro, -1, axis=2) - jnp.roll(pressure_hydro, 1, axis=2)
+    ) / (2 * dx)
+    dp_dy = (
+        jnp.roll(pressure_hydro, -1, axis=1) - jnp.roll(pressure_hydro, 1, axis=1)
+    ) / (2 * dy)
+
     lat_rad = jnp.deg2rad(jnp.linspace(-90, 90, ny))
     f_cor = 2 * OMEGA * jnp.sin(lat_rad)
     f_3d = jnp.broadcast_to(f_cor[None, :, None], (nz, ny, nx))
     f_clamped = jnp.where(jnp.abs(f_3d) < 1e-5, jnp.sign(f_3d + 1e-16) * 1e-5, f_3d)
-    
+
     denom = RHO_WATER * (f_clamped**2 + r_drag**2)
     u_geo = -(r_drag * dp_dx + f_clamped * dp_dy) / denom
     v_geo = (f_clamped * dp_dx - r_drag * dp_dy) / denom
-    
+
     # --- Bathymetry wet masks: enforce no-flux at coasts and the sea floor ---
     # maskC = 1 in wet cells, 0 in land/below-floor. Face masks are open only if
     # BOTH adjacent centers are wet (MITgcm hFac MIN rule), so no advective or
@@ -176,8 +181,18 @@ def step_ocean(
     # apply. This is P3/S5 -- the clean replacement for the interim THC closure.
     if prognostic_momentum:
         u_mom, v_mom = momentum.step_momentum(
-            state.u, state.v, rho, f=f_3d, dx=dx, dy=dy, dz=dz, dt=dt,
-            r=mom_drag, nu=Ah, mask=maskC)
+            state.u,
+            state.v,
+            rho,
+            f=f_3d,
+            dx=dx,
+            dy=dy,
+            dz=dz,
+            dt=dt,
+            r=mom_drag,
+            nu=Ah,
+            mask=maskC,
+        )
         # Keep only the BAROCLINIC part: the bare hydrostatic PGF has no barotropic
         # (surface-pressure) balance, so the unbalanced depth-mean would accelerate without
         # bound. Remove the wet-column mean (the diagnostic path does the same) -> a bounded,
@@ -204,8 +219,8 @@ def step_ocean(
         u_new, v_new = barotropic.rigid_lid_project(u_new, v_new, dz, dx, dy, maskC)
     else:
         col_dz = dz_3d * maskC
-        net_v = jnp.sum(v_new * col_dz, axis=(0, 2))      # (ny,)  ~ net transport / dx
-        area_v = jnp.sum(col_dz, axis=(0, 2)) + 1e-20     # (ny,)  wet x-z area / dx
+        net_v = jnp.sum(v_new * col_dz, axis=(0, 2))  # (ny,)  ~ net transport / dx
+        area_v = jnp.sum(col_dz, axis=(0, 2)) + 1e-20  # (ny,)  wet x-z area / dx
         v_new = (v_new - (net_v / area_v)[None, :, None]) * maskC
 
     # --- Thermohaline overturning closure (P3/S1): density-driven Atlantic cell ----
@@ -217,8 +232,14 @@ def step_ocean(
     # sign-correct (the diagnostic thermal wind alone gave ~0). Interim box-model-style
     # closure; the prognostic-momentum/JEBAR core is P3 S2-S5. Disable with thc_k_vel=0.
     v_thc, _, _ = overturning.thc_overturning_velocity(
-        rho, state.salt, dz, maskC, k_vel=thc_k_vel, haline_gain=thc_haline_gain,
-        contrast_depth_m=thc_contrast_depth_m)
+        rho,
+        state.salt,
+        dz,
+        maskC,
+        k_vel=thc_k_vel,
+        haline_gain=thc_haline_gain,
+        contrast_depth_m=thc_contrast_depth_m,
+    )
     v_new = (v_new + v_thc) * maskC
 
     u_eff = u_eff * maskC
@@ -245,28 +266,35 @@ def step_ocean(
     # mean. Without it the leftover column-divergence residual sits entirely in the
     # surface cell and leaks the global mean (~+0.25 K/yr spurious heating) since the
     # advective form (unlike flux form) has no compensating compression term there.
-    col_div = jnp.sum(div_e * dz_3d, axis=0)                          # (ny,nx) integrated
+    col_div = jnp.sum(div_e * dz_3d, axis=0)  # (ny,nx) integrated
     div_e = (div_e - (col_div / H_col)[None, :, :]) * maskC
-    w_col = -jnp.cumsum((div_e * dz_3d)[::-1], axis=0)[::-1]          # (nz,) top-of-layer
+    w_col = -jnp.cumsum((div_e * dz_3d)[::-1], axis=0)[::-1]  # (nz,) top-of-layer
     # interior interface open only where both adjacent centres are wet; surface/floor closed
     iface_open = jnp.concatenate(
-        [jnp.zeros((1, ny, nx)), maskC[:-1] * maskC[1:], jnp.zeros((1, ny, nx))], axis=0)
-    w_if = jnp.concatenate(
-        [jnp.zeros((1, ny, nx)), w_col[1:], jnp.zeros((1, ny, nx))], axis=0) * iface_open
+        [jnp.zeros((1, ny, nx)), maskC[:-1] * maskC[1:], jnp.zeros((1, ny, nx))], axis=0
+    )
+    w_if = (
+        jnp.concatenate(
+            [jnp.zeros((1, ny, nx)), w_col[1:], jnp.zeros((1, ny, nx))], axis=0
+        )
+        * iface_open
+    )
 
     # 5. Tracers (RK4) with flux-masked advection/diffusion (no-flux at coast/floor)
     heat_flux, fw_flux, dic_flux = surface_fluxes
     # Surface fluxes enter only the top WET cell.
-    fT_s = heat_flux / (RHO_WATER * 3985. * dz[0]) * surf2d
-    fS_s = -fw_flux * 35. / (RHO_WATER * dz[0]) * surf2d
+    fT_s = heat_flux / (RHO_WATER * 3985.0 * dz[0]) * surf2d
+    fS_s = -fw_flux * 35.0 / (RHO_WATER * dz[0]) * surf2d
     # AMOC hosing: extra subpolar-N-Atlantic freshwater forcing (Sv), added directly
     # so it bypasses the surface-flux ocean-mean balancing in the coupler (which would
     # otherwise cancel the net input). The volume-mean salt renorm later only shifts
     # the absolute mean, preserving the subpolar-subtropical gradient the THC reads.
-    fS_s = fS_s + overturning.subpolar_hosing_salt_tendency(hosing_sv, dx, dy, dz[0], surf2d)
+    fS_s = fS_s + overturning.subpolar_hosing_salt_tendency(
+        hosing_sv, dx, dy, dz[0], surf2d
+    )
     fD_s = dic_flux / dz[0] * surf2d
     k_z = mixing.compute_vertical_diffusivity(rho, dz, dt=dt)
-    diff_coef = 20000. * pole_mask_3d + kappa_h * interior_mask_3d
+    diff_coef = 20000.0 * pole_mask_3d + kappa_h * interior_mask_3d
 
     def _nbrs(F):
         # Neighbour value across each face; a CLOSED face returns the centre value
@@ -289,7 +317,9 @@ def step_ocean(
         dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])
         grad = (F[1:] - F[:-1]) / dist
         flux = -k_z[1:-1] * grad * iface  # zero flux through dry interfaces / the floor
-        flux = jnp.concatenate([jnp.zeros((1, ny, nx)), flux, jnp.zeros((1, ny, nx))], axis=0)
+        flux = jnp.concatenate(
+            [jnp.zeros((1, ny, nx)), flux, jnp.zeros((1, ny, nx))], axis=0
+        )
         return (flux[:-1] - flux[1:]) / dz_3d
 
     def _vadv(F):
@@ -297,13 +327,15 @@ def step_ocean(
         # the horizontal advective form so there is NO spurious -F*dw/dz compression
         # source (flux form mixed with advective horizontal blows T up exponentially).
         # CFL = |w|*dt/dz ~ 1e-3 (w ~ 1e-5 m/s), so explicit upwind is comfortably stable.
-        dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])         # (nz-1,) centre-centre distance
-        open_int = maskC[:-1] * maskC[1:]             # interior interface wet on both sides
-        grad_int = (F[:-1] - F[1:]) / dist * open_int  # z-up gradient across interface k|k+1
+        dist = 0.5 * (dz_3d[:-1] + dz_3d[1:])  # (nz-1,) centre-centre distance
+        open_int = maskC[:-1] * maskC[1:]  # interior interface wet on both sides
+        grad_int = (
+            (F[:-1] - F[1:]) / dist * open_int
+        )  # z-up gradient across interface k|k+1
         z = jnp.zeros((1, ny, nx))
-        grad_below = jnp.concatenate([grad_int, z], axis=0)   # cell k looks DOWN to k+1
-        grad_above = jnp.concatenate([z, grad_int], axis=0)   # cell k looks UP to k-1
-        w_c = 0.5 * (w_if[:-1] + w_if[1:])            # (nz,) cell-centred vertical velocity
+        grad_below = jnp.concatenate([grad_int, z], axis=0)  # cell k looks DOWN to k+1
+        grad_above = jnp.concatenate([z, grad_int], axis=0)  # cell k looks UP to k-1
+        w_c = 0.5 * (w_if[:-1] + w_if[1:])  # (nz,) cell-centred vertical velocity
         grad_up = jnp.where(w_c > 0, grad_below, grad_above)  # upwind on w sign
         return -w_c * grad_up
 
@@ -314,13 +346,27 @@ def step_ocean(
         return res_T * maskC, res_S * maskC, res_D * maskC  # freeze dry cells
 
     k1_T, k1_S, k1_D = tendencies(state.temp, state.salt, state.dic)
-    k2_T, k2_S, k2_D = tendencies(state.temp+0.5*dt*k1_T, state.salt+0.5*dt*k1_S, state.dic+0.5*dt*k1_D)
-    k3_T, k3_S, k3_D = tendencies(state.temp+0.5*dt*k2_T, state.salt+0.5*dt*k2_S, state.dic+0.5*dt*k2_D)
-    k4_T, k4_S, k4_D = tendencies(state.temp+dt*k3_T, state.salt+dt*k3_S, state.dic+dt*k3_D)
-    
-    temp_new = compute_shapiro_filter(state.temp + (dt/6.)*(k1_T+2*k2_T+2*k3_T+k4_T), shapiro_strength)
-    salt_new = compute_shapiro_filter(state.salt + (dt/6.)*(k1_S+2*k2_S+2*k3_S+k4_S), shapiro_strength)
-    dic_new = state.dic + (dt/6.)*(k1_D+2*k2_D+2*k3_D+k4_D)
+    k2_T, k2_S, k2_D = tendencies(
+        state.temp + 0.5 * dt * k1_T,
+        state.salt + 0.5 * dt * k1_S,
+        state.dic + 0.5 * dt * k1_D,
+    )
+    k3_T, k3_S, k3_D = tendencies(
+        state.temp + 0.5 * dt * k2_T,
+        state.salt + 0.5 * dt * k2_S,
+        state.dic + 0.5 * dt * k2_D,
+    )
+    k4_T, k4_S, k4_D = tendencies(
+        state.temp + dt * k3_T, state.salt + dt * k3_S, state.dic + dt * k3_D
+    )
+
+    temp_new = compute_shapiro_filter(
+        state.temp + (dt / 6.0) * (k1_T + 2 * k2_T + 2 * k3_T + k4_T), shapiro_strength
+    )
+    salt_new = compute_shapiro_filter(
+        state.salt + (dt / 6.0) * (k1_S + 2 * k2_S + 2 * k3_S + k4_S), shapiro_strength
+    )
+    dic_new = state.dic + (dt / 6.0) * (k1_D + 2 * k2_D + 2 * k3_D + k4_D)
 
     # SALINITY RELAXATION - Two-tier approach:
     # 1. Strong high-latitude sponge (6-month) to stabilize polar regions
@@ -387,9 +433,26 @@ def step_ocean(
     w_flux = div_h * dz_3d
     w_new = (-jnp.cumsum(w_flux[::-1], axis=0)[::-1]) * maskC
 
-    return OceanState(u=u_new, v=v_new, w=w_new, temp=temp_new, salt=salt_new, psi=psi_new, rho=equation_of_state(temp_new, salt_new), dic=dic_new)
+    return OceanState(
+        u=u_new,
+        v=v_new,
+        w=w_new,
+        temp=temp_new,
+        salt=salt_new,
+        psi=psi_new,
+        rho=equation_of_state(temp_new, salt_new),
+        dic=dic_new,
+    )
+
 
 def init_ocean_state(nz, ny, nx) -> OceanState:
-    return OceanState(u=jnp.zeros((nz, ny, nx)), v=jnp.zeros((nz, ny, nx)), w=jnp.zeros((nz, ny, nx)),
-                      temp=jnp.ones((nz, ny, nx)) * (10.0 + 273.15), salt=jnp.ones((nz, ny, nx)) * 35.0,
-                      psi=jnp.zeros((ny, nx)), rho=jnp.zeros((nz, ny, nx)), dic=jnp.ones((nz, ny, nx)) * 2000.0)
+    return OceanState(
+        u=jnp.zeros((nz, ny, nx)),
+        v=jnp.zeros((nz, ny, nx)),
+        w=jnp.zeros((nz, ny, nx)),
+        temp=jnp.ones((nz, ny, nx)) * (10.0 + 273.15),
+        salt=jnp.ones((nz, ny, nx)) * 35.0,
+        psi=jnp.zeros((ny, nx)),
+        rho=jnp.zeros((nz, ny, nx)),
+        dic=jnp.ones((nz, ny, nx)) * 2000.0,
+    )

@@ -11,17 +11,20 @@ Checks:
      western intensification (the meridional jet sits on the western boundary).
   4. Differentiability: jax.grad of the gyre strength wrt the wind stress is finite/nonzero.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 jax.config.update("jax_enable_x64", True)
 
 from chronos_esm.ocean import barotropic as bt  # noqa: E402
 from chronos_esm.ocean.solver import (  # noqa: E402
-    apply_elliptic_varcoef, apply_elliptic_varcoef_sphere, solve_elliptic_varcoef,
-    solve_elliptic_varcoef_sphere, solve_poisson_2d,
+    apply_elliptic_varcoef,
+    apply_elliptic_varcoef_sphere,
+    solve_elliptic_varcoef,
+    solve_elliptic_varcoef_sphere,
+    solve_poisson_2d,
 )
 
 A_EARTH = 6.371e6
@@ -45,8 +48,9 @@ def test_elliptic_varcoef_manufactured_constant():
     psi0 = jnp.asarray(np.sin(2 * np.pi * X / Lx) * np.sin(np.pi * Y / Ly)) * mask
     coef = jnp.ones((ny, nx))
     zeta = apply_elliptic_varcoef(psi0, coef, dx, dy, mask)
-    psi, info = solve_elliptic_varcoef(coef, zeta, dx, dy, mask=mask,
-                                       max_iter=1500, tol=1e-10)
+    psi, info = solve_elliptic_varcoef(
+        coef, zeta, dx, dy, mask=mask, max_iter=1500, tol=1e-10
+    )
     err = jnp.linalg.norm((psi - psi0) * mask) / jnp.linalg.norm(psi0 * mask)
     assert float(err) < 1e-3, f"constant-coef round trip err={float(err):.2e}"
 
@@ -63,8 +67,9 @@ def test_elliptic_varcoef_manufactured_variable():
     # smooth, strictly positive variable coefficient (e.g. 1/H over varying depth)
     coef = jnp.asarray(1.0 + 0.5 * np.sin(np.pi * X / Lx) * np.cos(np.pi * Y / Ly))
     zeta = apply_elliptic_varcoef(psi0, coef, dx, dy, mask)
-    psi, info = solve_elliptic_varcoef(coef, zeta, dx, dy, mask=mask,
-                                       max_iter=2000, tol=1e-10)
+    psi, info = solve_elliptic_varcoef(
+        coef, zeta, dx, dy, mask=mask, max_iter=2000, tol=1e-10
+    )
     err = jnp.linalg.norm((psi - psi0) * mask) / jnp.linalg.norm(psi0 * mask)
     assert float(err) < 2e-3, f"variable-coef round trip err={float(err):.2e}"
 
@@ -75,11 +80,14 @@ def test_elliptic_varcoef_matches_poisson():
     mask = _basin(ny, nx)
     rng = np.random.default_rng(0)
     rhs = jnp.asarray(rng.standard_normal((ny, nx))) * mask
-    psi_v, _ = solve_elliptic_varcoef(jnp.ones((ny, nx)), rhs, dx, dy, mask=mask,
-                                      max_iter=2000, tol=1e-10)
+    psi_v, _ = solve_elliptic_varcoef(
+        jnp.ones((ny, nx)), rhs, dx, dy, mask=mask, max_iter=2000, tol=1e-10
+    )
     # solve_poisson_2d solves lap(psi)=rhs with the same land-identity convention
     psi_p, _ = solve_poisson_2d(rhs, dx, dy, max_iter=2000, tol=1e-10, mask=mask)
-    diff = jnp.linalg.norm((psi_v - psi_p) * mask) / (jnp.linalg.norm(psi_p * mask) + 1e-30)
+    diff = jnp.linalg.norm((psi_v - psi_p) * mask) / (
+        jnp.linalg.norm(psi_p * mask) + 1e-30
+    )
     assert float(diff) < 1e-3, f"varcoef vs poisson diff={float(diff):.2e}"
 
 
@@ -97,12 +105,21 @@ def _run_gyre(tau0, ny=48, nx=48):
     dx, dy = Lx / nx, Ly / ny
     mask = _basin(ny, nx)
     beta, rho0, H = 2.0e-11, 1025.0, 4000.0
-    r = 5.0e-6                      # delta = r/beta ~ 250 km ~ 3 dx (resolved WBC)
+    r = 5.0e-6  # delta = r/beta ~ 250 km ~ 3 dx (resolved WBC)
     F, taux = _gyre_forcing(ny, nx, Lx, Ly, dx, dy, tau0, rho0, H)
     F = F * mask
-    psi, zeta = bt.spin_up_gyre(F, dx=dx, dy=dy, dt=1000.0, beta=beta, r=r,
-                                mask=mask, coef=jnp.ones((ny, nx)), n_steps=900,
-                                max_iter=120)
+    psi, zeta = bt.spin_up_gyre(
+        F,
+        dx=dx,
+        dy=dy,
+        dt=1000.0,
+        beta=beta,
+        r=r,
+        mask=mask,
+        coef=jnp.ones((ny, nx)),
+        n_steps=900,
+        max_iter=120,
+    )
     return psi, F, mask, beta, dx, dy
 
 
@@ -133,6 +150,7 @@ def test_gyre_differentiable():
     def strength(tau0):
         psi, _, _, _, _, _ = _run_gyre(tau0, ny=32, nx=32)
         return jnp.max(jnp.abs(psi))
+
     g = jax.grad(strength)(0.1)
     assert np.isfinite(float(g)) and abs(float(g)) > 0, f"d(gyre)/d(tau0)={float(g)}"
 
@@ -143,7 +161,8 @@ def _sphere_band(ny, nx, lat0_deg=20.0, lat1_deg=70.0):
     lat = np.deg2rad(np.linspace(lat0_deg, lat1_deg, ny))
     dlat = float(lat[1] - lat[0])
     dlon = 2.0 * np.pi / nx
-    m = np.ones((ny, nx)); m[0, :] = m[-1, :] = 0.0   # Dirichlet psi=0 at band edges
+    m = np.ones((ny, nx))
+    m[0, :] = m[-1, :] = 0.0  # Dirichlet psi=0 at band edges
     return jnp.asarray(lat), dlat, dlon, jnp.asarray(m)
 
 
@@ -154,11 +173,12 @@ def test_sphere_elliptic_manufactured_variable():
     LON, LAT = np.meshgrid(lon, np.asarray(lat))
     lat0, lat1 = float(lat[0]), float(lat[-1])
     env = np.sin(np.pi * (np.asarray(lat)[:, None] - lat0) / (lat1 - lat0))
-    psi0 = jnp.asarray(np.sin(2 * LON) * env) * mask           # periodic in lon, 0 at edges
+    psi0 = jnp.asarray(np.sin(2 * LON) * env) * mask  # periodic in lon, 0 at edges
     coef = jnp.asarray(1.0 + 0.4 * np.sin(LON) * np.cos(LAT))  # variable 1/H-like, >0
     rhs = apply_elliptic_varcoef_sphere(psi0, coef, lat, dlon, dlat, A_EARTH, mask)
-    psi, info = solve_elliptic_varcoef_sphere(coef, rhs, lat, dlon, dlat, A_EARTH,
-                                              mask=mask, max_iter=2500, tol=1e-9)
+    psi, info = solve_elliptic_varcoef_sphere(
+        coef, rhs, lat, dlon, dlat, A_EARTH, mask=mask, max_iter=2500, tol=1e-9
+    )
     # NB: the residual stalls at a float64 roundoff floor in this anisotropic system
     # (cE~1/cos, cN~cos), but the SOLUTION error is the meaningful metric and is tiny.
     err = jnp.linalg.norm((psi - psi0) * mask) / jnp.linalg.norm(psi0 * mask)
@@ -172,10 +192,12 @@ def test_sphere_elliptic_differentiable():
     rhs = jnp.asarray(rng.standard_normal((ny, nx))) * mask
 
     def amp(scale):
-        coef = scale * jnp.ones((ny, nx))                     # coef ~ 1/H; vary uniformly
-        psi, _ = solve_elliptic_varcoef_sphere(coef, rhs, lat, dlon, dlat, A_EARTH,
-                                               mask=mask, max_iter=3000, tol=1e-10)
+        coef = scale * jnp.ones((ny, nx))  # coef ~ 1/H; vary uniformly
+        psi, _ = solve_elliptic_varcoef_sphere(
+            coef, rhs, lat, dlon, dlat, A_EARTH, mask=mask, max_iter=3000, tol=1e-10
+        )
         return jnp.max(jnp.abs(psi))
+
     g = jax.grad(amp)(1.0)
     assert np.isfinite(float(g)) and abs(float(g)) > 0, f"d|psi|/d(coef)={float(g)}"
 
@@ -189,18 +211,32 @@ def _run_gyre_sphere(tau0, ny=44, nx=40):
     dlat = float(lat[1] - lat[0])
     lon = np.deg2rad(np.linspace(0.0, 60.0, nx))
     dlon = float(lon[1] - lon[0])
-    m = np.ones((ny, nx)); m[0, :] = m[-1, :] = m[:, 0] = m[:, -1] = 0.0
+    m = np.ones((ny, nx))
+    m[0, :] = m[-1, :] = m[:, 0] = m[:, -1] = 0.0
     mask = jnp.asarray(m)
     lat_j = jnp.asarray(lat)
     rho0, H, r = 1025.0, 4000.0, 6.0e-6
     lat0, lat1 = lat[0], lat[-1]
-    taux = (-tau0 * jnp.cos(np.pi * (lat_j - lat0) / (lat1 - lat0)))[:, None] * jnp.ones((ny, nx))
+    taux = (-tau0 * jnp.cos(np.pi * (lat_j - lat0) / (lat1 - lat0)))[
+        :, None
+    ] * jnp.ones((ny, nx))
     tauy = jnp.zeros((ny, nx))
     curl = bt.wind_stress_curl_sphere(taux, tauy, lat_j, dlon, dlat, A_EARTH)
     F = (curl / (rho0 * H)) * mask
-    psi, zeta = bt.spin_up_gyre_sphere(F, lat=lat_j, dlon=dlon, dlat=dlat, a=A_EARTH,
-                                       omega=OMEGA, dt=1500.0, r=r, mask=mask,
-                                       coef=jnp.ones((ny, nx)), n_steps=800, max_iter=150)
+    psi, zeta = bt.spin_up_gyre_sphere(
+        F,
+        lat=lat_j,
+        dlon=dlon,
+        dlat=dlat,
+        a=A_EARTH,
+        omega=OMEGA,
+        dt=1500.0,
+        r=r,
+        mask=mask,
+        coef=jnp.ones((ny, nx)),
+        n_steps=800,
+        max_iter=150,
+    )
     return psi, F, mask, lat_j, dlon, dlat
 
 
@@ -221,7 +257,9 @@ def test_stommel_gyre_sphere():
     beta = (2.0 * OMEGA * np.cos(np.asarray(lat_j)) / A_EARTH)[:, None]
     pred = np.asarray(F) / beta
     interior = (slice(ny // 3, 2 * ny // 3), slice(nx // 2, nx - 3))
-    rel = np.abs(v[interior] - pred[interior]).mean() / (np.abs(pred[interior]).mean() + 1e-30)
+    rel = np.abs(v[interior] - pred[interior]).mean() / (
+        np.abs(pred[interior]).mean() + 1e-30
+    )
     assert rel < 0.45, f"spherical Sverdrup balance rel.err={rel:.2f}"
 
 
@@ -229,8 +267,11 @@ def test_gyre_sphere_differentiable():
     def strength(tau0):
         psi, _, _, _, _, _ = _run_gyre_sphere(tau0, ny=28, nx=28)
         return jnp.max(jnp.abs(psi))
+
     g = jax.grad(strength)(0.1)
-    assert np.isfinite(float(g)) and abs(float(g)) > 0, f"d(gyre_sphere)/d(tau0)={float(g)}"
+    assert (
+        np.isfinite(float(g)) and abs(float(g)) > 0
+    ), f"d(gyre_sphere)/d(tau0)={float(g)}"
 
 
 if __name__ == "__main__":

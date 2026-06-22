@@ -20,36 +20,44 @@ here (the standalone harness this promotes also had none); that is the next P1 c
 
 See memory ``working-esm-roadmap-2026-06-19`` (P1) / workflow wxf3z5fpu.
 """
+
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-
 from dinosaur import primitive_equations as pe
 
-from chronos_esm import main
+from chronos_esm import main, orbital
 from chronos_esm.atmos import physics as aphys
-from chronos_esm.atmos.dino_atmos import (DinoAtmosphere, save_state as dino_save,
-                                          load_state as dino_load)
-from chronos_esm.config import (OCEAN_DZ, OCEAN_GRID, EARTH_RADIUS, DT_OCEAN,
-                                DRAG_COEFF_LAND)
-from chronos_esm.land.driver import LandState, step_land
+from chronos_esm.atmos.dino_atmos import (
+    DinoAtmosphere,
+)
+from chronos_esm.atmos.dino_atmos import load_state as dino_load
+from chronos_esm.atmos.dino_atmos import save_state as dino_save
+from chronos_esm.config import (
+    DRAG_COEFF_LAND,
+    DT_OCEAN,
+    EARTH_RADIUS,
+    OCEAN_DZ,
+    OCEAN_GRID,
+)
+from chronos_esm.coupler import dino_coupling as dc
 from chronos_esm.ice.driver import IceState, init_ice_state, step_ice
+from chronos_esm.land.driver import LandState, step_land
 from chronos_esm.ocean import veros_driver
 from chronos_esm.ocean.veros_driver import OceanState
-from chronos_esm.coupler import dino_coupling as dc
-from chronos_esm import orbital
 
 
 class DinoCoupledState(NamedTuple):
     """Full state of the multi-level coupled model. ``atmos`` is the dinosaur modal
     ``pe.State`` (spectral coefficients + humidity tracer), carried as a pytree so
     the whole state differentiates. ``day`` is the absolute simulation day."""
-    ocean: object        # chronos_esm.ocean.veros_driver.OceanState
-    atmos: pe.State      # dinosaur modal state
-    land: object         # chronos_esm.land.driver.LandState
-    ice: IceState        # Semtner 0-layer thermodynamic sea ice
+
+    ocean: object  # chronos_esm.ocean.veros_driver.OceanState
+    atmos: pe.State  # dinosaur modal state
+    land: object  # chronos_esm.land.driver.LandState
+    ice: IceState  # Semtner 0-layer thermodynamic sea ice
     day: float
 
 
@@ -61,11 +69,21 @@ class DinoCoupledModel:
     ``DinoCoupledState`` pytree.
     """
 
-    def __init__(self, ocean_ic="woa", restore_to_woa=True, restore_tau_days=30.0,
-                 q_flux=None, interval=1.0, thc_haline_gain=1.0,
-                 thc_contrast_depth_m=None, thc_k_vel=1.0e-4,
-                 prognostic_momentum=False, mom_drag=1.0 / (86400.0 * 30.0),
-                 seasonal=False, orbit=None):
+    def __init__(
+        self,
+        ocean_ic="woa",
+        restore_to_woa=True,
+        restore_tau_days=30.0,
+        q_flux=None,
+        interval=1.0,
+        thc_haline_gain=1.0,
+        thc_contrast_depth_m=None,
+        thc_k_vel=1.0e-4,
+        prognostic_momentum=False,
+        mom_drag=1.0 / (86400.0 * 30.0),
+        seasonal=False,
+        orbit=None,
+    ):
         """restore_tau_days/q_flux select the SST flux-correction mode:
           - q_flux=None, tau~30  -> strong Haney restoring to WOA (CONTROL mode);
           - q_flux=<field>, tau long (e.g. 3650) -> frozen q-flux + weak anomaly
@@ -83,7 +101,9 @@ class DinoCoupledModel:
         self.sst_target = jnp.asarray(base.ocean.temp[0]) if restore_to_woa else None
         self.restore_tau_days = restore_tau_days
         self.q_flux = None if q_flux is None else jnp.asarray(q_flux)
-        self.thc_haline_gain = thc_haline_gain   # >1 -> salt-advection feedback for tipping
+        self.thc_haline_gain = (
+            thc_haline_gain  # >1 -> salt-advection feedback for tipping
+        )
         # convection-layer depth for the density contrast; shallow (~300 m) gives a
         # surface hosing leverage on deep-water formation (None -> use overturning depth).
         self.thc_contrast_depth_m = thc_contrast_depth_m
@@ -106,15 +126,25 @@ class DinoCoupledModel:
         lat = np.linspace(-90, 90, OCEAN_GRID.nlat)
         self.dy = (np.pi * EARTH_RADIUS) / OCEAN_GRID.nlat
         cos_lat = np.maximum(np.cos(np.deg2rad(lat)), 0.05)
-        self.dx = jnp.asarray((2 * np.pi * EARTH_RADIUS * cos_lat[:, None]) / OCEAN_GRID.nlon)
+        self.dx = jnp.asarray(
+            (2 * np.pi * EARTH_RADIUS * cos_lat[:, None]) / OCEAN_GRID.nlon
+        )
         self.dz = jnp.asarray(OCEAN_DZ)
 
         # land forcing (annual-ish downward shortwave; perpetual day=80 as in harness)
         self.land_mask_f = (~np.asarray(self.omask)).astype(np.float32)
         self.ocean_mask_f = jnp.asarray(np.asarray(self.omask).astype(np.float32))
-        insol = np.maximum(np.asarray(aphys.compute_solar_insolation(
-            jnp.asarray(lat) * np.pi / 180.0, day_of_year=80.0)), 0.0)[:, None]
-        self.sw_down = jnp.asarray(np.broadcast_to(insol, (OCEAN_GRID.nlat, OCEAN_GRID.nlon)))
+        insol = np.maximum(
+            np.asarray(
+                aphys.compute_solar_insolation(
+                    jnp.asarray(lat) * np.pi / 180.0, day_of_year=80.0
+                )
+            ),
+            0.0,
+        )[:, None]
+        self.sw_down = jnp.asarray(
+            np.broadcast_to(insol, (OCEAN_GRID.nlat, OCEAN_GRID.nlon))
+        )
 
         # P5 paleo: seasonal-cycle insolation. When seasonal=True the insolation is
         # recomputed each interval from cstate.day via the orbital forcing; orbit defaults
@@ -138,16 +168,28 @@ class DinoCoupledModel:
         self._n_atm_f = int(round(self.atm.steps_per_day * interval))
         self._n_sub_f = int(round(86400.0 * interval / DT_OCEAN))
         self._step_fast = jax.jit(
-            lambda cs, co2, hose: self._advance(cs, co2, self.interval, self._n_atm_f,
-                                                self._n_sub_f, remat=False, hosing_sv=hose))
+            lambda cs, co2, hose: self._advance(
+                cs,
+                co2,
+                self.interval,
+                self._n_atm_f,
+                self._n_sub_f,
+                remat=False,
+                hosing_sv=hose,
+            )
+        )
 
     # ---- state ----
     def init_state(self):
         sst0_g = self.lin_to_gauss(jnp.asarray(self._ocean0.temp[0]))
         ice0 = init_ice_state(OCEAN_GRID.nlat, OCEAN_GRID.nlon)
-        return DinoCoupledState(ocean=self._ocean0,
-                                atmos=self.atm.initial_state(sst0_g),
-                                land=self._land0, ice=ice0, day=0.0)
+        return DinoCoupledState(
+            ocean=self._ocean0,
+            atmos=self.atm.initial_state(sst0_g),
+            land=self._land0,
+            ice=ice0,
+            day=0.0,
+        )
 
     # ---- insolation (P5: seasonal/orbital or legacy perpetual-equinox) ----
     def _insolation(self, day):
@@ -164,8 +206,10 @@ class DinoCoupledModel:
         if not self.seasonal:
             return self.sw_down, None
         lam = orbital.solar_longitude_from_day(jnp.mod(day, 365.0), self.orbit)
-        insol_toa = orbital.daily_insolation(self.lat_rad, lam, self.orbit)[:, None]  # (nlat,1)
-        surf_sw = insol_toa * (1.0 - self._albedo_lat[:, None]) * 0.60               # (nlat,1)
+        insol_toa = orbital.daily_insolation(self.lat_rad, lam, self.orbit)[
+            :, None
+        ]  # (nlat,1)
+        surf_sw = insol_toa * (1.0 - self._albedo_lat[:, None]) * 0.60  # (nlat,1)
         sw_down = jnp.broadcast_to(surf_sw, (OCEAN_GRID.nlat, OCEAN_GRID.nlon))
         return sw_down, surf_sw
 
@@ -179,7 +223,9 @@ class DinoCoupledModel:
         # ice-modified ocean surface temp seen by the atmosphere (lagged ice):
         # concentration-weighted blend of open-water SST and the ice skin temp.
         A_prev = cstate.ice.concentration
-        sst_ocean_ice = (1.0 - A_prev) * sst_lin + A_prev * (cstate.ice.surface_temp + 273.15)
+        sst_ocean_ice = (1.0 - A_prev) * sst_lin + A_prev * (
+            cstate.ice.surface_temp + 273.15
+        )
         # lower boundary: ice-modified SST over sea, land skin T over land (lagged).
         surf_T = jnp.where(self.omask, sst_ocean_ice, cstate.land.temp)
         sst_g = self.lin_to_gauss(surf_T)
@@ -198,26 +244,48 @@ class DinoCoupledModel:
 
         # land surface
         lw_down_l = 0.8 * 5.67e-8 * jnp.maximum(t_air - 10.0, 150.0) ** 4
-        wind_sp = jnp.sqrt(u_sfc ** 2 + v_sfc ** 2) + 1.0
+        wind_sp = jnp.sqrt(u_sfc**2 + v_sfc**2) + 1.0
         new_land, _ = step_land(
-            cstate.land, t_air=t_air, q_air=q_air, sw_down=sw_down,
-            lw_down=lw_down_l, precip=jnp.maximum(precip_a, 0.0) * 1e-3,
-            mask=jnp.asarray(self.land_mask_f), wind_speed=wind_sp,
-            drag_coeff=DRAG_COEFF_LAND, dt=86400.0 * interval)
+            cstate.land,
+            t_air=t_air,
+            q_air=q_air,
+            sw_down=sw_down,
+            lw_down=lw_down_l,
+            precip=jnp.maximum(precip_a, 0.0) * 1e-3,
+            mask=jnp.asarray(self.land_mask_f),
+            wind_speed=wind_sp,
+            drag_coeff=DRAG_COEFF_LAND,
+            dt=86400.0 * interval,
+        )
 
         # sea ice (Semtner thermodynamic): forced by this interval's atmosphere,
         # returns heat + freshwater fluxes to the ocean. Units: t_air/SST in degC.
         new_ice, (ice_heat, ice_fw) = step_ice(
-            cstate.ice, t_air=t_air - 273.15, sw_down=sw_down,
-            lw_down=lw_down_l, ocean_temp=sst_lin - 273.15,
-            ny=OCEAN_GRID.nlat, nx=OCEAN_GRID.nlon, mask=self.ocean_mask_f)
+            cstate.ice,
+            t_air=t_air - 273.15,
+            sw_down=sw_down,
+            lw_down=lw_down_l,
+            ocean_temp=sst_lin - 273.15,
+            ny=OCEAN_GRID.nlat,
+            nx=OCEAN_GRID.nlon,
+            mask=self.ocean_mask_f,
+        )
 
         # bulk surface fluxes (jnp), blended with the ice fluxes by concentration.
         nh, fw, tx, ty = dc.ocean_fluxes_jax(
-            sst_lin, u_sfc, v_sfc, t_air, q_air, precip_a,
-            ocean_mask=self.omask, sst_target=self.sst_target,
-            restore_tau_days=self.restore_tau_days, q_flux=self.q_flux, co2_ppm=co2_ppm,
-            insol_override=insol_override)
+            sst_lin,
+            u_sfc,
+            v_sfc,
+            t_air,
+            q_air,
+            precip_a,
+            ocean_mask=self.omask,
+            sst_target=self.sst_target,
+            restore_tau_days=self.restore_tau_days,
+            q_flux=self.q_flux,
+            co2_ppm=co2_ppm,
+            insol_override=insol_override,
+        )
         A = new_ice.concentration
         nh = (1.0 - A) * nh + A * ice_heat
         fw = (1.0 - A) * fw + A * ice_fw
@@ -225,38 +293,61 @@ class DinoCoupledModel:
         wind = (tx, ty)
 
         def _ocean(oc, _):
-            return veros_driver.step_ocean(
-                oc, surface_fluxes=fluxes, wind_stress=wind, dx=self.dx, dy=self.dy,
-                dz=self.dz, nz=self.nz, mask=self.surface_mask,
-                ocean_mask_3d=self.ocean_mask_3d, thc_haline_gain=self.thc_haline_gain,
-                thc_contrast_depth_m=self.thc_contrast_depth_m, thc_k_vel=self.thc_k_vel,
-                prognostic_momentum=self.prognostic_momentum, mom_drag=self.mom_drag,
-                hosing_sv=hosing_sv), None
+            return (
+                veros_driver.step_ocean(
+                    oc,
+                    surface_fluxes=fluxes,
+                    wind_stress=wind,
+                    dx=self.dx,
+                    dy=self.dy,
+                    dz=self.dz,
+                    nz=self.nz,
+                    mask=self.surface_mask,
+                    ocean_mask_3d=self.ocean_mask_3d,
+                    thc_haline_gain=self.thc_haline_gain,
+                    thc_contrast_depth_m=self.thc_contrast_depth_m,
+                    thc_k_vel=self.thc_k_vel,
+                    prognostic_momentum=self.prognostic_momentum,
+                    mom_drag=self.mom_drag,
+                    hosing_sv=hosing_sv,
+                ),
+                None,
+            )
+
         body = jax.checkpoint(_ocean) if remat else _ocean
         new_ocean, _ = jax.lax.scan(body, cstate.ocean, None, length=n_sub)
-        return DinoCoupledState(ocean=new_ocean, atmos=dino_state, land=new_land,
-                                ice=new_ice, day=cstate.day + interval)
+        return DinoCoupledState(
+            ocean=new_ocean,
+            atmos=dino_state,
+            land=new_land,
+            ice=new_ice,
+            day=cstate.day + interval,
+        )
 
     # ---- differentiable, variable-interval step (eager; for gradients / DA) ----
     def step(self, cstate, interval=1.0, co2_ppm=None, hosing_sv=0.0):
         n_atm = int(round(self.atm.steps_per_day * interval))
         n_sub = int(round(86400.0 * interval / DT_OCEAN))
-        return self._advance(cstate, co2_ppm, interval, n_atm, n_sub, remat=True,
-                             hosing_sv=hosing_sv)
+        return self._advance(
+            cstate, co2_ppm, interval, n_atm, n_sub, remat=True, hosing_sv=hosing_sv
+        )
 
     # ---- fast, fully-jitted forward step (fixed interval; control / forced runs) ----
     def step_fast(self, cstate, co2_ppm=280.0, hosing_sv=0.0):
         """One coupling interval as a single fused jitted program (no remat). ~10x
         faster than step() for forward integration. co2_ppm=280 -> zero forcing;
         hosing_sv freshens the subpolar N. Atlantic (AMOC tipping forcing)."""
-        return self._step_fast(cstate, jnp.asarray(float(co2_ppm)),
-                               jnp.asarray(float(hosing_sv)))
+        return self._step_fast(
+            cstate, jnp.asarray(float(co2_ppm)), jnp.asarray(float(hosing_sv))
+        )
 
     # ---- surface diagnostics on the linear grid (for scoring / inspection) ----
     def diagnostics_lin(self, cstate):
         diag = dc.dino_diagnostics_jax(self.atm, cstate.atmos)
-        return {k: self.gauss_to_lin(diag[k])
-                for k in ("u_sfc", "v_sfc", "t_sfc", "q_sfc", "precip", "mslp")}
+        return {
+            k: self.gauss_to_lin(diag[k])
+            for k in ("u_sfc", "v_sfc", "t_sfc", "q_sfc", "precip", "mslp")
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -295,7 +386,8 @@ def load_state(path_base):
         atmos=dino_load(path_base + "_dino.npz"),
         land=_load_nt(d, "land", LandState),
         ice=_load_nt(d, "ice", IceState),
-        day=float(d["day"]))
+        day=float(d["day"]),
+    )
 
 
 __all__ = ["DinoCoupledState", "DinoCoupledModel", "save_state", "load_state"]

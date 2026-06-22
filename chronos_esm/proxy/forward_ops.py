@@ -4,7 +4,6 @@ Forward operators for proxy modeling.
 Maps model state variables (e.g., SST, Salinity) to proxy observations (e.g., d18O).
 """
 
-import jax
 import jax.numpy as jnp
 
 # Constants for Bemis et al. (1998)

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pooch
 import pytest
 
-from chronos_esm import config, main
+from chronos_esm import main
 
 # init_model() pulls the ~900 MB ETOPO bathymetry; skip if it isn't cached (e.g. in
 # CI). Stage it with `python experiments/prefetch_data.py` to run these tests.

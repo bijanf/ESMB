@@ -86,12 +86,12 @@ RADIUS_EARTH = EARTH_RADIUS
 RHO_WATER = 1025.0  # Seawater density [kg/m^3]
 RHO_AIR = 1.225  # Air density at sea level [kg/m^3]
 CP_AIR = 1004.0  # Specific heat of air [J/kg/K]
-R_AIR = 287.0 # Gas constant for dry air [J/kg/K]
+R_AIR = 287.0  # Gas constant for dry air [J/kg/K]
 CP_WATER = 3985.0  # Specific heat of seawater [J/kg/K]
 LATENT_HEAT_VAPORIZATION = 2.5e6  # Latent heat of vaporization [J/kg]
 STEFAN_BOLTZMANN = 5.67e-8  # Stefan-Boltzmann constant [W/m^2/K^4]
 P0 = 100000.0  # Reference pressure [Pa]
-KAPPA = R_AIR / CP_AIR # Ratio of gas constant to specific heat at constant pressure
+KAPPA = R_AIR / CP_AIR  # Ratio of gas constant to specific heat at constant pressure
 
 # Tuning Parameters
 DRAG_COEFF_OCEAN = 1.2e-3

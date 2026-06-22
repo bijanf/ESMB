@@ -15,7 +15,11 @@ def _prep(model, obs, weights, mask):
     """Broadcast inputs and build the weight array, zeroing invalid cells."""
     model = np.asarray(model, dtype=float)
     obs = np.asarray(obs, dtype=float)
-    w = np.broadcast_to(np.asarray(weights, dtype=float), model.shape).astype(float).copy()
+    w = (
+        np.broadcast_to(np.asarray(weights, dtype=float), model.shape)
+        .astype(float)
+        .copy()
+    )
 
     valid = np.isfinite(model) & np.isfinite(obs) & np.isfinite(w)
     if mask is not None:
@@ -55,8 +59,17 @@ def area_weighted_stats(model, obs, weights, mask=None):
     n = int(valid.sum())
     if n == 0:
         nan = float("nan")
-        return dict(bias=nan, rmse=nan, crmse=nan, corr=nan, std_model=nan,
-                    std_obs=nan, mean_model=nan, mean_obs=nan, n=0)
+        return dict(
+            bias=nan,
+            rmse=nan,
+            crmse=nan,
+            corr=nan,
+            std_model=nan,
+            std_obs=nan,
+            mean_model=nan,
+            mean_obs=nan,
+            n=0,
+        )
 
     mbar = _wmean(model, w)
     obar = _wmean(obs, w)
@@ -65,15 +78,23 @@ def area_weighted_stats(model, obs, weights, mask=None):
 
     mp = model - mbar
     op = obs - obar
-    std_m = np.sqrt(_wmean(mp ** 2, w))
-    std_o = np.sqrt(_wmean(op ** 2, w))
+    std_m = np.sqrt(_wmean(mp**2, w))
+    std_o = np.sqrt(_wmean(op**2, w))
     cov = _wmean(mp * op, w)
     corr = cov / (std_m * std_o) if (std_m > 0 and std_o > 0) else np.nan
     crmse = np.sqrt(_wmean((mp - op) ** 2, w))
 
-    return dict(bias=bias, rmse=rmse, crmse=crmse, corr=corr,
-                std_model=std_m, std_obs=std_o,
-                mean_model=mbar, mean_obs=obar, n=n)
+    return dict(
+        bias=bias,
+        rmse=rmse,
+        crmse=crmse,
+        corr=corr,
+        std_model=std_m,
+        std_obs=std_o,
+        mean_model=mbar,
+        mean_obs=obar,
+        n=n,
+    )
 
 
 def zonal_mean(field, mask=None):
@@ -105,5 +126,4 @@ def taylor_stats(model, obs, weights, mask=None):
     std_o = s["std_obs"]
     ratio = s["std_model"] / std_o if std_o > 0 else np.nan
     crmse_ratio = s["crmse"] / std_o if std_o > 0 else np.nan
-    return dict(corr=s["corr"], std_ratio=ratio, crmse_ratio=crmse_ratio,
-                std_obs=std_o)
+    return dict(corr=s["corr"], std_ratio=ratio, crmse_ratio=crmse_ratio, std_obs=std_o)

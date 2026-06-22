@@ -17,6 +17,7 @@ topographic (JEBAR-like) operator over real bathymetry; coef = 1 is the flat-bot
 Stommel limit. Steady state -> r*lap(psi) + beta*dpsi/dx = F (Stommel gyre: Sverdrup
 interior + a western boundary layer of width delta = r/beta). Fully differentiable.
 """
+
 import jax
 import jax.numpy as jnp
 
@@ -49,8 +50,9 @@ def velocities_from_psi(psi, dx, dy, mask=None):
     return u, v
 
 
-def step_barotropic(zeta, psi, F, *, dx, dy, dt, beta, r, mask, coef,
-                    nu=0.0, max_iter=400, tol=1e-8):
+def step_barotropic(
+    zeta, psi, F, *, dx, dy, dt, beta, r, mask, coef, nu=0.0, max_iter=400, tol=1e-8
+):
     """One forward-Euler step of the linear barotropic vorticity equation.
 
     Prognose zeta, then diagnose psi by inverting zeta = div(coef * grad psi).
@@ -59,15 +61,17 @@ def step_barotropic(zeta, psi, F, *, dx, dy, dt, beta, r, mask, coef,
     dpsidx = ddx_centered(psi, dx) * mask
     tend = (-beta * dpsidx - r * zeta + F) * mask
     if nu > 0.0:
-        tend = tend + nu * apply_elliptic_varcoef(zeta, jnp.ones_like(coef), dx, dy, mask)
+        tend = tend + nu * apply_elliptic_varcoef(
+            zeta, jnp.ones_like(coef), dx, dy, mask
+        )
     zeta_new = (zeta + dt * tend) * mask
-    psi_new, _ = solve_elliptic_varcoef(coef, zeta_new, dx, dy, mask=mask, x0=psi,
-                                        max_iter=max_iter, tol=tol)
+    psi_new, _ = solve_elliptic_varcoef(
+        coef, zeta_new, dx, dy, mask=mask, x0=psi, max_iter=max_iter, tol=tol
+    )
     return zeta_new, psi_new
 
 
-def spin_up_gyre(F, *, dx, dy, dt, beta, r, mask, coef, n_steps, nu=0.0,
-                 max_iter=400):
+def spin_up_gyre(F, *, dx, dy, dt, beta, r, mask, coef, n_steps, nu=0.0, max_iter=400):
     """Integrate the barotropic gyre to (near) steady state from rest. Returns
     (psi, zeta) using a differentiable lax.scan loop."""
     ny, nx = F.shape
@@ -76,8 +80,20 @@ def spin_up_gyre(F, *, dx, dy, dt, beta, r, mask, coef, n_steps, nu=0.0,
 
     def body(carry, _):
         z, p = carry
-        z, p = step_barotropic(z, p, F, dx=dx, dy=dy, dt=dt, beta=beta, r=r,
-                               mask=mask, coef=coef, nu=nu, max_iter=max_iter)
+        z, p = step_barotropic(
+            z,
+            p,
+            F,
+            dx=dx,
+            dy=dy,
+            dt=dt,
+            beta=beta,
+            r=r,
+            mask=mask,
+            coef=coef,
+            nu=nu,
+            max_iter=max_iter,
+        )
         return (z, p), None
 
     (zeta, psi), _ = jax.lax.scan(body, (z0, p0), None, length=n_steps)
@@ -112,20 +128,47 @@ def velocities_sphere(psi, lat, dlon, dlat, a, mask=None):
     return u, v
 
 
-def step_barotropic_sphere(zeta, psi, F, *, lat, dlon, dlat, a, omega, dt, r, mask, coef,
-                           max_iter=600, tol=1e-8):
+def step_barotropic_sphere(
+    zeta,
+    psi,
+    F,
+    *,
+    lat,
+    dlon,
+    dlat,
+    a,
+    omega,
+    dt,
+    r,
+    mask,
+    coef,
+    max_iter=600,
+    tol=1e-8,
+):
     """One forward-Euler step of the linear barotropic vorticity equation on the sphere:
-    d zeta/dt = -(2 Omega/a^2) dpsi/dlon - r zeta + F, with zeta = div(coef grad psi)."""
-    beta_v = (2.0 * omega / a ** 2) * ddx_centered(psi, dlon)
+    d zeta/dt = -(2 Omega/a^2) dpsi/dlon - r zeta + F, with zeta = div(coef grad psi).
+    """
+    beta_v = (2.0 * omega / a**2) * ddx_centered(psi, dlon)
     tend = (-beta_v - r * zeta + F) * mask
     zeta_new = (zeta + dt * tend) * mask
-    psi_new, _ = solve_elliptic_varcoef_sphere(coef, zeta_new, lat, dlon, dlat, a,
-                                               mask=mask, x0=psi, max_iter=max_iter, tol=tol)
+    psi_new, _ = solve_elliptic_varcoef_sphere(
+        coef,
+        zeta_new,
+        lat,
+        dlon,
+        dlat,
+        a,
+        mask=mask,
+        x0=psi,
+        max_iter=max_iter,
+        tol=tol,
+    )
     return zeta_new, psi_new
 
 
-def spin_up_gyre_sphere(F, *, lat, dlon, dlat, a, omega, dt, r, mask, coef, n_steps,
-                        max_iter=600):
+def spin_up_gyre_sphere(
+    F, *, lat, dlon, dlat, a, omega, dt, r, mask, coef, n_steps, max_iter=600
+):
     """Integrate the spherical barotropic gyre to (near) steady state from rest."""
     ny, nx = F.shape
     z0 = jnp.zeros((ny, nx), F.dtype)
@@ -133,9 +176,21 @@ def spin_up_gyre_sphere(F, *, lat, dlon, dlat, a, omega, dt, r, mask, coef, n_st
 
     def body(carry, _):
         z, p = carry
-        z, p = step_barotropic_sphere(z, p, F, lat=lat, dlon=dlon, dlat=dlat, a=a,
-                                      omega=omega, dt=dt, r=r, mask=mask, coef=coef,
-                                      max_iter=max_iter)
+        z, p = step_barotropic_sphere(
+            z,
+            p,
+            F,
+            lat=lat,
+            dlon=dlon,
+            dlat=dlat,
+            a=a,
+            omega=omega,
+            dt=dt,
+            r=r,
+            mask=mask,
+            coef=coef,
+            max_iter=max_iter,
+        )
         return (z, p), None
 
     (zeta, psi), _ = jax.lax.scan(body, (z0, p0), None, length=n_steps)
@@ -151,13 +206,16 @@ def rigid_lid_project(u, v, dz, dx, dy, maskC, max_iter=300, tol=1e-7):
     div(U',V')=0 (not just a per-latitude mean) and does not touch the depth structure that
     carries the AMOC. Differentiable (wraps solve_poisson_2d). Returns (u', v')."""
     from chronos_esm.ocean.solver import solve_poisson_2d
+
     dz3 = jnp.asarray(dz)[:, None, None]
     surf = maskC[0]
-    U = jnp.sum(u * dz3, axis=0)                          # (ny,nx) depth-integrated transport
+    U = jnp.sum(u * dz3, axis=0)  # (ny,nx) depth-integrated transport
     V = jnp.sum(v * dz3, axis=0)
     div = (ddx_centered(U, dx) + ddy_centered(V, dy)) * surf
     chi, _ = solve_poisson_2d(div, dx, dy, max_iter=max_iter, tol=tol, mask=surf)
-    H = jnp.maximum(jnp.sum(dz3 * maskC, axis=0), jnp.asarray(dz)[0])   # (ny,nx) column depth
+    H = jnp.maximum(
+        jnp.sum(dz3 * maskC, axis=0), jnp.asarray(dz)[0]
+    )  # (ny,nx) column depth
     dchidx = ddx_centered(chi, dx)
     dchidy = ddy_centered(chi, dy)
     u_out = (u - (dchidx / H)[None, :, :]) * maskC
@@ -165,7 +223,16 @@ def rigid_lid_project(u, v, dz, dx, dy, maskC, max_iter=300, tol=1e-7):
     return u_out, v_out
 
 
-__all__ = ["wind_stress_curl", "velocities_from_psi", "step_barotropic",
-           "spin_up_gyre", "ddx_centered", "ddy_centered",
-           "wind_stress_curl_sphere", "velocities_sphere", "step_barotropic_sphere",
-           "spin_up_gyre_sphere", "rigid_lid_project"]
+__all__ = [
+    "wind_stress_curl",
+    "velocities_from_psi",
+    "step_barotropic",
+    "spin_up_gyre",
+    "ddx_centered",
+    "ddy_centered",
+    "wind_stress_curl_sphere",
+    "velocities_sphere",
+    "step_barotropic_sphere",
+    "spin_up_gyre_sphere",
+    "rigid_lid_project",
+]

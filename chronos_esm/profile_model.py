@@ -2,7 +2,6 @@ import time
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from chronos_esm import main
 from chronos_esm.atmos import dynamics as atmos_driver

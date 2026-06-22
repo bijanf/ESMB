@@ -17,6 +17,7 @@ Key numerics:
   pressure-gradient acceleration is -(1/rho0) grad p.
 Fully differentiable (jnp + lax.scan).
 """
+
 import jax
 import jax.numpy as jnp
 
@@ -45,10 +46,10 @@ def pressure_gradient_accel(p, dx, dy, rho0=RHO0, mask=None):
 
 def _lap_h(field, dx, dy):
     """Horizontal Laplacian (periodic x, Dirichlet/zero-pad y) for viscosity."""
-    d2x = (jnp.roll(field, -1, axis=2) - 2 * field + jnp.roll(field, 1, axis=2)) / dx ** 2
+    d2x = (jnp.roll(field, -1, axis=2) - 2 * field + jnp.roll(field, 1, axis=2)) / dx**2
     fn = jnp.concatenate([field[:, 1:, :], jnp.zeros_like(field[:, :1, :])], axis=1)
     fs = jnp.concatenate([jnp.zeros_like(field[:, :1, :]), field[:, :-1, :]], axis=1)
-    d2y = (fn - 2 * field + fs) / dy ** 2
+    d2y = (fn - 2 * field + fs) / dy**2
     return d2x + d2y
 
 
@@ -88,13 +89,21 @@ def spin_up(rho, *, f, dx, dy, dz, dt, r, n_steps, nu=0.0, mask=None, rho0=RHO0)
 
     def body(carry, _):
         u, v = carry
-        u, v = step_momentum(u, v, rho, f=f, dx=dx, dy=dy, dz=dz, dt=dt, r=r,
-                             nu=nu, mask=mask, rho0=rho0)
+        u, v = step_momentum(
+            u, v, rho, f=f, dx=dx, dy=dy, dz=dz, dt=dt, r=r, nu=nu, mask=mask, rho0=rho0
+        )
         return (u, v), None
 
     (u, v), _ = jax.lax.scan(body, (u, v), None, length=n_steps)
     return u, v
 
 
-__all__ = ["hydrostatic_pressure", "pressure_gradient_accel", "coriolis_semi_implicit",
-           "step_momentum", "spin_up", "G", "RHO0"]
+__all__ = [
+    "hydrostatic_pressure",
+    "pressure_gradient_accel",
+    "coriolis_semi_implicit",
+    "step_momentum",
+    "spin_up",
+    "G",
+    "RHO0",
+]

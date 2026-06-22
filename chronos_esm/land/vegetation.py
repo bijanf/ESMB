@@ -7,7 +7,6 @@ Vegetation grows based on temperature and soil moisture availability.
 
 from typing import Tuple
 
-import jax
 import jax.numpy as jnp
 
 from chronos_esm.config import DT_ATMOS

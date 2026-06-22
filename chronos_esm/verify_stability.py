@@ -3,7 +3,6 @@ import time
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import numpy as np
 
 from chronos_esm import main
 from chronos_esm.config import DT_ATMOS

@@ -12,7 +12,7 @@ import pytest  # noqa: F401
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm.atmos import dynamics, physics, qtcm, spectral  # noqa: E402
+from chronos_esm.atmos import physics, qtcm, spectral  # noqa: E402
 
 
 class TestAtmosPhysics:

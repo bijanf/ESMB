@@ -144,12 +144,12 @@ def solve_cg(
         new_state = body_fun(state)
         # If converged, keep old state (no-op)
         out_state = jax.tree.map(
-            lambda old, new: jnp.where(converged, old, new), state, new_state)
+            lambda old, new: jnp.where(converged, old, new), state, new_state
+        )
         return out_state, None
 
     initial_state_loop = (x0, r0, p0, rz0, jnp.linalg.norm(r0), 0)
-    final_state, _ = jax.lax.scan(scan_body, initial_state_loop,
-                                   None, length=max_iter)
+    final_state, _ = jax.lax.scan(scan_body, initial_state_loop, None, length=max_iter)
 
     x_final, r_final, _, _, r_norm_final, num_iters = final_state
 
@@ -359,12 +359,15 @@ def apply_elliptic_varcoef(psi, coef, dx, dy, mask=None):
     coef = jnp.broadcast_to(jnp.asarray(coef, psi.dtype), (ny, nx))
     mask = jnp.ones((ny, nx), psi.dtype) if mask is None else mask.astype(psi.dtype)
     cE, cW, cN, cS = _varcoef_faces(coef)
-    return _elliptic_op(psi, cE, cW, cN, cS,
-                        jnp.asarray(dx) ** 2, jnp.asarray(dy) ** 2) * mask
+    return (
+        _elliptic_op(psi, cE, cW, cN, cS, jnp.asarray(dx) ** 2, jnp.asarray(dy) ** 2)
+        * mask
+    )
 
 
-def solve_elliptic_varcoef(coef, rhs, dx, dy, mask=None, x0=None,
-                           max_iter=400, tol=1e-7):
+def solve_elliptic_varcoef(
+    coef, rhs, dx, dy, mask=None, x0=None, max_iter=400, tol=1e-7
+):
     """Solve div(coef * grad psi) = rhs for psi. Returns (psi, info).
 
     coef, rhs: (ny, nx). dx, dy: scalar or broadcastable. mask: 1=ocean, 0=land
@@ -382,14 +385,15 @@ def solve_elliptic_varcoef(coef, rhs, dx, dy, mask=None, x0=None,
         # A = -L on ocean (SPD), identity on land -> psi=0 where rhs=0
         return (-lap * mask + psi * (1.0 - mask)).flatten()
 
-    diag = (cE + cW) / dx2 + (cN + cS) / dy2          # diag of -L (positive)
-    diag = diag * mask + (1.0 - mask)                 # identity on land
+    diag = (cE + cW) / dx2 + (cN + cS) / dy2  # diag of -L (positive)
+    diag = diag * mask + (1.0 - mask)  # identity on land
     precond = jacobi_preconditioner(diag.flatten())
 
     b = (-rhs * mask).flatten()
     x0_flat = x0.flatten() if x0 is not None else jnp.zeros_like(b)
-    x, info = solve_cg(operator, b, x0_flat, max_iter=max_iter, tol=tol,
-                       preconditioner=precond)
+    x, info = solve_cg(
+        operator, b, x0_flat, max_iter=max_iter, tol=tol, preconditioner=precond
+    )
     return x.reshape(ny, nx), info
 
 
@@ -412,9 +416,9 @@ def _sphere_conductances(coef, lat, dlon, dlat, a, cos_min):
     coef: (ny, nx) cell-centred (e.g. 1/H). lat: (ny,) cell-centre latitude [rad].
     dlon, dlat: grid spacing [rad]. a: Earth radius [m]. cos_min: polar cos floor.
     """
-    cosc = jnp.maximum(jnp.cos(lat), cos_min)[:, None]                 # (ny,1) cell centre
-    lat_n = 0.5 * (lat + jnp.concatenate([lat[1:], lat[-1:]]))         # north-face latitude
-    lat_s = 0.5 * (lat + jnp.concatenate([lat[:1], lat[:-1]]))         # south-face latitude
+    cosc = jnp.maximum(jnp.cos(lat), cos_min)[:, None]  # (ny,1) cell centre
+    lat_n = 0.5 * (lat + jnp.concatenate([lat[1:], lat[-1:]]))  # north-face latitude
+    lat_s = 0.5 * (lat + jnp.concatenate([lat[:1], lat[:-1]]))  # south-face latitude
     cosn = jnp.maximum(jnp.cos(lat_n), cos_min)[:, None]
     coss = jnp.maximum(jnp.cos(lat_s), cos_min)[:, None]
     # face coef = arithmetic mean of adjacent cells (Dirichlet via land-identity, not masked)
@@ -427,7 +431,7 @@ def _sphere_conductances(coef, lat, dlon, dlat, a, cos_min):
     cW = 0.5 * (coef + jnp.roll(coef, 1, axis=1)) * (dlat / (cosc * dlon))
     cN = 0.5 * (coef + coef_n) * (cosn * dlon / dlat)
     cS = 0.5 * (coef + coef_s) * (coss * dlon / dlat)
-    area = (a ** 2) * cosc * dlon * dlat                               # (ny,1) cell area
+    area = (a**2) * cosc * dlon * dlat  # (ny,1) cell area
     return cE, cW, cN, cS, area
 
 
@@ -437,23 +441,35 @@ def _sphere_op(psi, cE, cW, cN, cS):
     pw = jnp.roll(psi, 1, axis=1)
     pn = jnp.concatenate([psi[1:, :], jnp.zeros_like(psi[:1, :])], axis=0)
     ps = jnp.concatenate([jnp.zeros_like(psi[:1, :]), psi[:-1, :]], axis=0)
-    return (cE * (psi - pe) + cW * (psi - pw)
-            + cN * (psi - pn) + cS * (psi - ps))
+    return cE * (psi - pe) + cW * (psi - pw) + cN * (psi - pn) + cS * (psi - ps)
 
 
-def apply_elliptic_varcoef_sphere(psi, coef, lat, dlon, dlat, a, mask=None,
-                                  cos_min=0.087):
+def apply_elliptic_varcoef_sphere(
+    psi, coef, lat, dlon, dlat, a, mask=None, cos_min=0.087
+):
     """Apply the spherical operator L psi = div(coef grad psi) (area-divided, ocean only)."""
     ny, nx = psi.shape
     coef = jnp.broadcast_to(jnp.asarray(coef, psi.dtype), (ny, nx))
     mask = jnp.ones((ny, nx), psi.dtype) if mask is None else mask.astype(psi.dtype)
-    cE, cW, cN, cS, area = _sphere_conductances(coef, jnp.asarray(lat, psi.dtype),
-                                                dlon, dlat, a, cos_min)
+    cE, cW, cN, cS, area = _sphere_conductances(
+        coef, jnp.asarray(lat, psi.dtype), dlon, dlat, a, cos_min
+    )
     return (-_sphere_op(psi, cE, cW, cN, cS) / area) * mask
 
 
-def solve_elliptic_varcoef_sphere(coef, rhs, lat, dlon, dlat, a, mask=None, x0=None,
-                                  max_iter=600, tol=1e-7, cos_min=0.087):
+def solve_elliptic_varcoef_sphere(
+    coef,
+    rhs,
+    lat,
+    dlon,
+    dlat,
+    a,
+    mask=None,
+    x0=None,
+    max_iter=600,
+    tol=1e-7,
+    cos_min=0.087,
+):
     """Solve the spherical div(coef grad psi) = rhs for psi. Returns (psi, info).
 
     coef, rhs: (ny, nx). lat: (ny,) cell-centre latitude [rad]. dlon, dlat: [rad].
@@ -467,14 +483,15 @@ def solve_elliptic_varcoef_sphere(coef, rhs, lat, dlon, dlat, a, mask=None, x0=N
 
     def operator(psi_flat):
         psi = psi_flat.reshape(ny, nx)
-        m = _sphere_op(psi, cE, cW, cN, cS)               # symmetric SPD on ocean
+        m = _sphere_op(psi, cE, cW, cN, cS)  # symmetric SPD on ocean
         return (m * mask + psi * (1.0 - mask)).flatten()
 
-    diag = (cE + cW + cN + cS) * mask + (1.0 - mask)      # diag of M (positive), id on land
+    diag = (cE + cW + cN + cS) * mask + (1.0 - mask)  # diag of M (positive), id on land
     precond = jacobi_preconditioner(diag.flatten())
 
-    b = (-rhs * area * mask).flatten()                    # symmetric: multiply by cell area
+    b = (-rhs * area * mask).flatten()  # symmetric: multiply by cell area
     x0_flat = x0.flatten() if x0 is not None else jnp.zeros_like(b)
-    x, info = solve_cg(operator, b, x0_flat, max_iter=max_iter, tol=tol,
-                       preconditioner=precond)
+    x, info = solve_cg(
+        operator, b, x0_flat, max_iter=max_iter, tol=tol, preconditioner=precond
+    )
     return x.reshape(ny, nx), info

@@ -8,8 +8,8 @@ freed ocean (long restoring tau + frozen q-flux) actually translates that flux i
 real SST warming through the full dinosaur<->ocean<->land<->ice coupled step. It is
 marked ``slow`` (builds the real model from WOA) but is sized to run in ~1-2 min on CPU.
 """
+
 import jax.numpy as jnp
-import numpy as np
 import pytest
 
 from chronos_esm.config import OCEAN_GRID
@@ -31,15 +31,18 @@ def test_co2_2x_warms_ocean_surface_free_mode():
     # FREE / forcing-responsive config: frozen q-flux (zeros here) + weak long-tau
     # anomaly restoring, so SST can respond to the imposed CO2 forcing.
     model = DinoCoupledModel(
-        ocean_ic="woa", q_flux=jnp.zeros((nlat, nlon)),
-        restore_to_woa=True, restore_tau_days=3650.0)
+        ocean_ic="woa",
+        q_flux=jnp.zeros((nlat, nlon)),
+        restore_to_woa=True,
+        restore_tau_days=3650.0,
+    )
 
     cs0 = model.init_state()
     base = cs0
     forced = cs0
     n_intervals = 5
     for _ in range(n_intervals):
-        base = model.step_fast(base, co2_ppm=280.0)      # no forcing (F=0 at 280 ppm)
+        base = model.step_fast(base, co2_ppm=280.0)  # no forcing (F=0 at 280 ppm)
         forced = model.step_fast(forced, co2_ppm=560.0)  # 2xCO2 -> +3.71 W/m2
 
     sst_base = _ocean_sst_mean(model, base)
@@ -53,4 +56,5 @@ def test_co2_2x_warms_ocean_surface_free_mode():
     assert sst_forced > sst_base, (
         f"2xCO2 forced ocean SST ({sst_forced:.6f} K) should exceed baseline "
         f"({sst_base:.6f} K) after {n_intervals} intervals; "
-        f"diff={sst_forced - sst_base:.6e} K")
+        f"diff={sst_forced - sst_base:.6e} K"
+    )

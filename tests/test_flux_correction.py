@@ -2,12 +2,13 @@
 
 Pure-jnp, CI-runnable (no ETOPO / model build).
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from chronos_esm.config import CP_WATER, OCEAN_DZ, RHO_WATER
 from chronos_esm.ocean import flux_correction as fc
-from chronos_esm.config import RHO_WATER, CP_WATER, OCEAN_DZ
 
 
 def test_restoring_lambda_value():
@@ -20,10 +21,10 @@ def test_restoring_lambda_value():
 
 def test_restoring_flux_sign_and_zero():
     sst = jnp.array([[290.0, 295.0]])
-    tgt = jnp.array([[291.0, 295.0]])              # col0 colder than target, col1 on target
+    tgt = jnp.array([[291.0, 295.0]])  # col0 colder than target, col1 on target
     f = fc.restoring_flux(sst, tgt, 30.0)
-    assert float(f[0, 0]) > 0.0                    # heat INTO ocean where it is too cold
-    assert float(f[0, 1]) == 0.0                   # no flux when at target
+    assert float(f[0, 0]) > 0.0  # heat INTO ocean where it is too cold
+    assert float(f[0, 1]) == 0.0  # no flux when at target
 
 
 def test_qflux_mode_delivers_frozen_flux():
@@ -41,11 +42,13 @@ def test_qflux_weak_restoring_is_small_vs_strong():
     sst, tgt = jnp.array([[289.0]]), jnp.array([[290.0]])
     strong = float(fc.restoring_flux(sst, tgt, 30.0)[0, 0])
     weak = float(fc.heat_correction(sst, tgt, 3650.0, q_flux=jnp.zeros((1, 1)))[0, 0])
-    assert 0 < weak < 0.05 * strong               # ~tau ratio 30/3650
+    assert 0 < weak < 0.05 * strong  # ~tau ratio 30/3650
 
 
 def test_heat_correction_differentiable_in_sst():
     sst = jnp.array([[289.0]])
     tgt = jnp.array([[290.0]])
     g = float(jax.grad(lambda s: fc.heat_correction(s, tgt, 30.0).sum())(sst)[0, 0])
-    np.testing.assert_allclose(g, -fc.restoring_lambda(30.0), rtol=1e-5)  # d/dSST = -lambda
+    np.testing.assert_allclose(
+        g, -fc.restoring_lambda(30.0), rtol=1e-5
+    )  # d/dSST = -lambda

@@ -11,7 +11,6 @@ import jax.numpy as jnp
 import numpy as np
 import xarray as xr
 
-from chronos_esm.config import ATMOS_GRID, OCEAN_GRID
 from chronos_esm.coupler import state as coupled_state
 
 
@@ -121,9 +120,9 @@ def save_state_to_netcdf(state: coupled_state.CoupledState, filepath: Union[str,
                 {"units": "1/s", "long_name": "Divergence"},
             ),
             "atmos_co2": (
-                 ("y_atm", "x_atm"),
-                 np.array(state.atmos.co2),
-                 {"units": "ppm", "long_name": "CO2 Concentration"},
+                ("y_atm", "x_atm"),
+                np.array(state.atmos.co2),
+                {"units": "ppm", "long_name": "CO2 Concentration"},
             ),
             # Static surface geopotential (topography). Persisted so a restart
             # does not silently lose topography: without it the loader zeroed
@@ -148,24 +147,24 @@ def save_state_to_netcdf(state: coupled_state.CoupledState, filepath: Union[str,
             ),
             # Fluxes
             "sst": (
-                 ("y_atm", "x_atm"),
-                 np.array(state.fluxes.sst),
-                 {"units": "C", "long_name": "Composite Surface Temperature"},
+                ("y_atm", "x_atm"),
+                np.array(state.fluxes.sst),
+                {"units": "C", "long_name": "Composite Surface Temperature"},
             ),
             "wind_stress_x": (
-                 ("y_atm", "x_atm"),
-                 np.array(state.fluxes.wind_stress_x),
-                 {"units": "N/m^2", "long_name": "Zonal Wind Stress"},
+                ("y_atm", "x_atm"),
+                np.array(state.fluxes.wind_stress_x),
+                {"units": "N/m^2", "long_name": "Zonal Wind Stress"},
             ),
             "wind_stress_y": (
-                 ("y_atm", "x_atm"),
-                 np.array(state.fluxes.wind_stress_y),
-                 {"units": "N/m^2", "long_name": "Meridional Wind Stress"},
+                ("y_atm", "x_atm"),
+                np.array(state.fluxes.wind_stress_y),
+                {"units": "N/m^2", "long_name": "Meridional Wind Stress"},
             ),
             "precip": (
-                 ("y_atm", "x_atm"),
-                 np.array(state.fluxes.precip),
-                 {"units": "kg/m^2/s", "long_name": "Precipitation Rate"},
+                ("y_atm", "x_atm"),
+                np.array(state.fluxes.precip),
+                {"units": "kg/m^2/s", "long_name": "Precipitation Rate"},
             ),
             # Time
             "time": ((), float(state.time), {"units": "seconds since start"}),
@@ -190,72 +189,72 @@ def save_state_to_netcdf(state: coupled_state.CoupledState, filepath: Union[str,
 def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledState:
     """
     Load the coupled state from a NetCDF file.
-    
+
     Args:
         filepath: Path to the NetCDF file.
-        
+
     Returns:
         state: The reconstructed CoupledState.
     """
     ds = xr.open_dataset(filepath, decode_times=False)
-    
+
     # Dimensions
-    nz = ds.sizes['z']
-    ny_ocn = ds.sizes['y_ocn']
-    nx_ocn = ds.sizes['x_ocn']
-    ny_atm = ds.sizes['y_atm']
-    nx_atm = ds.sizes['x_atm']
-    
+    nz = ds.sizes["z"]
+    ny_ocn = ds.sizes["y_ocn"]
+    nx_ocn = ds.sizes["x_ocn"]
+    ny_atm = ds.sizes["y_atm"]
+    nx_atm = ds.sizes["x_atm"]
+
     # --- Ocean ---
     # Load available prognostic variables
     temp = jnp.array(ds.ocean_temp.values)
     salt = jnp.array(ds.ocean_salt.values)
     u = jnp.array(ds.ocean_u.values)
     v = jnp.array(ds.ocean_v.values)
-    
+
     # Missing diagnostics (re-init to zero/default)
     w = jnp.zeros((nz, ny_ocn, nx_ocn))
     psi = jnp.zeros((ny_ocn, nx_ocn))
     rho = jnp.zeros((nz, ny_ocn, nx_ocn))
-    dic = jnp.ones((nz, ny_ocn, nx_ocn)) * 2000.0 # Default DIC
-    
+    dic = jnp.ones((nz, ny_ocn, nx_ocn)) * 2000.0  # Default DIC
+
     ocean = coupled_state.OceanState(
         u=u, v=v, w=w, temp=temp, salt=salt, psi=psi, rho=rho, dic=dic
     )
-    
+
     # --- Ice ---
     h_ice = jnp.array(ds.ice_thickness.values)
     a_ice = jnp.array(ds.ice_concentration.values)
     # Surface temp not saved in previous versions, default to -1.8 C
-    if 'ice_surface_temp' in ds:
+    if "ice_surface_temp" in ds:
         surface_temp = jnp.array(ds.ice_surface_temp.values)
     else:
         surface_temp = jnp.ones_like(h_ice) * -1.8
-    
+
     ice = coupled_state.IceState(
-        thickness=h_ice,
-        concentration=a_ice,
-        surface_temp=surface_temp
+        thickness=h_ice, concentration=a_ice, surface_temp=surface_temp
     )
-    
+
     # --- Atmos ---
     temp_atm = jnp.array(ds.atmos_temp.values)
-    
+
     # q_atm loaded later after potential reset logic
     u_atm = jnp.array(ds.atmos_u.values)
     v_atm = jnp.array(ds.atmos_v.values)
-    
+
     # Re-init diagnostics
     # Re-init diagnostics or load prognostics
     reset_humidity = False
-    
-    if 'atmos_ln_ps' in ds:
+
+    if "atmos_ln_ps" in ds:
         ln_ps = jnp.array(ds.atmos_ln_ps.values)
     else:
         print("Warning: atmos_ln_ps not in restart. Reconstructing hydrostatically.")
         # Fallback to 101325 constant to avoid vacuum.
         ln_ps = jnp.ones((ny_atm, nx_atm)) * jnp.log(101325.0)
-        reset_humidity = True # Vacuum state Q is likely garbage/too low for new pressure.
+        reset_humidity = (
+            True  # Vacuum state Q is likely garbage/too low for new pressure.
+        )
 
     # ... (Vorticity block same) ...
 
@@ -263,13 +262,14 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
     if reset_humidity:
         print("Warning: Reseting Humidity to 80% RH to recover from vacuum state.")
         from chronos_esm.atmos import physics
+
         pressure = jnp.exp(ln_ps)
         q_sat = physics.compute_saturation_humidity(temp_atm, pressure)
         q_atm = 0.8 * q_sat
     else:
         q_atm = jnp.array(ds.atmos_q.values)
 
-    if 'atmos_vorticity' in ds and 'atmos_divergence' in ds:
+    if "atmos_vorticity" in ds and "atmos_divergence" in ds:
         vorticity = jnp.array(ds.atmos_vorticity.values)
         divergence = jnp.array(ds.atmos_divergence.values)
     else:
@@ -277,7 +277,7 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
         # Recompute from U, V
         from chronos_esm.atmos import spectral
         from chronos_esm.config import EARTH_RADIUS
-        
+
         lat = jnp.linspace(-90, 90, ny_atm)
         lat_rad = jnp.deg2rad(lat)
         # Floor cos(lat) so the pole rows don't give dx=0 (cos(+-90)=0), which
@@ -285,18 +285,18 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
         cos_lat = jnp.maximum(jnp.abs(jnp.cos(lat_rad)[:, None]), 1e-3)
         dx = 2 * jnp.pi * EARTH_RADIUS * cos_lat / nx_atm
         dy = jnp.pi * EARTH_RADIUS / ny_atm
-        
+
         du_dx, du_dy = spectral.compute_gradients(u_atm, dx, dy)
         dv_dx, dv_dy = spectral.compute_gradients(v_atm, dx, dy)
-        
+
         vorticity = dv_dx - du_dy
         divergence = du_dx + dv_dy
 
-    if 'atmos_co2' in ds:
+    if "atmos_co2" in ds:
         co2 = jnp.array(ds.atmos_co2.values)
     else:
-        co2 = jnp.ones((ny_atm, nx_atm)) * 280e-6 # Pre-industrial
-    
+        co2 = jnp.ones((ny_atm, nx_atm)) * 280e-6  # Pre-industrial
+
     # Initialize missing diagnostics
     psi_atm = jnp.zeros((ny_atm, nx_atm))
     chi_atm = jnp.zeros((ny_atm, nx_atm))
@@ -305,21 +305,34 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
     # older checkpoints that predate it, reconstruct from ETOPO rather than
     # zeroing -- a zero phi_s removes topography on every restart, which breaks
     # both the atmospheric pressure-gradient force and the MSL pressure reduction.
-    if 'atmos_phi_s' in ds:
+    if "atmos_phi_s" in ds:
         phi_s_atm = jnp.array(ds.atmos_phi_s.values)
     else:
         try:
             from chronos_esm import data
+
             phi_s_atm = jnp.asarray(data.load_topography(ny_atm, nx_atm)) * 9.81
-            print("Note: atmos_phi_s not in restart; reconstructed from ETOPO topography.")
+            print(
+                "Note: atmos_phi_s not in restart; reconstructed from ETOPO topography."
+            )
         except Exception as e:  # noqa: BLE001
-            print(f"Warning: could not reconstruct phi_s from topography ({e}); using zeros.")
+            print(
+                f"Warning: could not reconstruct phi_s from topography ({e}); using zeros."
+            )
             phi_s_atm = jnp.zeros((ny_atm, nx_atm))
 
     atmos = coupled_state.AtmosState(
-        u=u_atm, v=v_atm, temp=temp_atm, q=q_atm, 
-        ln_ps=ln_ps, vorticity=vorticity, divergence=divergence, co2=co2,
-        psi=psi_atm, chi=chi_atm, phi_s=phi_s_atm
+        u=u_atm,
+        v=v_atm,
+        temp=temp_atm,
+        q=q_atm,
+        ln_ps=ln_ps,
+        vorticity=vorticity,
+        divergence=divergence,
+        co2=co2,
+        psi=psi_atm,
+        chi=chi_atm,
+        phi_s=phi_s_atm,
     )
 
     # --- Land ---
@@ -327,16 +340,16 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
     # resume point outputs/century_run/year_042.nc) don't contain land_temp /
     # land_snow_depth / sst, and unconditional ds.<var> access raises
     # AttributeError. Fall back to sensible defaults like the ln_ps/co2 reads.
-    if 'land_temp' in ds:
+    if "land_temp" in ds:
         land_temp = jnp.array(ds.land_temp.values)
     else:
         print("Warning: land_temp not in restart. Defaulting to surface air temp.")
         land_temp = temp_atm
-    if 'land_snow_depth' in ds:
+    if "land_snow_depth" in ds:
         land_snow = jnp.array(ds.land_snow_depth.values)
     else:
         land_snow = jnp.zeros_like(land_temp)
-    
+
     # Defaults for missing fields
     BUCKET_DEPTH = 0.15
     land_sm = jnp.ones_like(land_temp) * (BUCKET_DEPTH * 0.5)
@@ -348,17 +361,17 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
         soil_moisture=land_sm,
         lai=land_lai,
         soil_carbon=land_carbon,
-        snow_depth=land_snow
+        snow_depth=land_snow,
     )
-    
+
     # --- Fluxes ---
-    if 'sst' in ds:
+    if "sst" in ds:
         sst = jnp.array(ds.sst.values)
     else:
         print("Warning: sst not in restart. Defaulting to ocean surface temp.")
         sst = temp[0]  # ocean surface layer
-    
-    if 'wind_stress_x' in ds:
+
+    if "wind_stress_x" in ds:
         tau_x = jnp.array(ds.wind_stress_x.values)
         tau_y = jnp.array(ds.wind_stress_y.values)
         precip = jnp.array(ds.precip.values)
@@ -375,20 +388,15 @@ def load_state_from_netcdf(filepath: Union[str, Path]) -> coupled_state.CoupledS
         precip=precip,
         sst=sst,
         carbon_flux_ocean=jnp.zeros((ny_atm, nx_atm)),
-        carbon_flux_land=jnp.zeros((ny_atm, nx_atm))
+        carbon_flux_land=jnp.zeros((ny_atm, nx_atm)),
     )
-    
+
     # --- Time ---
     # "seconds since start"
     time_val = float(ds.time.values)
-    
+
     state = coupled_state.CoupledState(
-        ocean=ocean,
-        atmos=atmos,
-        ice=ice,
-        land=land,
-        fluxes=fluxes,
-        time=time_val
+        ocean=ocean, atmos=atmos, ice=ice, land=land, fluxes=fluxes, time=time_val
     )
-    
+
     return state

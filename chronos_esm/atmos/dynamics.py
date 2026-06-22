@@ -25,7 +25,7 @@ import numpy as np
 
 from chronos_esm.atmos import physics, spectral
 from chronos_esm.config import ATMOS_GRID, DT_ATMOS, EARTH_RADIUS
-from chronos_esm.ocean.solver import jacobi_preconditioner, solve_cg, solve_poisson_2d
+from chronos_esm.ocean.solver import jacobi_preconditioner, solve_cg
 
 # Constants
 R_EARTH = EARTH_RADIUS
@@ -45,8 +45,10 @@ KAPPA = RD / CP
 # Reference: Arakawa & Lamb (1981), Sadourny (1975)
 # ============================================================================
 
-def compute_total_energy(temp: jnp.ndarray, u: jnp.ndarray, v: jnp.ndarray,
-                         cos_lat: jnp.ndarray) -> jnp.ndarray:
+
+def compute_total_energy(
+    temp: jnp.ndarray, u: jnp.ndarray, v: jnp.ndarray, cos_lat: jnp.ndarray
+) -> jnp.ndarray:
     """
     Compute total energy (kinetic + internal).
     E = ∫ (0.5*(u² + v²) + CP*T) * cos(lat) dA
@@ -81,9 +83,16 @@ def compute_enstrophy(vorticity: jnp.ndarray, cos_lat: jnp.ndarray) -> jnp.ndarr
     return jnp.sum(vorticity**2 * cos_lat)
 
 
-def apply_energy_fixer(temp_new: jnp.ndarray, u_new: jnp.ndarray, v_new: jnp.ndarray,
-                       temp_old: jnp.ndarray, u_old: jnp.ndarray, v_old: jnp.ndarray,
-                       cos_lat: jnp.ndarray, alpha: float = 0.1) -> jnp.ndarray:
+def apply_energy_fixer(
+    temp_new: jnp.ndarray,
+    u_new: jnp.ndarray,
+    v_new: jnp.ndarray,
+    temp_old: jnp.ndarray,
+    u_old: jnp.ndarray,
+    v_old: jnp.ndarray,
+    cos_lat: jnp.ndarray,
+    alpha: float = 0.1,
+) -> jnp.ndarray:
     """
     Apply energy conservation fixer to temperature field.
 
@@ -123,8 +132,12 @@ def apply_energy_fixer(temp_new: jnp.ndarray, u_new: jnp.ndarray, v_new: jnp.nda
     return temp_fixed
 
 
-def apply_enstrophy_fixer(vort_new: jnp.ndarray, vort_old: jnp.ndarray,
-                          cos_lat: jnp.ndarray, alpha: float = 0.05) -> jnp.ndarray:
+def apply_enstrophy_fixer(
+    vort_new: jnp.ndarray,
+    vort_old: jnp.ndarray,
+    cos_lat: jnp.ndarray,
+    alpha: float = 0.05,
+) -> jnp.ndarray:
     """
     Apply enstrophy conservation fixer to vorticity field.
 
@@ -193,6 +206,7 @@ def init_atmos_state(
     # Topography (Real ETOPO) - Load FIRST for Hydrostatic Init
     try:
         from chronos_esm import data
+
         # data.load_topography returns elevation in meters
         topo_m = data.load_topography(ny, nx)
         phi_s = topo_m * GRAVITY
@@ -201,7 +215,9 @@ def init_atmos_state(
         phi_s = jnp.zeros((ny, nx))
 
     # Initial Conditions (Jablonowski-Williamson inspired basic state)
-    u0 = 10.0 * jnp.cos(lat_rad)[:, None] * jnp.ones((ny, nx))  # Zonal jet (Reduced to 10 m/s to prevent latent heat shock)
+    u0 = (
+        10.0 * jnp.cos(lat_rad)[:, None] * jnp.ones((ny, nx))
+    )  # Zonal jet (Reduced to 10 m/s to prevent latent heat shock)
     v0 = jnp.zeros((ny, nx))
 
     # Vorticity and Divergence from U, V
@@ -234,12 +250,12 @@ def init_atmos_state(
 
     # Initialize q with Relative Humidity = 0.8
     # This prevents massive initial evaporation from dry air
-    pressure = np.exp(ln_ps) # 101325
+    pressure = np.exp(ln_ps)  # 101325
     q_sat = physics.compute_saturation_humidity(temp, pressure)
     q = 0.8 * q_sat
 
     co2 = 400.0 * jnp.ones((ny, nx))
-    
+
     return AtmosState(
         vorticity=vorticity,
         divergence=divergence,
@@ -251,7 +267,7 @@ def init_atmos_state(
         v=v0,
         psi=jnp.zeros((ny, nx)),
         chi=jnp.zeros((ny, nx)),
-        phi_s=phi_s
+        phi_s=phi_s,
     )
 
 
@@ -304,9 +320,9 @@ def step_atmos(
     flux_sensible: jnp.ndarray,  # W/m2
     flux_latent: jnp.ndarray,  # W/m2
     flux_co2: jnp.ndarray,  # ppm/s
-    sw_down: Optional[jnp.ndarray] = None, # Downward shortwave flux (Seasonal)
+    sw_down: Optional[jnp.ndarray] = None,  # Downward shortwave flux (Seasonal)
     solar_constant: float = 1361.0,
-    physics_params: Optional[dict] = None, # Differentiable params
+    physics_params: Optional[dict] = None,  # Differentiable params
     dt: float = DT_ATMOS,
     ny: int = ATMOS_GRID.nlat,
     nx: int = ATMOS_GRID.nlon,
@@ -395,7 +411,9 @@ def step_atmos(
         qc_ref = physics.QC_REF
         epsilon = physics.EPSILON_SMOOTH
 
-    precip, heating_precip = physics.compute_precipitation(state.q, q_sat, epsilon=epsilon, qc_ref=qc_ref)
+    precip, heating_precip = physics.compute_precipitation(
+        state.q, q_sat, epsilon=epsilon, qc_ref=qc_ref
+    )
     drying_precip = -precip  # Precip removes moisture (negative tendency)
     # Actually physics.compute_precipitation takes (temp, q). Let's check signature.
     # Assuming it takes (temp, q).
@@ -407,11 +425,11 @@ def step_atmos(
     # We will pass the global mean for now or update physics later.
     co2_mean = jnp.mean(state.co2)
     heating_rad = physics.compute_radiative_forcing(
-        state.temp, 
-        co2_mean, 
-        sw_down=sw_down, # Pass seasonal forcing
-        lat_rad=lat_rad, 
-        solar_constant=solar_constant
+        state.temp,
+        co2_mean,
+        sw_down=sw_down,  # Pass seasonal forcing
+        lat_rad=lat_rad,
+        solar_constant=solar_constant,
     )
 
     # Momentum relaxation toward a climatological zonal-mean jet.
@@ -434,9 +452,11 @@ def step_atmos(
     # grows, pinning the field close to the (stable, realistic) climatological jet.
     tau_fric = 86400.0 * 2.0
     abs_lat = jnp.abs(lat[:, None])  # (ny,1) degrees
-    u_target = (9.0 * jnp.exp(-((abs_lat - 48.0) / 18.0) ** 2)    # midlat westerlies
-                - 5.5 * jnp.exp(-((abs_lat - 13.0) / 11.0) ** 2)  # tropical trades
-                - 2.0 * jnp.exp(-((abs_lat - 80.0) / 10.0) ** 2)) # polar easterlies
+    u_target = (
+        9.0 * jnp.exp(-(((abs_lat - 48.0) / 18.0) ** 2))  # midlat westerlies
+        - 5.5 * jnp.exp(-(((abs_lat - 13.0) / 11.0) ** 2))  # tropical trades
+        - 2.0 * jnp.exp(-(((abs_lat - 80.0) / 10.0) ** 2))
+    )  # polar easterlies
 
     # Drag force [m/s2]: relax u toward the climatological jet, v toward zero.
     drag_u = -(u - u_target) / tau_fric
@@ -453,9 +473,9 @@ def step_atmos(
     # q_tendency = drying_precip + flux_latent/Mass
     mass_scaling = 1.0 / MASS_COLUMN
     q_latent_src = flux_latent / 2.5e6 * mass_scaling
-    
+
     q_tendency_raw = drying_precip + q_latent_src
-    
+
     # Clamp Moisture Tendency safely
     # Tighten to 5e-6 kg/kg/s (approx 0.4 g/kg per day? No. 5e-6 * 86400 = 0.4. Correct.)
     # This throttles massive rain shocks.
@@ -464,17 +484,16 @@ def step_atmos(
     # Re-diagnose effective heating from the *actual* amount of precip allowed
     # 1. Limit Precipitation Rate (consistent with forcing_q direction)
     # If forcing_q is negative (drying), max rate is 5e-6.
-    precip_limited = jnp.minimum(precip, 1.0e-3) 
+    precip_limited = jnp.minimum(precip, 1.0e-3)
     drying_precip_effective = -precip_limited
-    
+
     # 2. Re-compute Heating from LIMITED precip
     heating_precip_effective = (2.5e6 / CP) * precip_limited
-    
+
     # 3. Compute Forcing Q
     forcing_q = drying_precip_effective + q_latent_src
     forcing_q = jnp.clip(forcing_q, -1e-3, 1e-3)
-    
-    
+
     # 3. Dynamics Tendencies Helper
     # Advection Operator: -(u ∂/∂x + v ∂/∂y)
     def advect(f):
@@ -483,8 +502,10 @@ def step_atmos(
 
     # 4. Compute Forcing T with EFFECTIVE heating
     # 4. Compute Forcing T with EFFECTIVE heating
-    theta_tendency_raw = (heating_precip_effective + heating_rad) + flux_sensible * mass_scaling / CP
-    
+    theta_tendency_raw = (
+        heating_precip_effective + heating_rad
+    ) + flux_sensible * mass_scaling / CP
+
     # Clamp T Tendency
     # Limit to 0.005 K/s (approx 4.5 K per 15 min step)
     forcing_t = jnp.clip(theta_tendency_raw, -0.005, 0.005)
@@ -513,7 +534,7 @@ def step_atmos(
     dlnps_dx, dlnps_dy = spectral.compute_gradients(state.ln_ps, dx, dy)
     lap_lnps = spectral.compute_laplacian(state.ln_ps, dx, dy)
 
-    term_p = RD * ( (dt_dx * dlnps_dx + dt_dy * dlnps_dy) + state.temp * lap_lnps )
+    term_p = RD * ((dt_dx * dlnps_dx + dt_dy * dlnps_dy) + state.temp * lap_lnps)
 
     lap_phi = spectral.compute_laplacian(state.phi_s, dx, dy)
 
@@ -566,7 +587,9 @@ def step_atmos(
     nu_base = 2.0e6
     cos_lat_safe = jnp.maximum(jnp.abs(cos_lat), 0.1)
     polar_boost = jnp.clip(1.0 / cos_lat_safe**2, 1.0, 25.0)
-    polar_mask = jnp.clip((jnp.abs(lat_rad[:, None]) - jnp.deg2rad(60.0)) / jnp.deg2rad(20.0), 0.0, 1.0)
+    polar_mask = jnp.clip(
+        (jnp.abs(lat_rad[:, None]) - jnp.deg2rad(60.0)) / jnp.deg2rad(20.0), 0.0, 1.0
+    )
     nu_polar = nu_base * polar_boost * polar_mask
 
     diff_zeta = spectral.compute_laplacian(state.vorticity, dx_diff, dy)
@@ -574,8 +597,12 @@ def step_atmos(
     diff_temp = spectral.compute_laplacian(state.temp, dx_diff, dy)
 
     # 4. Time Integration (Forward Euler + del^4 + polar del^2)
-    new_vorticity = state.vorticity + dt * (dzeta_dt - nu4_vort * hyperdiff_zeta + nu_polar * diff_zeta)
-    new_divergence = state.divergence + dt * (ddiv_dt - nu4_div * hyperdiff_div + nu_polar * diff_div)
+    new_vorticity = state.vorticity + dt * (
+        dzeta_dt - nu4_vort * hyperdiff_zeta + nu_polar * diff_zeta
+    )
+    new_divergence = state.divergence + dt * (
+        ddiv_dt - nu4_div * hyperdiff_div + nu_polar * diff_div
+    )
     # Implicit linear divergence damping: unconditionally stable for any rate (no
     # 2dt overshoot of the old explicit term). 1/DIV_DAMP ~ 100 s -- strong enough
     # to absorb gravity-wave / divergent-mode noise (which otherwise grows into the
@@ -583,7 +610,9 @@ def step_atmos(
     # large-scale divergent (Hadley/Walker) circulation that organises precip.
     DIV_DAMP = 1.0e-2  # [1/s]
     new_divergence = new_divergence / (1.0 + dt * DIV_DAMP)
-    new_temp = state.temp + dt * (dt_dt - nu4_temp * hyperdiff_temp + nu_polar * diff_temp)
+    new_temp = state.temp + dt * (
+        dt_dt - nu4_temp * hyperdiff_temp + nu_polar * diff_temp
+    )
     new_ln_ps = state.ln_ps + dt * (dlnps_dt - nu4_lnps * hyperdiff_lnps)
 
     # Clamp Pressure (100 hPa to 1200 hPa)
@@ -596,8 +625,7 @@ def step_atmos(
     # gentle correction is needed and a strong one would spuriously cool/warm the
     # column in response to transient KE changes.
     new_temp = apply_energy_fixer(
-        new_temp, u, v, state.temp, state.u, state.v,
-        cos_lat, alpha=0.01
+        new_temp, u, v, state.temp, state.u, state.v, cos_lat, alpha=0.01
     )
 
     # 5. Safety Clamping
@@ -636,6 +664,6 @@ def step_atmos(
 
     # Return Flux [kg/m^2/s] instead of Tendency [kg/kg/s]
     # precip is [kg/kg/s]. Mass Column ~ 1e4 kg/m^2.
-    precip_flux = precip * 1.0e4 
-    
+    precip_flux = precip * 1.0e4
+
     return new_state, (precip_flux, jnp.exp(new_ln_ps))

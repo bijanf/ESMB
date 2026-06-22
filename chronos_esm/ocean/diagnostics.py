@@ -2,7 +2,6 @@
 Diagnostics for the Ocean component.
 """
 
-import jax
 import jax.numpy as jnp
 
 from chronos_esm.config import EARTH_RADIUS, OCEAN_GRID
@@ -60,7 +59,7 @@ def compute_moc(state: OceanState, dx: float = None) -> jnp.ndarray:
     # Integrate vertically (cumulative sum from bottom)
     # Assuming constant dz for simplicity if not passed.
     # In main.py: dz_ocn = jnp.ones(...) * 100.0
-    dz = 5000.0 / 15.0 # Match model (333.33m)
+    dz = 5000.0 / 15.0  # Match model (333.33m)
 
     # Psi = Sum(v * dx * dz) from bottom
     # cumsum along axis 0 (z)
@@ -88,7 +87,7 @@ def compute_amoc_index(state: OceanState) -> float:
     # Dynamic index calculation
     nlat = OCEAN_GRID.nlat
     lat_idx = int((30.0 - (-90.0)) / 180.0 * nlat)
-    lat_idx = min(lat_idx, nlat - 1) # Safety clamp
+    lat_idx = min(lat_idx, nlat - 1)  # Safety clamp
 
     # Search for max in depth at this latitude
     # Usually AMOC is the max positive value in the upper cell
@@ -98,7 +97,9 @@ def compute_amoc_index(state: OceanState) -> float:
     return amoc_index
 
 
-def create_atlantic_mask(ny: int = OCEAN_GRID.nlat, nx: int = OCEAN_GRID.nlon) -> jnp.ndarray:
+def create_atlantic_mask(
+    ny: int = OCEAN_GRID.nlat, nx: int = OCEAN_GRID.nlon
+) -> jnp.ndarray:
     """
     Create a 2D boolean mask for the Atlantic basin.
 
@@ -121,9 +122,13 @@ def create_atlantic_mask(ny: int = OCEAN_GRID.nlat, nx: int = OCEAN_GRID.nlon) -
     return lat_mask[:, None] & lon_mask[None, :]
 
 
-def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
-                 dz: float = None, ocean_mask: jnp.ndarray = None,
-                 remove_barotropic: bool = True) -> dict:
+def compute_amoc(
+    state: OceanState,
+    atlantic_mask: jnp.ndarray = None,
+    dz: float = None,
+    ocean_mask: jnp.ndarray = None,
+    remove_barotropic: bool = True,
+) -> dict:
     """
     Compute Atlantic Meridional Overturning Circulation (AMOC).
 
@@ -163,9 +168,11 @@ def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
         # Use the model's actual (stretched) layer thicknesses, not a uniform
         # 5000/nz, so the depth integral matches the dynamics' vertical grid.
         from chronos_esm.config import OCEAN_DZ
+
         dz = jnp.asarray(OCEAN_DZ)
-    dz_col = jnp.reshape(jnp.asarray(dz), (-1, 1)) if jnp.ndim(dz) > 0 else (
-        jnp.asarray(dz))
+    dz_col = (
+        jnp.reshape(jnp.asarray(dz), (-1, 1)) if jnp.ndim(dz) > 0 else (jnp.asarray(dz))
+    )
 
     # Latitude-dependent dx
     lat = jnp.linspace(-90, 90, ny)
@@ -212,7 +219,9 @@ def compute_amoc(state: OceanState, atlantic_mask: jnp.ndarray = None,
     }
 
 
-def compute_amoc_diagnostics(state: OceanState, atlantic_mask: jnp.ndarray = None) -> dict:
+def compute_amoc_diagnostics(
+    state: OceanState, atlantic_mask: jnp.ndarray = None
+) -> dict:
     """
     Compute a dict of scalar AMOC-related diagnostics for logging.
 
@@ -258,7 +267,7 @@ def compute_barotropic_streamfunction(u, dz, dy, mask=None):
     (P3/S2: gyre / Sverdrup balance), distinct from the depth-latitude AMOC/MOC above.
     """
     dz = jnp.asarray(dz)
-    U = jnp.sum(u * dz[:, None, None], axis=0)            # (ny, nx) zonal transport/length
+    U = jnp.sum(u * dz[:, None, None], axis=0)  # (ny, nx) zonal transport/length
     if mask is not None:
         U = U * mask
     return -jnp.cumsum(U, axis=0) * dy

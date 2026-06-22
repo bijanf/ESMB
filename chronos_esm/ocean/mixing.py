@@ -7,9 +7,8 @@ Implements:
 3. Differentiable slope limiters
 """
 
-from typing import NamedTuple, Tuple
+from typing import Tuple
 
-import jax
 import jax.numpy as jnp
 
 # Constants
@@ -249,7 +248,7 @@ def compute_vertical_diffusivity(
 
     # Explicit-stability cap per interface (thinner adjacent layer governs).
     dz_if = jnp.minimum(dz_3d[:-1], dz_3d[1:])
-    kappa_cfl = 0.45 * dz_if ** 2 / dt
+    kappa_cfl = 0.45 * dz_if**2 / dt
     kappa_interior = jnp.minimum(kappa_interior, kappa_cfl)
 
     zeros = jnp.zeros((1, ny, nx))

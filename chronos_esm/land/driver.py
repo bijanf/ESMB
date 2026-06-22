@@ -11,9 +11,7 @@ import jax
 import jax.numpy as jnp
 
 from chronos_esm.config import (
-    ALBEDO_LAND,
     ATMOS_GRID,
-    DRAG_COEFF_LAND,
     DT_ATMOS,
     EMISSIVITY_LAND,
     STEFAN_BOLTZMANN,
@@ -27,7 +25,6 @@ RHO_SOIL = 1600.0  # kg/m3
 SOIL_DEPTH = 1.0  # meters (thermal depth) - Increased for stability
 BUCKET_DEPTH = 0.15  # meters (water holding capacity)
 L_VAPOR = 2.5e6
-
 
 
 class LandState(NamedTuple):
@@ -49,15 +46,15 @@ def init_land_state(ny, nx) -> LandState:
     This prevents inverted temperature gradients from warm-pole initialization.
     """
     # Latitude-dependent temperature: 285K at equator, 260K at poles
-    lat_rad = jnp.linspace(-jnp.pi/2, jnp.pi/2, ny)
-    temp_init = 285.0 - 25.0 * jnp.sin(lat_rad)**2
+    lat_rad = jnp.linspace(-jnp.pi / 2, jnp.pi / 2, ny)
+    temp_init = 285.0 - 25.0 * jnp.sin(lat_rad) ** 2
 
     return LandState(
         temp=jnp.broadcast_to(temp_init[:, None], (ny, nx)),
         soil_moisture=jnp.ones((ny, nx)) * (BUCKET_DEPTH * 0.5),  # 50% saturation
         lai=jnp.ones((ny, nx)) * 1.0,  # Initial sparse vegetation
         soil_carbon=jnp.ones((ny, nx)) * 10.0,  # 10 kg C/m2
-        snow_depth=jnp.zeros((ny, nx)), # No initial snow
+        snow_depth=jnp.zeros((ny, nx)),  # No initial snow
     )
 
 
@@ -70,11 +67,9 @@ def step_land(
     lw_down: jnp.ndarray,  # Longwave down [W/m2]
     precip: jnp.ndarray,  # Precipitation [m/s]
     mask: jnp.ndarray,  # Land mask (0=Ocean, 1=Land)
-    
     # New Inputs
-    wind_speed: jnp.ndarray, # [m/s]
-    drag_coeff: jnp.ndarray, # [-]
-
+    wind_speed: jnp.ndarray,  # [m/s]
+    drag_coeff: jnp.ndarray,  # [-]
     dt: float = DT_ATMOS,  # land timestep [s]; pass the coupling interval for daily coupling
     ny: int = ATMOS_GRID.nlat,
     nx: int = ATMOS_GRID.nlon,
@@ -90,13 +85,17 @@ def step_land(
 
     # Get dynamic properties
     albedo_veg, veg_fraction = vegetation.compute_land_properties(lai_new)
-    
+
     # Snow Mask
     # If snow depth > threshold (e.g. 1cm = 0.01m), albedo -> Snow Albedo
     SNOW_ALBEDO = 0.80
-    snow_cover_fraction = jnp.clip(state.snow_depth / 0.05, 0.0, 1.0) # Fully covered at 5cm
-    
-    albedo = (1.0 - snow_cover_fraction) * albedo_veg + snow_cover_fraction * SNOW_ALBEDO
+    snow_cover_fraction = jnp.clip(
+        state.snow_depth / 0.05, 0.0, 1.0
+    )  # Fully covered at 5cm
+
+    albedo = (
+        1.0 - snow_cover_fraction
+    ) * albedo_veg + snow_cover_fraction * SNOW_ALBEDO
 
     # 1. Surface Energy Balance
     sw_net = sw_down * (1.0 - albedo)
@@ -107,8 +106,8 @@ def step_land(
     # Turbulent Fluxes using PROVIDED drag coefficient and wind speed
     # H = rho * Cp * Ch * U * (Ts - Ta)
     ch = drag_coeff
-    ce = drag_coeff # Assuming scalar roughness for heat/moisture matches momentum for now
-    
+    ce = drag_coeff  # Assuming scalar roughness for heat/moisture matches momentum for now
+
     rho_air = 1.225
     cp_air = 1004.0
 
@@ -128,14 +127,14 @@ def step_land(
     bucket_beta = jnp.clip(bucket_beta, 0.0, 1.0)
     beta = bucket_beta * (1.0 + veg_fraction)
     beta = jnp.clip(beta, 0.0, 1.0)
-    
+
     # If snow covered, allow evaporation/sublimation freely (beta=1)
     beta = (1.0 - snow_cover_fraction) * beta + snow_cover_fraction * 1.0
 
     evap_pot = rho_air * ce * wind_speed * (q_sat - q_air)
     evap_pot = jnp.maximum(evap_pot, 0.0)
     evap = beta * evap_pot
-    
+
     # Latent Heat (Sublimation if T<0, Evap if T>0 - simplified L_VAPOR)
     latent_flux = L_VAPOR * evap
 
@@ -147,7 +146,7 @@ def step_land(
     is_snow = t_air < 273.15
     snow_fall = precip * is_snow
     rain_fall = precip * (1.0 - is_snow)
-    
+
     # 3. Temperature Update (Semi-Implicit)
     # Similar to previous...
     d_rn_dt = -4 * EMISSIVITY_LAND * STEFAN_BOLTZMANN * state.temp**3
@@ -166,48 +165,48 @@ def step_land(
 
     denominator = (total_hc / dt) - d_g_dt
     delta_temp = g_flux / denominator
-    
+
     # Apply update on land
     temp_new = state.temp + delta_temp * mask
-    
+
     # Check for Snow Melt
     # If Temp > 0C and Snow > 0
     # Melt Energy available = (Temp - 0) * HC
     # Actually, if T_new > 0 and we have snow, we peg T to 0 and use energy to melt.
-    
+
     melt_energy = (temp_new - 273.15) * total_hc
-    
+
     # Only if warm and snowy
     can_melt = (temp_new > 273.15) & (state.snow_depth > 0)
-    
+
     # Amount melted [kg/m2] = Energy / L_fusion (3.34e5)
     L_FUSION = 3.34e5
     potential_melt_mass = melt_energy / L_FUSION
     potential_melt_mass = jnp.maximum(potential_melt_mass, 0.0) * can_melt
-    
+
     # Converting to depth m (rho_water = 1000)
     potential_melt_depth = potential_melt_mass / RHO_WATER
-    
+
     # Actual melt cannot exceed snow depth
     actual_melt_depth = jnp.minimum(potential_melt_depth, state.snow_depth)
-    
+
     # Update Snow Depth
     snow_depth_new = state.snow_depth + dt * snow_fall - actual_melt_depth
     snow_depth_new = jnp.maximum(snow_depth_new, 0.0)
-    
+
     # Update Temp: If melting occurred, T stays at 0C (273.15)
-    # If we melted ALL snow, T can rise above 0C? 
+    # If we melted ALL snow, T can rise above 0C?
     # Simplified: If potential > actual (all snow melted), T rises.
     # If potential < actual (snow remains), T = 0C.
-    
+
     # T_corrected = 273.15 if snow remains, else calculated
     # Actually simpler: T_new -= (Melt_Energy_Used / HC)
     melt_energy_used = actual_melt_depth * RHO_WATER * L_FUSION
     temp_corrected = temp_new - (melt_energy_used / total_hc)
-    
+
     # Only apply correction where relevant
     temp_new = jnp.where(can_melt, temp_corrected, temp_new)
-    
+
     # Safety Clamping
     temp_new = jnp.clip(temp_new, 180.0, 340.0)
     temp_new = jnp.where(mask > 0.5, temp_new, state.temp)
@@ -215,17 +214,19 @@ def step_land(
     # 4. Soil Moisture Update
     # Inflow = Rain + SnowMelt
     evap_rate = evap / RHO_WATER
-    water_in = rain_fall + (actual_melt_depth / dt) # melt is already per step amount, convert to rate? No wait.
+    water_in = rain_fall + (
+        actual_melt_depth / dt
+    )  # melt is already per step amount, convert to rate? No wait.
     # actual_melt_depth is total meters in this step.
     # So rate = actual_melt_depth / DT
-    
-    dw_dt = (rain_fall + actual_melt_depth/dt) - evap_rate
+
+    dw_dt = (rain_fall + actual_melt_depth / dt) - evap_rate
     moisture_new = state.soil_moisture + dt * dw_dt * mask
-    
+
     runoff = jnp.maximum(moisture_new - BUCKET_DEPTH, 0.0)
     moisture_new = jnp.minimum(moisture_new, BUCKET_DEPTH)
     moisture_new = jnp.maximum(moisture_new, 0.0)
-    
+
     moisture_new = jnp.where(mask > 0.5, moisture_new, state.soil_moisture)
     lai_new = jnp.where(mask > 0.5, lai_new, state.lai)
     snow_depth_new = jnp.where(mask > 0.5, snow_depth_new, state.snow_depth)

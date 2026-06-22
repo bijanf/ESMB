@@ -185,4 +185,3 @@ def compute_growth(
 
     # This function might be too simple. Let's handle growth in the driver
     # where we have all fluxes.
-    pass

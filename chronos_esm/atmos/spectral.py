@@ -156,38 +156,39 @@ def solve_tridiagonal_batch(lower, main, upper, d):
     Solves a batch of tridiagonal systems Ax = d using dense linear algebra.
     All inputs have shape (batch, n).
     The matrix A is defined by diagonals: lower (a), main (b), upper (c).
-    
+
     For N ~ 100, constructing the dense matrix and solving with jnp.linalg.solve (cuBLAS/cuSOLVER)
     is faster on GPU than a sequential Thomas algorithm scan due to launch overhead.
     """
     batch_size, n = lower.shape
-    
+
     # Construct dense matrices (batch, n, n)
     # This uses O(N^2) memory but avoids sequential dependency
-    
+
     # Indices
     idx = jnp.arange(n)
-    
+
     # Create masks for diagonals
     # main: i == j
     # lower: i == j + 1
     # upper: i == j - 1
-    
+
     # We can use vmap to construct matrices or just smart broadcasting
     # Let's use vmap for clarity and performance
-    
+
     def construct_matrix(l, m, u):
         A = jnp.diag(m, k=0) + jnp.diag(l[1:], k=-1) + jnp.diag(u[:-1], k=1)
         return A
-        
+
     A_batch = jax.vmap(construct_matrix)(lower, main, upper)
-    
+
     # Solve Ax = d
     # jnp.linalg.solve needs (..., n, 1) for (..., n) output in newer JAX
     # solve(a, b[..., None]).squeeze(-1)
     x = jnp.linalg.solve(A_batch, d[..., None]).squeeze(-1)
-    
+
     return x
+
 
 @partial(jax.jit, static_argnames=["nlon"])
 def inverse_laplacian(
@@ -202,71 +203,71 @@ def inverse_laplacian(
     This replaces the iterative CG solver with a direct O(N) method.
     """
     ny = field.shape[-2]
-    
+
     # 1. FFT in x (Real -> Complex)
     # field shape: (..., ny, nx)
     b_hat = jnp.fft.rfft(field, axis=-1)
     nx_half = b_hat.shape[-1]
-    
+
     # 2. Setup Tridiagonal Systems for each wavenumber k
     # kx = 2*pi*k / (nx*dx)
-    # Note: dx is variable with latitude in correct spherical geometry, 
+    # Note: dx is variable with latitude in correct spherical geometry,
     # but for this approx model we used a mean or 1D dx?
     # atmos/dynamics.py calculates dx per latitude: dx = 2*pi*R*cos(lat)/nx
     # So dx is (ny, 1).
     # To employ FFT decompostion properly, the coefficients must not depend on x.
     # dx depends only on y (latitude), so we ARE allowed to do FFT in x.
-    
+
     # However, kx depends on dx, so kx depends on y.
     # kx(y) = 2*pi*k / (nx * dx(y))
     # This means the kx^2 term in the Helmholtz equation varies with y.
     # The finite difference stencil in y is constant dy.
-    
+
     # Equation at grid point (j, i):
     # (x_{j+1} - 2x_j + x_{j-1})/dy^2 + (x_{i+1} - 2x_i + x_{i-1})/dx_j^2 = b_{j,i}
-    
+
     # Transform to spectral space (for each k):
     # (X_{j+1, k} - 2X_{j, k} + X_{j-1, k})/dy^2 - kx_j^2 X_{j, k} = B_{j, k}
-    
+
     # Rearranging for Tridiagonal form: a_j X_{j-1} + b_j X_j + c_j X_{j+1} = D_j
     # X_{j+1}/dy^2 - (2/dy^2 + kx_j^2) X_j + X_{j-1}/dy^2 = B_j
     # Multiply by dy^2:
     # X_{j+1} - (2 + kx_j^2 dy^2) X_j + X_{j-1} = B_j * dy^2
-    
+
     # Coefficients:
     # lower (a): 1
     # upper (c): 1
     # main (b): -(2 + kx_j^2 dy^2)
-    
+
     # Wavenumber indices
-    k_idx = jnp.arange(nx_half) # (nk,)
-    
+    k_idx = jnp.arange(nx_half)  # (nk,)
+
     # We need kx_j^2 for each latitude j and wavenumber k
-    # dx is passed in. If it's a scalar, we assume constant. 
+    # dx is passed in. If it's a scalar, we assume constant.
     # If it's (ny, 1), we broadcast.
     if isinstance(dx, (float, int)) or dx.ndim == 0:
-         # Scalar dx: broadcast to a per-latitude column so the dx_val[:, None]
-         # indexing below works (the docstring advertises scalar dx support).
-         dx_val = jnp.full((ny,), dx)
+        # Scalar dx: broadcast to a per-latitude column so the dx_val[:, None]
+        # indexing below works (the docstring advertises scalar dx support).
+        dx_val = jnp.full((ny,), dx)
     else:
-         dx_val = dx.squeeze() # (ny,)
+        dx_val = dx.squeeze()  # (ny,)
 
     # kx shape: (ny, nk)
     # kx = 2*pi*k / (nlon * dx)
     kx = (2 * jnp.pi * k_idx[None, :]) / (nlon * dx_val[:, None])
     kx2_dy2 = (kx**2) * (dy**2)
-    
+
     # Diagonals (Batch size = nk, System size = ny)
     # We want to solve for each k (column), across y (rows).
     # solve_tridiagonal_batch expects (batch, n).
     # Here batch is nk (wavenumbers), n is ny (latitudes).
     # So we transpose everything to (nk, ny).
-    
-    kx2_dy2_T = kx2_dy2.T # (nk, ny)
-    
+
+    kx2_dy2_T = kx2_dy2.T  # (nk, ny)
+
     # Main diagonal
     main_diag = -(2.0 + kx2_dy2_T)
-    
+
     # For k=0 (Mean flow), kx=0, main = -2.
     # This corresponds to d2/dy2 X = B.
     # Boundary conditions: X=0 at poles (Dirichlet).
@@ -274,41 +275,41 @@ def inverse_laplacian(
     # a[0] and c[N-1] are boundary terms.
     # If X_{-1}=0, then eqn at j=0 is: b_0 X_0 + c_0 X_1 = D_0.
     # So a_0 is naturally ignored or 0.
-    
+
     lower_diag = jnp.ones_like(main_diag)
     upper_diag = jnp.ones_like(main_diag)
-    
+
     # RHS
     d = b_hat * (dy**2)
     # Transpose B to (nk, ny) for solver (assuming b_hat is ny, nk)
     # b_hat comes from rfft on last axis (nx -> nk). Shape (..., ny, nk).
     # We need to handle potential extra leading batch dimensions later,
     # but for now assume (ny, nk).
-    
+
     # Handle extra dimensions by flattening/reshaping if needed?
     # inverse_laplacian is static_argnames nlon, implying standard 2D/3D usage.
     # If input is (nz, ny, nx), b_hat is (nz, ny, nk).
     # Our solver expects (batch, n).
     # We can treat (nz * nk) as the batch.
-    
+
     batch_shape = b_hat.shape[:-2]
     ny_dim = b_hat.shape[-2]
     nk_dim = b_hat.shape[-1]
-    
+
     # Flatten batch: (TotalBatch, ny, nk) -> (TotalBatch*nk, ny)?
     # No, we want to solve along 'ny'.
     # Solver expects (Batch, N).
     # Let's reshape b_hat to (-1, ny).
     # But coefficients main_diag depend on k!
     # main_diag shape is (nk, ny).
-    
+
     # We need to broadcast coefficients to match the total batch (nz).
     # d shape: (nz, ny, nk). Transpose to (nz, nk, ny).
     # Reshape to (nz*nk, ny).
-    
-    d_T = jnp.moveaxis(d, -2, -1) # (..., nk, ny)
+
+    d_T = jnp.moveaxis(d, -2, -1)  # (..., nk, ny)
     d_flat = d_T.reshape((-1, ny))
-    
+
     # Broadcast coefficients
     # main_diag is (nk, ny). We need (nz*nk, ny).
     # Tile it
@@ -316,17 +317,17 @@ def inverse_laplacian(
     main_flat = jnp.tile(main_diag, (n_extra, 1))
     lower_flat = jnp.tile(lower_diag, (n_extra, 1))
     upper_flat = jnp.tile(upper_diag, (n_extra, 1))
-    
+
     # Solve
     x_flat = solve_tridiagonal_batch(lower_flat, main_flat, upper_flat, d_flat)
-    
+
     # Reshape back
-    x_T = x_flat.reshape(d_T.shape) # (..., nk, ny)
-    x_hat = jnp.moveaxis(x_T, -1, -2) # (..., ny, nk)
-    
+    x_T = x_flat.reshape(d_T.shape)  # (..., nk, ny)
+    x_hat = jnp.moveaxis(x_T, -1, -2)  # (..., ny, nk)
+
     # 3. Inverse FFT
     x = jnp.fft.irfft(x_hat, n=nlon, axis=-1)
-    
+
     return x
 
 
@@ -376,10 +377,10 @@ def solve_helmholtz(
     dx_min = dy
     dx_safe = jnp.maximum(dx_val[:, None], dx_min)
     kx_eff = 2.0 * jnp.sin(jnp.pi * k_idx[None, :] / nlon) / dx_safe
-    kx2_dy2 = (kx_eff ** 2) * (dy ** 2)
+    kx2_dy2 = (kx_eff**2) * (dy**2)
 
     # Helmholtz modification: add gamma * dy^2 to the diagonal
-    gamma_dy2 = gamma * (dy ** 2)
+    gamma_dy2 = gamma * (dy**2)
 
     kx2_dy2_T = kx2_dy2.T  # (nk, ny)
 
@@ -390,7 +391,7 @@ def solve_helmholtz(
     upper_diag = jnp.ones_like(main_diag)
 
     # RHS scaled by dy^2
-    d = b_hat * (dy ** 2)
+    d = b_hat * (dy**2)
 
     batch_shape = b_hat.shape[:-2]
     ny_dim = b_hat.shape[-2]
@@ -461,7 +462,7 @@ def polar_filter(
     # Smooth taper: 1.0 below cutoff, exponential decay above
     # taper = exp(-((m - m_cutoff) / width)^2) for m > m_cutoff
     excess = jnp.maximum(0.0, m_grid - m_cutoff_grid)
-    taper = jnp.exp(-(excess / transition_width) ** 2)
+    taper = jnp.exp(-((excess / transition_width) ** 2))
 
     # Apply smooth taper (not hard mask)
     field_fft_filtered = field_fft * taper

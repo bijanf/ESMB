@@ -12,26 +12,27 @@ matplotlib.use("pdf")  # vector backend, no display needed
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-plt.rcParams.update({
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
-    "font.size": 6,
-    "axes.labelsize": 7,
-    "axes.titlesize": 7,
-    "xtick.labelsize": 6,
-    "ytick.labelsize": 6,
-    "legend.fontsize": 6,
-    "figure.dpi": 300,
-    "savefig.dpi": 300,
-    "pdf.fonttype": 42,
-    "ps.fonttype": 42,
-})
+plt.rcParams.update(
+    {
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
+        "font.size": 6,
+        "axes.labelsize": 7,
+        "axes.titlesize": 7,
+        "xtick.labelsize": 6,
+        "ytick.labelsize": 6,
+        "legend.fontsize": 6,
+        "figure.dpi": 300,
+        "savefig.dpi": 300,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    }
+)
 
 COL1, COL2 = 3.46, 7.09  # inches
 
 
-def bias_map(model, obs, lat, lon, title, units, out_path,
-             cmap="RdBu_r", vlim=None):
+def bias_map(model, obs, lat, lon, title, units, out_path, cmap="RdBu_r", vlim=None):
     """Three-panel model / obs / (model-obs) bias map. Returns out_path."""
     model = np.asarray(model, float)
     obs = np.asarray(obs, float)
@@ -47,7 +48,10 @@ def bias_map(model, obs, lat, lon, title, units, out_path,
     # which visually flags the problem instead of hiding it).
     ofin = obs[np.isfinite(obs)]
     if ofin.size:
-        fvmin, fvmax = (float(np.nanpercentile(ofin, 2)), float(np.nanpercentile(ofin, 98)))
+        fvmin, fvmax = (
+            float(np.nanpercentile(ofin, 2)),
+            float(np.nanpercentile(ofin, 98)),
+        )
     else:
         fvmin, fvmax = 0.0, 1.0
     if fvmin == fvmax:
@@ -60,11 +64,13 @@ def bias_map(model, obs, lat, lon, title, units, out_path,
         (axes[2], diff, "Model - Obs", vlim),
     ):
         if vv is None:
-            im = ax.pcolormesh(lon, lat, fld, cmap="viridis",
-                               vmin=fvmin, vmax=fvmax, shading="auto")
+            im = ax.pcolormesh(
+                lon, lat, fld, cmap="viridis", vmin=fvmin, vmax=fvmax, shading="auto"
+            )
         else:
-            im = ax.pcolormesh(lon, lat, fld, cmap=cmap,
-                               vmin=-vv, vmax=vv, shading="auto")
+            im = ax.pcolormesh(
+                lon, lat, fld, cmap=cmap, vmin=-vv, vmax=vv, shading="auto"
+            )
         ax.set_title(ttl)
         ax.set_xlabel("Longitude")
         ax.set_xlim(-180, 180)
@@ -95,8 +101,15 @@ def zonal_mean_plot(model_zm, obs_zm, lat, title, units, out_path):
     return out_path
 
 
-def amoc_streamfunction(psi, lat, depth, out_path, amoc_max=None, rapid=None,
-                        title="Atlantic overturning streamfunction"):
+def amoc_streamfunction(
+    psi,
+    lat,
+    depth,
+    out_path,
+    amoc_max=None,
+    rapid=None,
+    title="Atlantic overturning streamfunction",
+):
     """Latitude-depth Atlantic overturning streamfunction [Sv].
 
     psi: (nz, ny) Sv; lat: (ny) deg; depth: (nz) layer-centre depths [m].
@@ -140,8 +153,9 @@ def taylor_diagram(entries, out_path, title="Taylor diagram"):
 
     # Correlation gridlines.
     corr_ticks = np.array([0.0, 0.3, 0.6, 0.8, 0.9, 0.95, 0.99])
-    ax.set_thetagrids(np.degrees(np.arccos(corr_ticks)),
-                      labels=[f"{c:g}" for c in corr_ticks])
+    ax.set_thetagrids(
+        np.degrees(np.arccos(corr_ticks)), labels=[f"{c:g}" for c in corr_ticks]
+    )
 
     rmax = 1.5
     for e in entries:

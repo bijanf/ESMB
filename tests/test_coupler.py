@@ -7,13 +7,12 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import pytest
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chronos_esm.config import ATMOS_GRID, OCEAN_GRID
-from chronos_esm.coupler import regrid, state
+from chronos_esm.config import ATMOS_GRID
+from chronos_esm.coupler import regrid
 
 
 class TestCoupler:

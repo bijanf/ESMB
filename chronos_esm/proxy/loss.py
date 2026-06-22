@@ -2,7 +2,6 @@
 Loss functions for proxy data assimilation.
 """
 
-import jax
 import jax.numpy as jnp
 
 

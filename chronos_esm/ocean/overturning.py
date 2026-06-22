@@ -14,6 +14,7 @@ This is NOT prognostic momentum (that is P3 S2-S5: the variable-coefficient JEBA
 barotropic-vorticity solver + du/dt core). It is the cheapest differentiable change that
 unblocks density-responsiveness and AMOC tipping experiments. Disable with k_vel=0.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -31,10 +32,20 @@ def _atlantic_mask(ny, nx):
 BETA_S = 0.78  # haline contraction d(rho)/d(salt) [kg/m^3/psu], for the EOS near 35 psu
 
 
-def thc_overturning_velocity(rho, salt, dz, maskC, *, k_vel, drho_scale=0.1,
-                             upper_depth_m=1100.0, haline_gain=1.0,
-                             contrast_depth_m=None,
-                             subpolar=(45.0, 65.0), subtropical=(10.0, 30.0)):
+def thc_overturning_velocity(
+    rho,
+    salt,
+    dz,
+    maskC,
+    *,
+    k_vel,
+    drho_scale=0.1,
+    upper_depth_m=1100.0,
+    haline_gain=1.0,
+    contrast_depth_m=None,
+    subpolar=(45.0, 65.0),
+    subtropical=(10.0, 30.0),
+):
     """Depth-integral-zero Atlantic overturning velocity v_thc [m/s] (nz,ny,nx).
 
     strength ~ k_vel * softplus(contrast / drho_scale), where
@@ -61,36 +72,41 @@ def thc_overturning_velocity(rho, salt, dz, maskC, *, k_vel, drho_scale=0.1,
     """
     nz, ny, nx = rho.shape
     dz = jnp.asarray(dz)
-    atl = _atlantic_mask(ny, nx).astype(rho.dtype)            # (ny,nx)
+    atl = _atlantic_mask(ny, nx).astype(rho.dtype)  # (ny,nx)
     lat = jnp.linspace(-90.0, 90.0, ny)
     if contrast_depth_m is None:
         contrast_depth_m = upper_depth_m
 
-    depth_mid = jnp.cumsum(dz) - 0.5 * dz                     # (nz,) cell-centre depth
-    upper = (depth_mid <= upper_depth_m).astype(rho.dtype)    # (nz,) overturning limb
+    depth_mid = jnp.cumsum(dz) - 0.5 * dz  # (nz,) cell-centre depth
+    upper = (depth_mid <= upper_depth_m).astype(rho.dtype)  # (nz,) overturning limb
     conv = (depth_mid <= contrast_depth_m).astype(rho.dtype)  # (nz,) convection layer
     H = jnp.sum(dz)
     up_d = jnp.sum(upper * dz)
     dn_d = H - up_d + 1e-20
     # vertical shape: +1 in the upper limb, negative below, depth-integral (dz-wtd) = 0.
-    G = upper - (1.0 - upper) * (up_d / dn_d)                 # (nz,)
+    G = upper - (1.0 - upper) * (up_d / dn_d)  # (nz,)
 
-    conv_atl = atl[None, :, :] * maskC * conv[:, None, None]     # (nz,ny,nx) contrast layer
+    conv_atl = (
+        atl[None, :, :] * maskC * conv[:, None, None]
+    )  # (nz,ny,nx) contrast layer
 
     def band(field, lohi):
-        bm = ((lat >= lohi[0]) & (lat <= lohi[1])).astype(rho.dtype)[None, :, None] * conv_atl
+        bm = ((lat >= lohi[0]) & (lat <= lohi[1])).astype(rho.dtype)[
+            None, :, None
+        ] * conv_atl
         return jnp.sum(field * bm) / (jnp.sum(bm) + 1e-20)
 
-    drho = band(rho, subpolar) - band(rho, subtropical)      # [kg/m^3]
-    dS = band(salt, subpolar) - band(salt, subtropical)      # [psu]
-    contrast = drho + (haline_gain - 1.0) * BETA_S * dS      # haline-amplified contrast
-    amp = k_vel * jax.nn.softplus(contrast / drho_scale)     # scalar [m/s], >= 0
+    drho = band(rho, subpolar) - band(rho, subtropical)  # [kg/m^3]
+    dS = band(salt, subpolar) - band(salt, subtropical)  # [psu]
+    contrast = drho + (haline_gain - 1.0) * BETA_S * dS  # haline-amplified contrast
+    amp = k_vel * jax.nn.softplus(contrast / drho_scale)  # scalar [m/s], >= 0
     v_thc = amp * G[:, None, None] * atl[None, :, :] * maskC
     return v_thc, contrast, amp
 
 
-def subpolar_hosing_salt_tendency(hosing_sv, dx, dy, dz0, surf2d, *,
-                                  band=(45.0, 65.0), s_ref=35.0):
+def subpolar_hosing_salt_tendency(
+    hosing_sv, dx, dy, dz0, surf2d, *, band=(45.0, 65.0), s_ref=35.0
+):
     """Surface-salinity tendency [psu/s] from a freshwater HOSING of ``hosing_sv``
     Sverdrups spread over the subpolar (45-65N) N. Atlantic surface -- the classic
     AMOC bifurcation forcing. Freshens (negative dS) -> lighter subpolar water ->
@@ -104,8 +120,8 @@ def subpolar_hosing_salt_tendency(hosing_sv, dx, dy, dz0, surf2d, *,
     atl = _atlantic_mask(ny, nx).astype(surf2d.dtype)
     lat = jnp.linspace(-90.0, 90.0, ny)
     bandm = ((lat >= band[0]) & (lat <= band[1])).astype(surf2d.dtype)[:, None]
-    region = atl * bandm * surf2d                          # (ny,nx) subpolar Atl surface
-    area = jnp.sum(region * dx * dy) + 1e-20               # [m^2]
+    region = atl * bandm * surf2d  # (ny,nx) subpolar Atl surface
+    area = jnp.sum(region * dx * dy) + 1e-20  # [m^2]
     # freshwater volume rate hosing_sv*1e6 m^3/s over `area`, depth dz0 -> virtual
     # salt removal rate; dS/dt = -(Q_fw * S_ref) / (area * dz0).
     return -(hosing_sv * 1.0e6 * s_ref) / (area * dz0) * region

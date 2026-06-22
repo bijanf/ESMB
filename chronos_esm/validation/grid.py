@@ -62,8 +62,11 @@ def regrid_to_model(field, src_lat, src_lon, dst_lat, dst_lon):
     field_p, lon_p = pad_periodic_longitude(field, src_lon)
 
     interp = RegularGridInterpolator(
-        (src_lat, lon_p), field_p,
-        method="linear", bounds_error=False, fill_value=np.nan,
+        (src_lat, lon_p),
+        field_p,
+        method="linear",
+        bounds_error=False,
+        fill_value=np.nan,
     )
 
     dst_lat = np.asarray(dst_lat, dtype=float)
