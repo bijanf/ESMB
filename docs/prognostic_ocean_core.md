@@ -28,7 +28,27 @@ work-around, not a fix.
 | **S2** | AD-safe variable-coefficient elliptic invert `div(coef·∇ψ)=rhs` (Cartesian + spherical), `coef=1/H` → JEBAR/topographic operator | **done** |
 | **S3** | Prognostic barotropic vorticity (`∂ζ/∂t = −β·v − r·ζ + curl(τ)/(ρH)`), ψ inverted each step; validated against the Stommel/Sverdrup gyre | **done (standalone)** |
 | **S4** | Prognostic baroclinic `du/dt` (semi-implicit Coriolis, hydrostatic pressure gradient, viscosity, friction) — the AMOC-relevant density-driven overturning | **done (standalone)** |
-| **S5** | Build `1/H` from real ETOPO; couple S3 (barotropic) + S4 (baroclinic) on the model grid; wire into `step_ocean` **behind a flag** (default = current diagnostic path); retire the THC closure once the dynamical chain carries overturning to 26.5°N; re-run the hysteresis sweep for a clean bifurcation | next |
+| **S5** | Couple S3 (barotropic) + S4 (baroclinic) and wire into `step_ocean` **behind a flag**; retire the THC closure once the dynamical chain carries overturning to 26.5°N; re-run the hysteresis sweep for a clean bifurcation | **first increment wired (flagged)** |
+
+### S5 status (first increment)
+
+`step_ocean(..., prognostic_momentum=True)` (a static jit argument, **default off → zero
+regression**) advances the baroclinic velocity prognostically via `momentum.step_momentum`
+instead of the diagnostic thermal wind; `state.u/v` carry it across steps. Only the
+baroclinic part is kept (wet-column mean removed) so the unbalanced barotropic mode cannot
+run away; the wind-driven barotropic streamfunction and the net-transport corrector are
+retained for now.
+
+**Verified** (`tests/test_prognostic_momentum.py`): this breaks the P0 blocker —
+`d(overturning)/d(subpolar salt) ≈ +56` with the prognostic momentum vs `≈ +0.12` for the
+diagnostic thermal wind (smooth RMS-overturning metric), i.e. density now drives the
+overturning ~470× more strongly; a 15-step run stays finite.
+
+**Remaining S5 work (not yet done):** the prognostic flow is over-energetic after a short
+spin-up (needs drag tuning + a long equilibration before it is a realistic production AMOC);
+the proper barotropic-streamfunction solve (replacing the crude per-latitude corrector with
+the rigid-lid elliptic projection from S2) and retiring the interim THC closure are the next
+increments, followed by re-running the hysteresis sweep for a clean (low-noise) bifurcation.
 
 ## What's built (S2–S4)
 
