@@ -69,19 +69,47 @@ same equilibrated density field (`experiments/diagnose_prognostic_amoc.py`) show
 
 **Root cause — a resolution barrier, not a tuning knob.** At T31 (~3.75°) the geostrophic
 thermal-wind transports are O(20–40×) too large. A realistic *prognostic* AMOC needs the physics
-that real models use to tame this: **Gent–McWilliams mesoscale-eddy parameterization** (flattens
-isopycnals → cuts the overturning toward ~15 Sv), a proper **rigid-lid surface pressure** the
-baroclinic flow is referenced against, and likely **finer resolution**. That is the full ocean
-dynamical-core project — weeks of work — not a drag calibration.
+that real models use to tame this: **Gent–McWilliams mesoscale-eddy parameterization**, a proper
+**rigid-lid surface pressure** the baroclinic flow is referenced against, and likely **finer
+resolution**. That is the full ocean dynamical-core project — weeks of work — not a drag calibration.
+
+### GM implemented + measured (2026-06-22): necessary, but NOT the dominant lever
+
+`chronos_esm/ocean/gm.py` now provides a correct, AD-safe Gent–McWilliams eddy parameterization
+(latitude-aware isopycnal slopes with a sign-preserving ε-floor; soft slope clip; **DM95
+steep-slope taper + a surface taper**; bolus velocity `u*=∂_z(κ_eff S)` with `Ψ*=0` at the
+surface/floor so it is depth-integral-zero), wired into `step_ocean(gm_on=True)` (default off →
+zero regression; supersedes the untapered `mixing.py` bolus). Tests: `tests/test_gm.py` (6).
+
+Measured on the **WOA18 T31 ocean** (`experiments/diagnose_gm_amoc.py`):
+
+| quantity | value |
+|---|---|
+| WOA isopycnal slope `\|Sy\|` (median / p90) | 1.7e-4 / 2.2e-3 → **GM active** (gentle, not tapered off) |
+| GM bolus `\|v*\|` (max / mean) | 1.2e-2 / 3.5e-4 m/s → eddy overturning **~1–2 Sv** (correct Atlantic magnitude) |
+| AMOC upper cell 26.5 N, Eulerian-mean (GM off) | **326 Sv** (the barrier) |
+| AMOC upper cell 26.5 N, **residual-mean** (Eulerian + GM bolus) | **324 Sv** (reduction **~0.5 %**) |
+| `d(AMOC)/d(subpolar salt)`, GM on | +33 Sv/psu (density pathway **preserved**) |
+
+**Finding:** GM is correctly implemented and produces a physically-right ~1–2 Sv eddy (bolus)
+overturning, but it reduces the 326 Sv barrier by only ~1 %. The barrier is dominated by the
+**Eulerian-mean** cell — i.e. the momentum / **rigid-lid surface-pressure** regime — not by
+steep isopycnal slopes. So GM is *necessary* eddy physics but **not the lever for this barrier**;
+the earlier "GM cuts the overturning toward ~15 Sv" expectation was optimistic at T31. (The slow
+isopycnal-*flattening* mechanism operates on multi-decadal timescales not testable here; even at
+literature-typical magnitude it would not close a 20× gap.) **Next P3 lever: the rigid-lid
+surface-pressure reference**, then finer resolution — with GM retained as the (now validated)
+eddy closure.
 
 **Decision (2026-06-22): ship the working diagnostic + THC AMOC as production; S5 stays
 research-in-progress behind the default-off flag.** Rationale: the production path gives a
 **stable ~15 Sv AMOC** and already delivered the **P4 bistability/tipping** result, which *is*
 density-driven — the THC closure scales with the subpolar−subtropical density contrast, so it
 restores the `d(AMOC)/d(density)` pathway that the bare thermal-wind diagnostic lacks. S5 is a
-rigor upgrade, **not a blocker** for the forcing-response science or release. The next S5
-increment, if/when resumed, is **GM eddy diffusion + a rigid-lid pressure reference**, then
-re-validation — see `experiments/diagnose_prognostic_amoc.py` to reproduce the barrier.
+rigor upgrade, **not a blocker** for the forcing-response science or release. **GM is now
+implemented + measured (see above) — it is not the lever; the next S5 increment is the rigid-lid
+surface-pressure reference**, then finer resolution — see `experiments/diagnose_prognostic_amoc.py`
+(reproduce the barrier) and `experiments/diagnose_gm_amoc.py` (the GM measurement).
 
 ## What's built (S2–S4)
 

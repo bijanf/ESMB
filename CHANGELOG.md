@@ -20,6 +20,27 @@ Apache-2.0. Known limitations are documented, not hidden (single-humidity T31 at
 weak ITCZ; AMOC via closure, prognostic core is research-in-progress; surface-forcing proxy,
 not equilibrium ECS). Details in the dated development entries below.
 
+## [Unreleased] - 2026-06-22d — Gent–McWilliams eddy parameterization + T31-barrier diagnosis (P3)
+
+- **New `chronos_esm/ocean/gm.py`** — a correct, AD-safe Gent–McWilliams (GM90) eddy
+  parameterization: latitude-aware isopycnal slopes (sign-preserving ε-floor on ∂ρ/∂z), a soft
+  slope clip, a **DM95 steep-slope taper + a surface taper**, and the eddy-induced bolus velocity
+  `u*=∂_z(κ_eff S)` with `Ψ*=0` at the surface/floor (depth-integral-zero → carries no net
+  transport). Supersedes the untapered, constant-`dx` bolus in `mixing.py`.
+- **Wired into `step_ocean(gm_on=True)`** (new jit-static flag, **default off → byte-identical
+  regression**); when on, the tapered GM bolus advects T/S so isopycnals flatten, and the
+  residual-mean MOC (Eulerian v + bolus) is the physical overturning. Tests: `tests/test_gm.py`
+  (6: flat→zero, depth-integral-zero, taper sanity, AD-finite through a neutral column,
+  gm_on runs finite + preserves `d(AMOC)/d(density)`).
+- **Quantitative finding (`experiments/diagnose_gm_amoc.py`, WOA18 T31):** GM is active (gentle
+  slopes, median |Sy|≈1.7e-4) and produces a physically-correct **~1–2 Sv** eddy overturning, but
+  reduces the **326 Sv** prognostic-AMOC barrier by only **~0.5 %** — `d(AMOC)/d(subpolar salt)`
+  stays +33 Sv/psu (density pathway preserved). **GM is necessary eddy physics but NOT the lever
+  for the T31 barrier:** the 326 Sv is dominated by the Eulerian-mean cell (the momentum /
+  rigid-lid surface-pressure regime). This sharpens the roadmap — the earlier "GM → ~15 Sv"
+  expectation was optimistic; **the next P3 lever is the rigid-lid surface-pressure reference**,
+  with GM retained as the (now validated) eddy closure. See `docs/prognostic_ocean_core.md`.
+
 ## [Unreleased] - 2026-06-22b — Mid-Holocene (6 ka) paleo experiment + real seasonal cycle (P5)
 
 - **P5, the 4th non-negotiable: the model responds to paleo (orbital) boundary conditions.**

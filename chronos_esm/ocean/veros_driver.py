@@ -16,7 +16,7 @@ from chronos_esm.config import (  # noqa: F401
     OMEGA,
     RHO_WATER,
 )
-from chronos_esm.ocean import barotropic, mixing, momentum, overturning, solver
+from chronos_esm.ocean import barotropic, gm, mixing, momentum, overturning, solver
 
 
 class OceanState(NamedTuple):
@@ -44,7 +44,9 @@ def equation_of_state(temp: jnp.ndarray, salt: jnp.ndarray) -> jnp.ndarray:
     return rho_0 - alpha * (temp - t0) + beta * (salt - s0)
 
 
-@partial(jax.jit, static_argnames=["nz", "ny", "nx", "dt", "prognostic_momentum"])
+@partial(
+    jax.jit, static_argnames=["nz", "ny", "nx", "dt", "prognostic_momentum", "gm_on"]
+)
 def step_ocean(
     state: OceanState,
     surface_fluxes: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
@@ -72,6 +74,7 @@ def step_ocean(
     hosing_sv: float = 0.0,
     prognostic_momentum: bool = False,
     mom_drag: float = 1.0 / (86400.0 * 30.0),
+    gm_on: bool = False,
 ) -> OceanState:
 
     # Helpers
@@ -101,9 +104,19 @@ def step_ocean(
     interior_mask_3d = jnp.where(is_pole, 0.0, 1.0)[None, :, None]
     pole_mask_3d = 1.0 - interior_mask_3d
 
-    sx, sy = mixing.compute_isopycnal_slopes(rho, dx, dy, dz)
     kappa_gm_eff = kappa_gm * interior_mask_3d
-    u_bolus, v_bolus, _ = mixing.compute_gm_bolus_velocity(kappa_gm_eff, sx, sy, dz)
+    if gm_on:
+        # P3: correct, tapered, latitude-aware Gent-McWilliams bolus (chronos_esm/ocean/gm.py).
+        # Adds the eddy-induced velocity to the tracer-advecting flow so isopycnals flatten;
+        # the residual-mean MOC (Eulerian v + this bolus) is the physical overturning.
+        dx_gm = gm.latitude_dx(ny, nx)
+        u_bolus, v_bolus = gm.eddy_induced_velocity(
+            kappa_gm_eff, rho, dx_gm, dy, dz, maskC=None
+        )
+    else:
+        # Legacy path (untapered, constant-dx); kept byte-identical for zero regression.
+        sx, sy = mixing.compute_isopycnal_slopes(rho, dx, dy, dz)
+        u_bolus, v_bolus, _ = mixing.compute_gm_bolus_velocity(kappa_gm_eff, sx, sy, dz)
     u_eff, v_eff = state.u + u_bolus, state.v + v_bolus
 
     # 3. Barotropic Streamfunction (Stommel)
