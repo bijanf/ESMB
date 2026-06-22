@@ -38,7 +38,7 @@ Focus has shifted from "does it run" to **"is it right"** — quantitative valid
 *   **Numerics**: Stable (no NaN over multi-thousand-step probes); energy drift bounded and recovering.
 *   **Ocean**: Initialised from the WOA18 climatology; preserves realistic large-scale T/S structure. The global **salt budget is closed** (water conservation + global-mean salinity conservation), so salinity no longer drifts into the clip.
 *   **Atmosphere**: A correctness overhaul of the single-level spectral dynamics. (1) A **polar instability** — the lat-lon `dx` collapsed at the poles and detonated the surface-pressure field (it pinned to a 99–1206 hPa clamp, variance ~215× observed) — was fixed by flooring the dynamical metric, so **sea-level pressure is now physical** (variance 15× → 2× observed). (2) The winds, which had decayed to a near-standstill (and *anti*-correlated with ERA5), are now realistic — easterly trades, mid-latitude westerlies — via a momentum relaxation that parameterizes the eddy-momentum flux the single level cannot resolve (**surface-zonal-wind correlation −0.08 → 0.72**). (3) Surface geopotential is now persisted in checkpoints, so restarts no longer silently lose topography.
-*   **AMOC**: under active development (ocean core, "P3"). Several fixes have landed: the spurious net meridional transport was corrected (≈ ±330 → 0.000 Sv via a per-latitude barotropic corrector); the overturning-streamfunction **sign bug** was fixed (the diagnostic was scoring a physically-correct ~15 Sv cell as ~0 Sv — verified by injecting a known cell, so the earlier "≈0 / incoherent" readings were largely a metric artifact); and vertical tracer advection by *w* was added. An interim density-driven **thermohaline closure** now gives an AMOC ≈ 15 Sv at 26.5 °N that **responds to density** — `d(AMOC)/d(subpolar salinity)` is nonzero, sign-correct (saltier/denser subpolar → stronger AMOC), and differentiable. A tunable salt-advection feedback on this closure produces a **verified AMOC tipping point**: a genuine saddle-node hysteresis window ≈ **[0.38, 0.75] Sv** of subpolar freshwater hosing (centered ~0.6 Sv), confirmed by an initial-condition (on-state vs off-state) bistability test — the branches stay 8–9 Sv apart after 100 yr, statistically significant (see [AMOC tipping](docs/amoc_tipping.md), `docs/figures/amoc_bistability.pdf`). The branches are still noisy (±~10 Sv relaxation-oscillation). The mechanistic fix — a **prognostic-momentum (JEBAR barotropic-vorticity + `du/dt`) ocean core** that would make the bifurcation clean — is under construction: the AD-safe elliptic-invert + barotropic-vorticity foundation has landed and is validated against analytic gyres (standalone; see [prognostic ocean core](docs/prognostic_ocean_core.md)), with prognostic baroclinic `du/dt` + live-model wiring remaining. The dashboard figures below predate these fixes and will be refreshed from the new control run.
+*   **AMOC**: under active development (ocean core, "P3"). Several fixes have landed: the spurious net meridional transport was corrected (≈ ±330 → 0.000 Sv via a per-latitude barotropic corrector); the overturning-streamfunction **sign bug** was fixed (the diagnostic was scoring a physically-correct ~15 Sv cell as ~0 Sv — verified by injecting a known cell, so the earlier "≈0 / incoherent" readings were largely a metric artifact); and vertical tracer advection by *w* was added. An interim density-driven **thermohaline closure** now gives an AMOC ≈ 15 Sv at 26.5 °N that **responds to density** — `d(AMOC)/d(subpolar salinity)` is nonzero, sign-correct (saltier/denser subpolar → stronger AMOC), and differentiable. A tunable salt-advection feedback on this closure produces a **verified AMOC tipping point**: a genuine saddle-node hysteresis window ≈ **[0.38, 0.75] Sv** of subpolar freshwater hosing (centered ~0.6 Sv), confirmed by an initial-condition (on-state vs off-state) bistability test — the branches stay 8–9 Sv apart after 100 yr, statistically significant (see [AMOC tipping](docs/amoc_tipping.md), `docs/figures/amoc_bistability.pdf`). The branches are still noisy (±~10 Sv relaxation-oscillation). The mechanistic fix — a **prognostic-momentum (JEBAR barotropic-vorticity + `du/dt`) ocean core** that would make the bifurcation clean — is under construction: the AD-safe elliptic-invert + barotropic-vorticity foundation has landed and is validated against analytic gyres (standalone; see [prognostic ocean core](docs/prognostic_ocean_core.md)), with prognostic baroclinic `du/dt` + live-model wiring remaining. The validation dashboard below now scores the **130-yr dinosaur coupled control** (refreshed from the latest run via `experiments/score_dino_control.py`).
 *   **Forcing response (CO2)**: in free-ocean (frozen q-flux) mode the coupled model **warms under CO2** — an abrupt-2×CO2 experiment gives ΔSST ≈ **+1.58 K** (0.43 K/(W/m²)). This is a transient, surface-forcing **proxy**, not equilibrium climate sensitivity (no atmospheric radiative-feedback amplification; cold-tropics base state).
 *   **Known biases / limitations** (quantified by the validation framework): the atmosphere is **single-level (barotropic)**, so it has no baroclinic eddies — synoptic systems are absent (sea-level-pressure and meridional-wind *pattern* correlations stay near zero) and the **tropical ITCZ is weak**, leaving precipitation too dry (−1.8 mm/day) and only weakly correlated. A modest warm/over-variable near-surface air-temperature bias also remains. These are the next calibration targets; closing them likely needs vertical structure (a multi-level or external dycore).
 
@@ -171,17 +171,17 @@ With SST held to WOA18 the atmosphere physics is graded in isolation (no coupled
 bias to hide behind). The block below is auto-generated by
 `experiments/make_readme_figures.py` (re-run it after a forced spin-up, commit, and review here).
 <!-- VALIDATION:START -->
-_Validation of `outputs/atmos_spinup/snap_*.nc` (30-day WOA spin-up (mean of days 20-30; atmosphere overhaul)) against WOA18 + ERA5, auto-generated by `experiments/make_readme_figures.py`. A perfect model has bias 0, corr 1, std ratio 1._
+_Validation of `/p/tmp/fallah/dino_control_lib/score/score_d*.nc` (dino control (130 yr)) against WOA18 + ERA5, auto-generated by `experiments/make_readme_figures.py`. A perfect model has bias 0, corr 1, std ratio 1._
 
 | field | units | bias | RMSE | corr | std ratio | n |
 |---|---|---:|---:|---:|---:|---:|
-| sst | degC | 0.43 | 2.25 | 0.97 | 1.00 | 2686 |
-| sss | psu | 0.13 | 0.87 | 0.84 | 0.67 | 2686 |
-| t2m | K | 2.42 | 15.94 | 0.68 | 1.53 | 4608 |
-| u_sfc | m/s | 0.61 | 3.17 | 0.72 | 1.26 | 4608 |
-| v_sfc | m/s | -0.18 | 1.92 | 0.01 | 0.47 | 4608 |
-| precip | mm/day | -1.82 | 3.14 | 0.16 | 0.82 | 4608 |
-| mslp | hPa | 2.86 | 18.29 | 0.07 | 2.07 | 4608 |
+| sst | degC | 0.63 | 1.18 | 1.00 | 0.96 | 2686 |
+| sss | psu | 0.04 | 1.58 | 0.01 | 0.31 | 2686 |
+| t2m | K | 3.72 | 8.81 | 0.88 | 0.56 | 4608 |
+| u_sfc | m/s | -0.95 | 4.07 | 0.09 | 0.60 | 4608 |
+| v_sfc | m/s | -0.10 | 2.36 | 0.15 | 1.08 | 4608 |
+| precip | mm/day | -2.34 | 3.12 | 0.33 | 0.48 | 4608 |
+| mslp | hPa | -11.71 | 15.86 | -0.35 | 0.59 | 4608 |
 
 ### Ocean (vs WOA18)
 **Sea-surface temperature**
@@ -214,7 +214,7 @@ _Validation of `outputs/atmos_spinup/snap_*.nc` (30-day WOA spin-up (mean of day
 ![mslp zonal mean](docs/figures/zonal_mslp.png)
 
 ### AMOC (Atlantic overturning)
-Model max 11.7 Sv vs RAPID ~17 Sv at 26.5°N. (Weak/noisy and **not** spin-up-limited — the root cause is a spurious net meridional transport in the ocean velocity field; see **Project Status**.)
+Model max 75.8 Sv vs RAPID ~17 Sv at 26.5N. The AMOC is weak/noisy and **not** spin-up-limited; the root cause is a spurious net meridional transport in the ocean velocity field (mass not conserved at basin scale), so a clean overturning streamfunction is unattainable until that ocean-dynamics issue is fixed (see Project Status).
 ![AMOC streamfunction](docs/figures/amoc_streamfunction.png)
 _(Time series appears once a multi-year run writes yearly checkpoints.)_
 
