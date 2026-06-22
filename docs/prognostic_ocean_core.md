@@ -28,27 +28,60 @@ work-around, not a fix.
 | **S2** | AD-safe variable-coefficient elliptic invert `div(coef·∇ψ)=rhs` (Cartesian + spherical), `coef=1/H` → JEBAR/topographic operator | **done** |
 | **S3** | Prognostic barotropic vorticity (`∂ζ/∂t = −β·v − r·ζ + curl(τ)/(ρH)`), ψ inverted each step; validated against the Stommel/Sverdrup gyre | **done (standalone)** |
 | **S4** | Prognostic baroclinic `du/dt` (semi-implicit Coriolis, hydrostatic pressure gradient, viscosity, friction) — the AMOC-relevant density-driven overturning | **done (standalone)** |
-| **S5** | Couple S3 (barotropic) + S4 (baroclinic) and wire into `step_ocean` **behind a flag**; retire the THC closure once the dynamical chain carries overturning to 26.5°N; re-run the hysteresis sweep for a clean bifurcation | **first increment wired (flagged)** |
+| **S5** | Couple S3 (barotropic) + S4 (baroclinic), wire into `step_ocean` **behind a flag**, rigid-lid project; calibrate to a realistic AMOC, retire the THC closure | **wired (flagged); calibration shows a T31 resolution barrier — see below** |
 
-### S5 status (first increment)
+### S5 status — wired, but blocked by a coarse-resolution physics barrier (2026-06-22)
 
 `step_ocean(..., prognostic_momentum=True)` (a static jit argument, **default off → zero
 regression**) advances the baroclinic velocity prognostically via `momentum.step_momentum`
-instead of the diagnostic thermal wind; `state.u/v` carry it across steps. Only the
-baroclinic part is kept (wet-column mean removed) so the unbalanced barotropic mode cannot
-run away; the wind-driven barotropic streamfunction and the net-transport corrector are
-retained for now.
+instead of the diagnostic thermal wind; `state.u/v` carry it across steps; the depth-integrated
+flow is made non-divergent with the **rigid-lid elliptic projection** (`barotropic.rigid_lid_project`,
+solve `∇²χ=∇·(U,V)`, subtract `∇χ/H`) that supersedes the crude per-latitude corrector.
 
-**Verified** (`tests/test_prognostic_momentum.py`): this breaks the P0 blocker —
-`d(overturning)/d(subpolar salt) ≈ +56` with the prognostic momentum vs `≈ +0.12` for the
-diagnostic thermal wind (smooth RMS-overturning metric), i.e. density now drives the
-overturning ~470× more strongly; a 15-step run stays finite.
+**The density-responsiveness milestone stands** (`tests/test_prognostic_momentum.py`): this
+breaks the P0 blocker — `d(overturning)/d(subpolar salt) ≈ +56` with the prognostic momentum
+vs `≈ +0.12` for the diagnostic thermal wind (smooth RMS-overturning metric), ~470× stronger;
+mass conservation holds (`max|∇·U| < 1e-10`); runs stay finite.
 
-**Remaining S5 work (not yet done):** the prognostic flow is over-energetic after a short
-spin-up (needs drag tuning + a long equilibration before it is a realistic production AMOC);
-the proper barotropic-streamfunction solve (replacing the crude per-latitude corrector with
-the rigid-lid elliptic projection from S2) and retiring the interim THC closure are the next
-increments, followed by re-running the hysteresis sweep for a clean (low-noise) bifurcation.
+**But the equilibrated coupled AMOC is not calibratable to realism at T31 by drag.** A 12-yr
+coupled drag sweep (10 / 3 / 1-day momentum drag, THC off) plus an algebraic analysis of the
+same equilibrated density field (`experiments/diagnose_prognostic_amoc.py`) showed:
+
+- The run logs' "AMOC ≈ 0 Sv" was a **metric artifact** (`upper_cell = max(profile)` of an
+  all-negative profile). The true 26.5°N cell is a coherent but **reversed, ~10–40× too strong**
+  overturning (−222 Sv at 10-day drag, −132 at 3-day) — drag scales its amplitude but not its
+  structure/sign.
+- The AMOC magnitude is set entirely by the **momentum regime** the drag selects. Sweeping the
+  drag `r` on the *same* density field:
+
+  | drag `r` | τ | regime (f²≈1e-8 vs r²) | AMOC upper |
+  |---|---|---|---|
+  | 5e-2 /s | **20 s** | r²≫f² → drag-damped creep | **+1 Sv** |
+  | 1e-3 /s | 1000 s | drag-damped | +50 Sv |
+  | 1.16e-6 /s | **10 d** | f²≫r² → **geostrophic** | **+309 Sv** |
+  | 3e-5 /s | 0.4 d | geostrophic | +553 Sv |
+
+- **The production diagnostic path is usable only because it sets `r_drag = 0.05/s` (a 20-second
+  Rayleigh drag).** That is *not geostrophy* — it damps the thermal-wind flow ~500× (`~f/r`) into
+  a smooth down-pressure-gradient creep (~+1 Sv), on top of which the **THC closure adds the
+  real ~15 Sv** density-driven Atlantic cell. The prognostic core, run at a *realistic* (10-day)
+  drag, is genuinely geostrophic → the T31 density field produces an unusable 300–550 Sv overturning.
+
+**Root cause — a resolution barrier, not a tuning knob.** At T31 (~3.75°) the geostrophic
+thermal-wind transports are O(20–40×) too large. A realistic *prognostic* AMOC needs the physics
+that real models use to tame this: **Gent–McWilliams mesoscale-eddy parameterization** (flattens
+isopycnals → cuts the overturning toward ~15 Sv), a proper **rigid-lid surface pressure** the
+baroclinic flow is referenced against, and likely **finer resolution**. That is the full ocean
+dynamical-core project — weeks of work — not a drag calibration.
+
+**Decision (2026-06-22): ship the working diagnostic + THC AMOC as production; S5 stays
+research-in-progress behind the default-off flag.** Rationale: the production path gives a
+**stable ~15 Sv AMOC** and already delivered the **P4 bistability/tipping** result, which *is*
+density-driven — the THC closure scales with the subpolar−subtropical density contrast, so it
+restores the `d(AMOC)/d(density)` pathway that the bare thermal-wind diagnostic lacks. S5 is a
+rigor upgrade, **not a blocker** for the forcing-response science or release. The next S5
+increment, if/when resumed, is **GM eddy diffusion + a rigid-lid pressure reference**, then
+re-validation — see `experiments/diagnose_prognostic_amoc.py` to reproduce the barrier.
 
 ## What's built (S2–S4)
 

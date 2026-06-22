@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased] - 2026-06-22 — S5 prognostic ocean core: wired, rigid-lid projected, and a T31 resolution barrier diagnosed (P3)
+
+- **The prognostic baroclinic momentum core is now wired into `step_ocean`** behind the
+  default-off `prognostic_momentum` flag (zero regression), with the rigid-lid elliptic
+  projection (`barotropic.rigid_lid_project`: solve `∇²χ=∇·(U,V)`, subtract `∇χ/H`)
+  replacing the crude per-latitude net-transport corrector. The density-responsiveness
+  milestone holds (`tests/test_prognostic_momentum.py`: `d(overturning)/d(subpolar salt)`
+  ≈ +56 prognostic vs +0.12 diagnostic; `max|∇·U|<1e-10`; finite).
+- **Calibration showed the equilibrated coupled AMOC is not tunable to realism at T31 by
+  drag** — and *why*. A 12-yr coupled drag sweep (10/3/1-day, THC off) + an algebraic
+  analysis of the equilibrated density field (`experiments/diagnose_prognostic_amoc.py`):
+  the logged "AMOC≈0" is a `max(profile)`-of-an-all-negative-profile artifact; the true
+  26.5°N cell is a reversed, ~10–40× too-strong overturning (−222 Sv @10-day drag). The
+  AMOC magnitude is set by the **momentum regime**: the production diagnostic path is usable
+  only because `r_drag=0.05/s` (a **20-second** Rayleigh drag) damps the thermal wind ~500×
+  into a creep (~+1 Sv) that the THC closure lifts to ~15 Sv; at a *realistic* (10-day,
+  geostrophic) drag the same T31 density gives an unusable **300–550 Sv**. Root cause is a
+  resolution barrier (geostrophic transports are O(20–40×) too large at ~3.75°), fixable
+  only by GM eddy parameterization + a rigid-lid pressure reference + finer resolution — the
+  full ocean dynamical-core project, not a knob.
+- **Decision: ship the working diagnostic + THC AMOC as production; S5 stays
+  research-in-progress (default-off flag).** The production path gives a stable ~15 Sv AMOC
+  and already delivered the **P4** bistability/tipping result, which *is* density-driven (the
+  THC closure scales with the subpolar−subtropical density contrast). S5 is a rigor upgrade,
+  not a blocker for the forcing-response science or release. See
+  `docs/prognostic_ocean_core.md` (S5 status) for the full diagnosis + reproduction.
+
 ## [Unreleased] - 2026-06-21b — Prognostic barotropic ocean-core scaffold (P3 / S2–S3)
 
 - **First building blocks of a prognostic-momentum ocean core**, toward replacing the
