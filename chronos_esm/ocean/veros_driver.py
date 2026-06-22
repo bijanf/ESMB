@@ -18,7 +18,7 @@ from chronos_esm.config import (  # noqa: F401
     OMEGA,
     RHO_WATER,
 )
-from chronos_esm.ocean import mixing, solver, overturning, momentum
+from chronos_esm.ocean import mixing, solver, overturning, momentum, barotropic
 
 
 class OceanState(NamedTuple):
@@ -197,10 +197,16 @@ def step_ocean(
     # latitude-uniform meridional velocity so the zonally+vertically integrated
     # transport vanishes at every latitude. dx is uniform in x, so it cancels in the
     # ratio. (A per-basin / C-grid transport streamfunction is the fuller fix.)
-    col_dz = dz_3d * maskC
-    net_v = jnp.sum(v_new * col_dz, axis=(0, 2))          # (ny,)  ~ net transport / dx
-    area_v = jnp.sum(col_dz, axis=(0, 2)) + 1e-20         # (ny,)  wet x-z area / dx
-    v_new = (v_new - (net_v / area_v)[None, :, None]) * maskC
+    if prognostic_momentum:
+        # S5: proper rigid-lid projection -- remove the full 2-D divergent barotropic
+        # transport (solve lap(chi)=div(U,V), subtract grad(chi)/H) while preserving the
+        # baroclinic overturning. Supersedes the crude per-latitude net removal.
+        u_new, v_new = barotropic.rigid_lid_project(u_new, v_new, dz, dx, dy, maskC)
+    else:
+        col_dz = dz_3d * maskC
+        net_v = jnp.sum(v_new * col_dz, axis=(0, 2))      # (ny,)  ~ net transport / dx
+        area_v = jnp.sum(col_dz, axis=(0, 2)) + 1e-20     # (ny,)  wet x-z area / dx
+        v_new = (v_new - (net_v / area_v)[None, :, None]) * maskC
 
     # --- Thermohaline overturning closure (P3/S1): density-driven Atlantic cell ----
     # A depth-integral-zero meridional overturning whose strength scales with the

@@ -68,10 +68,28 @@ def _amoc_grad(prognostic, n_steps=12):
 def test_prognostic_runs_finite():
     base = _base_state()
     st = base
-    for _ in range(15):
+    for _ in range(40):
         st = step_ocean(st, FLUX, STRESS, DX, DY, DZ, prognostic_momentum=True,
                         thc_k_vel=0.0)
     assert bool(jnp.isfinite(st.v).all()) and bool(jnp.isfinite(st.temp).all())
+    # bounded to physical ocean velocities (not a runaway)
+    assert float(jnp.max(jnp.abs(st.v))) < 2.0, "prognostic velocity unphysically large"
+
+
+def test_rigid_lid_mass_conservation():
+    """The rigid-lid projection makes the depth-integrated transport non-divergent."""
+    base = _base_state()
+    st = base
+    for _ in range(20):
+        st = step_ocean(st, FLUX, STRESS, DX, DY, DZ, prognostic_momentum=True,
+                        thc_k_vel=0.0)
+    U = jnp.sum(st.u * DZ[:, None, None], axis=0)
+    V = jnp.sum(st.v * DZ[:, None, None], axis=0)
+    div = (jnp.roll(U, -1, 1) - jnp.roll(U, 1, 1)) / (2 * DX) \
+        + (jnp.roll(V, -1, 0) - jnp.roll(V, 1, 0)) / (2 * DY)
+    # normalise by a typical transport gradient scale; expect ~machine zero
+    assert float(jnp.max(jnp.abs(div))) < 1e-10, \
+        f"depth-integrated flow not non-divergent: max|div U| = {float(jnp.max(jnp.abs(div)))}"
 
 
 def test_overturning_density_responsive():

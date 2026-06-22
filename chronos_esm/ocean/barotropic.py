@@ -142,7 +142,30 @@ def spin_up_gyre_sphere(F, *, lat, dlon, dlat, a, omega, dt, r, mask, coef, n_st
     return psi, zeta
 
 
+def rigid_lid_project(u, v, dz, dx, dy, maskC, max_iter=300, tol=1e-7):
+    """Rigid-lid mass conservation (P3/S5): remove the DIVERGENT part of the depth-integrated
+    flow so the barotropic transport is non-divergent, while preserving the baroclinic
+    overturning. Solve lap(chi) = div(U,V) with U=int u dz, V=int v dz, then subtract the
+    depth-uniform correction grad(chi)/H from every level. This is the proper replacement for
+    the crude per-latitude net-transport corrector: it enforces the full 2-D
+    div(U',V')=0 (not just a per-latitude mean) and does not touch the depth structure that
+    carries the AMOC. Differentiable (wraps solve_poisson_2d). Returns (u', v')."""
+    from chronos_esm.ocean.solver import solve_poisson_2d
+    dz3 = jnp.asarray(dz)[:, None, None]
+    surf = maskC[0]
+    U = jnp.sum(u * dz3, axis=0)                          # (ny,nx) depth-integrated transport
+    V = jnp.sum(v * dz3, axis=0)
+    div = (ddx_centered(U, dx) + ddy_centered(V, dy)) * surf
+    chi, _ = solve_poisson_2d(div, dx, dy, max_iter=max_iter, tol=tol, mask=surf)
+    H = jnp.maximum(jnp.sum(dz3 * maskC, axis=0), jnp.asarray(dz)[0])   # (ny,nx) column depth
+    dchidx = ddx_centered(chi, dx)
+    dchidy = ddy_centered(chi, dy)
+    u_out = (u - (dchidx / H)[None, :, :]) * maskC
+    v_out = (v - (dchidy / H)[None, :, :]) * maskC
+    return u_out, v_out
+
+
 __all__ = ["wind_stress_curl", "velocities_from_psi", "step_barotropic",
            "spin_up_gyre", "ddx_centered", "ddy_centered",
            "wind_stress_curl_sphere", "velocities_sphere", "step_barotropic_sphere",
-           "spin_up_gyre_sphere"]
+           "spin_up_gyre_sphere", "rigid_lid_project"]
