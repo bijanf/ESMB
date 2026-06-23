@@ -304,6 +304,14 @@ sbatch experiments/run_dino_control_slurm.sh --years 100
 # checkpoints are written to SCRATCH, not home (PIK default /p/tmp/$USER/dino_control;
 # override with CHRONOS_OUTDIR=/your/scratch/path). Score them with:
 python experiments/make_readme_figures.py "/p/tmp/$USER/dino_control/state_d*.nc" --label "dino control"
+
+# 3) (optional) CMIP-shaped idealized DECK trio in ONE job, after a converged
+#    LIBRARY control run (run_dino_control_lib_slurm.sh writes the .npz + q-flux it needs):
+sbatch experiments/run_dino_control_lib_slurm.sh --years 100      # control (.npz + q-flux)
+sbatch --requeue experiments/run_dino_deck_slurm.sh              # piControl + 1pctCO2 + abrupt-4xCO2
+#    auto-finds the latest control checkpoint, runs the trio (requeue-safe: skips finished
+#    branches), writes deck_*.npz + the CMIP6/AR6 comparison figure to scratch. These are
+#    CMIP-*shaped* idealized runs (surface-forcing proxy, not ECS); see docs/manual ch20.
 ```
 The SLURM script runs a JAX-GPU preflight and a `prefetch_data.py --check` cache
 guard, so a job started without staged data fails fast with instructions rather
