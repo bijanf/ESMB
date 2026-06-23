@@ -69,9 +69,10 @@ def step_prognostic_dynamics(
     r_bt=0.0,
     n_bt_sub=1,
     kappa_gm=0.0,
-    visc_iter=120,
-    bt_max_iter=400,
-    bt_visc_iter=120,
+    visc_iter=60,
+    bt_max_iter=60,
+    bt_visc_iter=60,
+    bt_tol=1.0e-4,
 ):
     """One step of the assembled prognostic ocean dynamics. Returns (u, v, psi, zeta).
 
@@ -140,7 +141,9 @@ def step_prognostic_dynamics(
             mask=surf,
             coef=coef,
             max_iter=bt_max_iter,
+            tol=bt_tol,
             visc_iter=bt_visc_iter,
+            visc_tol=bt_tol,
         )
         return (zeta, psi), None
 
@@ -190,9 +193,10 @@ def spin_up_prognostic_dynamics(
     r_bt=0.0,
     n_bt_sub=1,
     kappa_gm=0.0,
-    visc_iter=120,
-    bt_max_iter=400,
-    bt_visc_iter=120,
+    visc_iter=60,
+    bt_max_iter=60,
+    bt_visc_iter=60,
+    bt_tol=1.0e-4,
 ):
     """Spin the assembled prognostic dynamics from rest under a fixed density field +
     wind stress to (near) steady state. Returns (u, v, psi, zeta). Differentiable."""
@@ -231,6 +235,7 @@ def spin_up_prognostic_dynamics(
             visc_iter=visc_iter,
             bt_max_iter=bt_max_iter,
             bt_visc_iter=bt_visc_iter,
+            bt_tol=bt_tol,
         )
         return (u, v, psi, zeta), None
 

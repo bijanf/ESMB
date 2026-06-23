@@ -272,7 +272,7 @@ def step_ocean(
             coef=surf2d,
             kappa_gm=kappa_gm,
             r_bt=1.0 / (86400.0 * 30.0),
-            n_bt_sub=8,
+            n_bt_sub=4,  # dt_bt = DT_OCEAN/4 = 225 s (same as the validated stable probe)
         )
 
     # --- Barotropic mass-conservation corrector ------------------------------------
