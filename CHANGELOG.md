@@ -20,6 +20,30 @@ Apache-2.0. Known limitations are documented, not hidden (single-humidity T31 at
 weak ITCZ; AMOC via closure, prognostic core is research-in-progress; surface-forcing proxy,
 not equilibrium ECS). Details in the dated development entries below.
 
+## [Unreleased] - 2026-06-23b — CMIP DECK experiments + release-roadmap polish
+
+Toward releasing the manual + model to climate-science students: the first
+CMIP-shaped experiments, plus the remaining honesty/cleanup items from the
+release roadmap.
+
+- **CMIP DECK step 1** — `experiments/run_dino_deck.py` runs one DECK branch
+  (piControl / abrupt-2xCO2 / abrupt-4xCO2 / 1pctCO2) on the freed coupled model,
+  recording annual SST/AMOC/global-T/CO2/forcing; `experiments/compare_cmip6_deck.py`
+  removes piControl drift and places the TCR-like proxy warming + AMOC weakening
+  against published CMIP6/AR6 ranges (vector figure). Network-free schedule test.
+  Honest: surface-forcing proxy (no TOA closure -> not ECS), T31, CO2-only — an
+  idealized/EMIC-tier "CMIP-shaped" run, not CMIP-class output.
+- **Manual** — new appendix E "Model Limitations and Honest Caveats" (consolidated);
+  new ch03 section on the AD-safe substitutions; new ch01 "What is original to
+  Chronos-ESM?" note. Rebuilds clean (zero undefined citations).
+- **Legacy markers** — `qtcm.py`, `mixing.py` (Redi/GM-bolus helpers), and
+  `spectral.py:solve_helmholtz` marked LEGACY/research, not-the-active-path.
+- **Proxy / DA** — `salinity_to_d18o_sw` implemented (LeGrande & Schmidt 2006,
+  was a zeros stub); bilinear sensor sampling added (periodic lon); the end-to-end
+  4D-Var loop is documented as scoped future work. New proxy tests.
+- Remaining roadmap item gated on compute: the long control run that fills the
+  evaluation chapters (ch16-19) vs WOA18/ERA5 (a cluster `sbatch`).
+
 ## [Unreleased] - 2026-06-23 — Provenance & attribution pass (cite everyone)
 
 A full component-by-component provenance audit (every method, parameterization, dataset, and
