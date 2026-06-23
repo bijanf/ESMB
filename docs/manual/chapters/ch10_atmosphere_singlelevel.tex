@@ -236,7 +236,7 @@ has no vertical shear, hence no thermal wind and no baroclinic instability. A
 meridional temperature gradient therefore drives \emph{no} sustained pressure
 gradient: the winds geostrophically adjust toward rest. In diagnosis,
 $|\uu|$ decayed from $10$ to $<1\ \mathrm{m\,s^{-1}}$ and the correlation against
-ERA5 surface wind fell to $\sim 0$. The eddy-momentum-flux convergence that builds
+ERA5 surface wind \citep{hersbach2020era5} fell to $\sim 0$. The eddy-momentum-flux convergence that builds
 the real mid-latitude surface westerlies, and the Hadley overturning that drives
 the trades, both live in vertical structure this model does not resolve.
 
@@ -345,7 +345,7 @@ equatorial rain).
 \end{remark}
 
 \paragraph{Surface fluxes.}
-Sensible and latent heat use bulk aerodynamic formulae,
+Sensible and latent heat use bulk aerodynamic formulae \citep{largeyeager2004},
 $\mathrm{SH}=\rho_a c_p C_h\,|\uvec|\,(T_s-T_a)$ and
 $\mathrm{LH}=\rho_a L_v C_e\,|\uvec|\,(q_s-q_a)\,\beta$, with a gustiness floor
 $|\uvec|\ge 1\ \mathrm{m\,s^{-1}}$ and a cap $|\uvec|\le 25\ \mathrm{m\,s^{-1}}$ to
@@ -360,7 +360,9 @@ tiny per-step errors compound. The code applies a \emph{gentle} energy fixer tha
 nudges temperature to offset the spurious change in total energy
 $E=\int(\tfrac12|\uvec|^2+c_p T)\cos\lat\,\dd A$,
 $T \leftarrow T - \alpha\,\delta T$ with $\alpha=0.01$ (reduced from $0.1$ once the
-polar instability was removed). An enstrophy fixer exists analogously.
+polar instability was removed). An enstrophy fixer exists analogously; jointly
+conserving energy and enstrophy is the design goal of the classic
+energy--enstrophy-conserving discretizations \citep{arakawalamb1981}.
 \codref{chronos\_esm/atmos/dynamics.py}{\code{apply\_energy\_fixer},
 \code{apply\_enstrophy\_fixer}}
 

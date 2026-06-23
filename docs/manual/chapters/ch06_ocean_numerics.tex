@@ -137,7 +137,7 @@ carries), the wet-column average is subtracted:
   \label{eq:bc-anom}
 \end{equation}
 where $m_C\in\{0,1\}$ is the 3-D wet-cell mask (MITgcm-style \code{hFac} rule: a
-cell face is open only if both adjacent centres are wet) and $\Hcol=\sum_k\Delta
+cell face is open only if both adjacent centres are wet) \citep{adcroft1997} and $\Hcol=\sum_k\Delta
 z_k\,m_{C,k}$ the per-column wet depth. The full diagnostic velocity is
 $\uvec = \uvec_{\mathrm{bt}} + \uvec_{\mathrm{bc}}$, masked to wet cells.
 \codref{chronos\_esm/ocean/veros\_driver.py}{step 4, hydrostatic pressure + damped thermal wind + wet-column anomaly}
@@ -300,7 +300,7 @@ also smooth, so reverse-mode AD through the whole step is clean.
 \subsection{Post-step stabilisers, clips, and conservation}
 
 After the RK4 update the model applies, in order: an optional biharmonic
-($\nabla^4$) Shapiro filter (off by default, a light 2-grid-point cleanup; the
+($\nabla^4$) Shapiro filter \citep{shapiro1970} (off by default, a light 2-grid-point cleanup; the
 physical Laplacian diffusion is the primary noise control); a two-tier salinity
 relaxation (a strong 6-month high-latitude sponge poleward of $65^\circ$ plus a weak
 3-year global relaxation toward $35\,\mathrm{psu}$); hard physical clips

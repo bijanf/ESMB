@@ -257,8 +257,9 @@ The time step and truncation appear in Tables~\ref{tab:appB_grid} and
 \section{Coupler and forcing}
 % ===================================================================
 
-The coupler (\ref{chap:ch13_coupler_fluxes}) computes bulk surface fluxes,
-applies an SST flux correction, and injects external radiative forcing. The CO$_2$
+The coupler (\ref{chap:ch13_coupler_fluxes}) computes bulk surface fluxes
+\citep{largeyeager2004}, applies an SST flux correction, and injects external
+radiative forcing. The CO$_2$
 forcing follows the logarithmic Myhre form
 $F = 5.35\,\ln(C/C_0)$~W\,m$^{-2}$ \citep{myhre1998}, zero at the preindustrial
 reference $C_0 = 280$~ppm, and is the channel for the forcing-response and CMIP-style
@@ -266,7 +267,7 @@ experiments (\ref{chap:ch14_forcing_response}, \ref{chap:ch20_cmip7})
 \citep{eyring2016cmip6}. The flux correction has two modes: a strong Haney
 restoring of SST to the WOA target ($\tau\approx30$~days, control mode), or a
 frozen q-flux with weak anomaly restoring ($\tau$ long, free / forcing-responsive
-mode).
+mode) \citep{haney1971}.
 
 \begin{table}[h]
 \centering

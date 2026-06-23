@@ -8,5 +8,25 @@ Licensed under the Apache License, Version 2.0 (see LICENSE).
 This software builds on the following third-party open-source projects
 (each under its own license):
   - dinosaur-dycore (Google Research) — Apache License 2.0
-  - JAX (Google) — Apache License 2.0
-  - NumPy, SciPy, xarray, netCDF4 — BSD-3-Clause / permissive
+    The active multi-level atmosphere is this differentiable JAX spectral
+    dynamical core (the engine behind NeuralGCM). See Kochkov et al. (2024)
+    and https://github.com/google-research/dinosaur.
+  - JAX, Optax (Google / Google DeepMind) — Apache License 2.0
+  - NumPy, SciPy, xarray, netCDF4, Matplotlib — BSD-3-Clause / permissive
+  - Pooch (data fetching), cdsapi (Copernicus Climate Data Store client)
+    — BSD-3-Clause / Apache License 2.0
+
+This software ingests the following third-party DATA PRODUCTS. Users must
+cite these datasets in any publication that uses Chronos-ESM results
+(full references in docs/manual/references.bib and docs/ATTRIBUTION.md):
+  - World Ocean Atlas 2018 (WOA18), temperature & salinity — NOAA NCEI
+    (Locarnini et al. 2018; Zweng et al. 2018). Ocean initial conditions,
+    SST/SSS restoring, and validation.
+  - ERA5 reanalysis — Copernicus Climate Change Service / ECMWF
+    (Hersbach et al. 2020). Atmospheric validation benchmark.
+  - ETOPO1 Global Relief Model — NOAA NGDC
+    (Amante & Eakins 2009). Orography, ocean depth, and land/sea masks.
+  - RAPID-MOCHA 26.5°N AMOC array (Smeed et al. 2018) — observational
+    AMOC benchmark (~17 Sv).
+  - Atmospheric CO2 record — NOAA Global Monitoring Laboratory / IPCC AR6.
+  - Total solar irradiance (1361 W/m^2) — Kopp & Lean (2011).

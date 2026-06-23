@@ -20,6 +20,36 @@ Apache-2.0. Known limitations are documented, not hidden (single-humidity T31 at
 weak ITCZ; AMOC via closure, prognostic core is research-in-progress; surface-forcing proxy,
 not equilibrium ECS). Details in the dated development entries below.
 
+## [Unreleased] - 2026-06-23 — Provenance & attribution pass (cite everyone)
+
+A full component-by-component provenance audit (every method, parameterization, dataset, and
+library) feeding a complete attribution pass, so the model and manual can be released to the
+community without under-crediting prior work.
+
+- **New `docs/ATTRIBUTION.md`** — the component→origin→citation map, with an honest "ours vs.
+  borrowed" summary: Chronos-ESM is a *differentiable coupling + diagnostics layer* over mostly
+  standard, published physics (the active atmosphere **is** the third-party `dinosaur` dycore).
+- **`docs/manual/references.bib`** — added 34 references (12 → 46): the ingested datasets
+  (WOA18 Locarnini/Zweng 2018, ERA5 Hersbach 2020, ETOPO1 Amante & Eakins 2009, RAPID Smeed
+  2018), the re-implemented methods (Berger 1978 orbital, Manabe 1969 bucket, Haney 1971
+  restoring, DM95/LDD97 GM tapers, Redi 1982, Adcroft-Hill-Marshall 1997, Sverdrup 1947,
+  Rahmstorf 1993, Taylor 2001, Large & Yeager 2004 bulk fluxes, Bemis 1998 proxy, Kopp & Lean
+  2011 TSI, legacy Neelin-Zeng/Jablonowski-Williamson/Arakawa-Lamb/Sadourny/Shapiro), the
+  honest adjacent prior art (Häfner et al. 2018, Veros), and the software stack (NumPy, SciPy,
+  xarray, Matplotlib, Pooch, Optax, the `dinosaur` software cite).
+- **Manual** — wired 40 `\citep`/`\citet` into 18 chapters/appendices where methods, datasets,
+  and parameterizations are described; manual rebuilds clean (38 rendered references, zero
+  undefined citations).
+- **`NOTICE`** — completed the third-party software list (added Optax, Matplotlib, Pooch,
+  cdsapi/Copernicus, the `dinosaur` software note) and added a **Data Products** attribution
+  block (WOA18 / ERA5 / ETOPO1 / RAPID / NOAA-GML CO₂ / Kopp-Lean TSI).
+- **`README`** — the Citing section now points to `docs/ATTRIBUTION.md` and names the datasets
+  that must be cited in any publication using Chronos-ESM results.
+- Honest novelty framing (verified by an adversarial review pass): the per-column AMOC metric
+  and the THC-inertia fix are billed as engineering choices/diagnoses using standard operators,
+  not new physics; the differentiable claim is scoped to the ocean+coupler+ice+land stack
+  (the atmosphere's autodiff belongs to `dinosaur`).
+
 ## [Unreleased] - 2026-06-22g — Coupled-AMOC problem SOLVED (temporal inertia + per-column metric)
 
 Two fixes turn the wildly-noisy coupled AMOC (0–110 Sv month-to-month) into a clean, stable,

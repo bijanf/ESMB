@@ -60,3 +60,204 @@
   title={Influence of convective adjustment on the stability of the thermohaline circulation},
   author={Marotzke, Jochem}, journal={Journal of Physical Oceanography},
   volume={21}, number={6}, pages={903--907}, year={1991}}
+
+% ============================================================================
+% Added 2026-06-23: provenance/attribution pass. Every method, parameterization,
+% dataset, and software dependency that Chronos-ESM re-implements or ingests is
+% credited here. See docs/ATTRIBUTION.md for the component->citation map.
+% ============================================================================
+
+% --- Ocean: eddies, isopycnal mixing, convection, boundary conditions ---
+@article{redi1982,
+  title={Oceanic isopycnal mixing by coordinate rotation},
+  author={Redi, Martha H.}, journal={Journal of Physical Oceanography},
+  volume={12}, number={10}, pages={1154--1158}, year={1982}}
+
+@article{danabasoglu1995,
+  title={Sensitivity of the global ocean circulation to parameterizations of mesoscale tracer transports},
+  author={Danabasoglu, Gokhan and McWilliams, James C.},
+  journal={Journal of Climate}, volume={8}, number={12}, pages={2967--2987}, year={1995}}
+
+@article{large1997,
+  title={Sensitivity to surface forcing and boundary layer mixing in a global ocean model: Annual-mean climatology},
+  author={Large, William G. and Danabasoglu, Gokhan and Doney, Scott C. and McWilliams, James C.},
+  journal={Journal of Physical Oceanography}, volume={27}, number={11},
+  pages={2418--2447}, year={1997}}
+
+@article{rahmstorf1993,
+  title={A fast and complete convection scheme for ocean models},
+  author={Rahmstorf, Stefan}, journal={Ocean Modelling (unpublished manuscript series)},
+  volume={101}, pages={9--11}, year={1993}}
+
+@article{haney1971,
+  title={Surface thermal boundary condition for ocean circulation models},
+  author={Haney, Robert L.}, journal={Journal of Physical Oceanography},
+  volume={1}, number={4}, pages={241--248}, year={1971}}
+
+@article{sverdrup1947,
+  title={Wind-driven currents in a baroclinic ocean; with application to the equatorial currents of the eastern Pacific},
+  author={Sverdrup, Harald U.}, journal={Proceedings of the National Academy of Sciences},
+  volume={33}, number={11}, pages={318--326}, year={1947}}
+
+@article{adcroft1997,
+  title={Representation of topography by shaved cells in a height coordinate ocean model},
+  author={Adcroft, Alistair and Hill, Chris and Marshall, John},
+  journal={Monthly Weather Review}, volume={125}, number={9}, pages={2293--2315}, year={1997}}
+
+% --- Ocean: differentiable JAX prior art (honest adjacent work) ---
+@article{hafner2018veros,
+  title={Veros v0.1 -- a fast and versatile ocean simulator in pure Python},
+  author={H{\"a}fner, Dion and Jacobsen, Ren{\'e} L{\o}we and Eden, Carsten and
+          Kristensen, Mads R. B. and Jochum, Markus and Nuterman, Roman and Vinter, Brian},
+  journal={Geoscientific Model Development}, volume={11}, number={8},
+  pages={3299--3312}, year={2018}}
+
+% --- Atmosphere & numerics (single-level legacy + filters) ---
+@article{neelinzeng2000,
+  title={A quasi-equilibrium tropical circulation model---Formulation},
+  author={Neelin, J. David and Zeng, Ning}, journal={Journal of the Atmospheric Sciences},
+  volume={57}, number={11}, pages={1741--1766}, year={2000}}
+
+@article{jablonowski2006,
+  title={A baroclinic instability test case for atmospheric model dynamical cores},
+  author={Jablonowski, Christiane and Williamson, David L.},
+  journal={Quarterly Journal of the Royal Meteorological Society},
+  volume={132}, number={621C}, pages={2943--2975}, year={2006}}
+
+@article{arakawalamb1981,
+  title={A potential enstrophy and energy conserving scheme for the shallow water equations},
+  author={Arakawa, Akio and Lamb, Vivian R.}, journal={Monthly Weather Review},
+  volume={109}, number={1}, pages={18--36}, year={1981}}
+
+@article{sadourny1975,
+  title={The dynamics of finite-difference models of the shallow-water equations},
+  author={Sadourny, Robert}, journal={Journal of the Atmospheric Sciences},
+  volume={32}, number={4}, pages={680--689}, year={1975}}
+
+@article{shapiro1970,
+  title={Smoothing, filtering, and boundary effects},
+  author={Shapiro, Ralph}, journal={Reviews of Geophysics},
+  volume={8}, number={2}, pages={359--387}, year={1970}}
+
+% --- Coupler & fluxes ---
+@techreport{largeyeager2004,
+  title={Diurnal to decadal global forcing for ocean and sea-ice models: The data sets and flux climatologies},
+  author={Large, William G. and Yeager, Stephen G.}, year={2004},
+  institution={National Center for Atmospheric Research},
+  number={NCAR/TN-460+STR}, type={NCAR Technical Note}}
+
+% --- Land surface ---
+@article{manabe1969,
+  title={Climate and the ocean circulation: I. The atmospheric circulation and the hydrology of the earth's surface},
+  author={Manabe, Syukuro}, journal={Monthly Weather Review},
+  volume={97}, number={11}, pages={739--774}, year={1969}}
+
+% --- Forcing: orbital, solar, greenhouse ---
+@article{berger1978,
+  title={Long-term variations of daily insolation and Quaternary climatic changes},
+  author={Berger, Andr{\'e} L.}, journal={Journal of the Atmospheric Sciences},
+  volume={35}, number={12}, pages={2362--2367}, year={1978}}
+
+@article{ottobliesner2017,
+  title={The PMIP4 contribution to CMIP6 -- Part 2: Two interglacials, scientific objective
+         and experimental design for Holocene and Last Interglacial simulations},
+  author={Otto-Bliesner, Bette L. and Braconnot, Pascale and Harrison, Sandy P. and others},
+  journal={Geoscientific Model Development}, volume={10}, number={11},
+  pages={3979--4003}, year={2017}}
+
+@article{kopplean2011,
+  title={A new, lower value of total solar irradiance: Evidence and climate significance},
+  author={Kopp, Greg and Lean, Judith L.}, journal={Geophysical Research Letters},
+  volume={38}, number={1}, pages={L01706}, year={2011}}
+
+@book{ipcc2021ar6,
+  title={Climate Change 2021: The Physical Science Basis. Contribution of Working Group I
+         to the Sixth Assessment Report of the Intergovernmental Panel on Climate Change},
+  author={{IPCC}}, editor={Masson-Delmotte, V. and Zhai, P. and others},
+  year={2021}, publisher={Cambridge University Press}}
+
+@misc{noaagml_co2,
+  title={Trends in Atmospheric Carbon Dioxide (Mauna Loa / global mean)},
+  author={{NOAA Global Monitoring Laboratory} and Lan, Xin and Tans, Pieter and Thoning, Kirk W.},
+  year={2024}, howpublished={\url{https://gml.noaa.gov/ccgg/trends/}}}
+
+% --- Validation: datasets & skill metrics ---
+@techreport{locarnini2018woa,
+  title={World Ocean Atlas 2018, Volume 1: Temperature},
+  author={Locarnini, Ricardo A. and Mishonov, Alexey V. and Baranova, Olga K. and
+          Boyer, Timothy P. and Zweng, Melissa M. and others},
+  year={2018}, institution={NOAA}, number={NOAA Atlas NESDIS 81},
+  note={A. Mishonov, Technical Editor}}
+
+@techreport{zweng2018woa,
+  title={World Ocean Atlas 2018, Volume 2: Salinity},
+  author={Zweng, Melissa M. and Reagan, James R. and Seidov, Dan and
+          Boyer, Timothy P. and Locarnini, Ricardo A. and others},
+  year={2018}, institution={NOAA}, number={NOAA Atlas NESDIS 82},
+  note={A. Mishonov, Technical Editor}}
+
+@article{hersbach2020era5,
+  title={The ERA5 global reanalysis},
+  author={Hersbach, Hans and Bell, Bill and Berrisford, Paul and others},
+  journal={Quarterly Journal of the Royal Meteorological Society},
+  volume={146}, number={730}, pages={1999--2049}, year={2020}}
+
+@techreport{amante2009etopo,
+  title={ETOPO1 1 Arc-Minute Global Relief Model: Procedures, Data Sources and Analysis},
+  author={Amante, Christopher and Eakins, Barry W.}, year={2009},
+  institution={National Geophysical Data Center, NOAA},
+  number={NOAA Technical Memorandum NESDIS NGDC-24}, doi={10.7289/V5C8276M}}
+
+@article{smeed2018,
+  title={The North Atlantic Ocean is in a state of reduced overturning},
+  author={Smeed, David A. and Josey, Simon A. and Beaulieu, Claudie and others},
+  journal={Geophysical Research Letters}, volume={45}, number={3},
+  pages={1527--1533}, year={2018}}
+
+@article{taylor2001,
+  title={Summarizing multiple aspects of model performance in a single diagram},
+  author={Taylor, Karl E.}, journal={Journal of Geophysical Research: Atmospheres},
+  volume={106}, number={D7}, pages={7183--7192}, year={2001}}
+
+% --- Proxy / paleo data assimilation ---
+@article{bemis1998,
+  title={Reevaluation of the oxygen isotopic composition of planktonic foraminifera:
+         Experimental results and revised paleotemperature equations},
+  author={Bemis, Bryan E. and Spero, Howard J. and Bijma, Jelle and Lea, David W.},
+  journal={Paleoceanography}, volume={13}, number={2}, pages={150--160}, year={1998}}
+
+% --- Software / open-source dependencies ---
+@misc{dinosaur_software,
+  title={Dinosaur: differentiable dynamics for global atmospheric modeling},
+  author={{Google Research}}, year={2024},
+  howpublished={\url{https://github.com/google-research/dinosaur}}}
+
+@article{harris2020numpy,
+  title={Array programming with {NumPy}},
+  author={Harris, Charles R. and Millman, K. Jarrod and van der Walt, St{\'e}fan J. and others},
+  journal={Nature}, volume={585}, number={7825}, pages={357--362}, year={2020}}
+
+@article{virtanen2020scipy,
+  title={{SciPy} 1.0: fundamental algorithms for scientific computing in {Python}},
+  author={Virtanen, Pauli and Gommers, Ralf and Oliphant, Travis E. and others},
+  journal={Nature Methods}, volume={17}, number={3}, pages={261--272}, year={2020}}
+
+@article{hoyer2017xarray,
+  title={xarray: {N}-{D} labeled arrays and datasets in {Python}},
+  author={Hoyer, Stephan and Hamman, Joseph}, journal={Journal of Open Research Software},
+  volume={5}, number={1}, pages={10}, year={2017}}
+
+@article{hunter2007matplotlib,
+  title={Matplotlib: A 2{D} graphics environment},
+  author={Hunter, John D.}, journal={Computing in Science \& Engineering},
+  volume={9}, number={3}, pages={90--95}, year={2007}}
+
+@article{uieda2020pooch,
+  title={Pooch: A friend to fetch your data files},
+  author={Uieda, Leonardo and Soler, Santiago R. and Rampin, R{\'e}mi and others},
+  journal={Journal of Open Source Software}, volume={5}, number={45}, pages={1943}, year={2020}}
+
+@misc{deepmind2020jax,
+  title={The {DeepMind} {JAX} Ecosystem ({Optax})},
+  author={{DeepMind} and Babuschkin, Igor and others}, year={2020},
+  howpublished={\url{https://github.com/google-deepmind}}}

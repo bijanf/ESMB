@@ -219,7 +219,7 @@ Because the model lacks a prognostic sea-ice/brine cycle and uses a
 virtual salt flux, salinity is restored and renormalized to prevent drift
 into the physics-stability clip. The code applies a strong high-latitude
 sponge (poleward of $65^\circ$, $6$-month timescale) plus a weak global
-relaxation to $S_{\mathrm{ref}}=35$ ($3$-year timescale), then hard-clips
+relaxation to $S_{\mathrm{ref}}=35$ ($3$-year timescale) \citep{haney1971}, then hard-clips
 $\Salt\in[30,38]\,\mathrm{psu}$ and $\Temp\in[250,320]\,\mathrm{K}$, floors
 $\Temp$ at the $-1.8^\circ\mathrm{C}$ freezing point ($271.35\,\mathrm{K}$,
 a sea-ice stub), and finally shifts the volume-mean salinity back to the
@@ -273,13 +273,14 @@ and layers thicken with depth:
   \label{eq:zgrid}
 \end{equation}
 The layer-centre depths $z^c_k=\tfrac12(z_k+z_{k+1})$ are also the depths
-onto which the WOA18 initial conditions are interpolated, so dynamics and
+onto which the WOA18 initial conditions are interpolated \citep{locarnini2018woa,zweng2018woa}, so dynamics and
 ICs stay consistent.
 \codref{chronos\_esm/config.py}{\code{\_ocean\_vertical\_grid}: \code{OCEAN\_DZ}, \code{OCEAN\_DEPTH\_CENTERS}, \code{stretch=1.7}}
 
 \paragraph{Bathymetry and the wet mask.}
 The land/sea mask is derived from where WOA18 surface temperature is valid;
 a positive-down depth field $\dep(x,y)$ is built from ETOPO bathymetry
+\citep{amante2009etopo}
 (block-mean coarsened, regridded, Gaussian-smoothed, capped at
 $5000\,\mathrm{m}$, floored at $500\,\mathrm{m}$ in wet cells, with isolated
 one-cell ponds removed). From $\dep(x,y)$ and the level interfaces the code
@@ -297,7 +298,7 @@ cells). The land/sea mask follows where the WOA18 surface field is valid.}
 \end{figure}
 
 \paragraph{No-flux boundary conditions via face masks.}
-Boundaries are enforced with the MITgcm \emph{hFac} rule: a cell face is
+Boundaries are enforced with the MITgcm \emph{hFac} rule \citep{adcroft1997}: a cell face is
 open only if \emph{both} adjacent centres are wet. The code builds west,
 east, south, north and vertical-interface masks
 \begin{equation}

@@ -12,7 +12,8 @@ What makes \model{} different from a conventional climate model is not its physi
 governing equations of the next chapters are the same primitive equations every ocean and
 atmosphere model solves --- but the substrate it is written in. The entire model, from the
 spectral atmosphere through the elliptic ocean solver down to the bulk flux formulae, is a
-single \jax{} program \citep{jax2018}. Every floating-point operation is recorded on a
+single \jax{} program \citep{jax2018}; a differentiable JAX ocean GCM is adjacent prior art
+for this approach \citep{hafner2018veros}. Every floating-point operation is recorded on a
 computation graph, and that graph can be \emph{differentiated}: for any scalar diagnostic
 $\loss$ computed from a multi-decade run we can obtain the exact gradient $\partial\loss/\partial\param$
 with respect to \emph{every} tunable parameter $\param$ at once. This chapter explains what that
@@ -25,8 +26,8 @@ gradient correct. The applications it unlocks --- calibration, sensitivity, and 
 
 A coupled climate model is, formally, a discrete dynamical system. Write the full state as a
 vector $\state\in\mathbb{R}^{N}$ --- in \model{} this is the \code{DinoCoupledState} pytree,
-which carries the \dino{} spectral atmosphere (vorticity, divergence, temperature variation,
-log surface pressure, humidity), the ocean $(\uu,\vv,\ww,\Temp,\Salt,\psib,\dens,\mathrm{DIC})$,
+which carries the \dino{} spectral atmosphere \citep{dinosaur_software} (vorticity, divergence,
+temperature variation, log surface pressure, humidity), the ocean $(\uu,\vv,\ww,\Temp,\Salt,\psib,\dens,\mathrm{DIC})$,
 the land, and the sea-ice fields side by side
 (\codref{chronos\_esm/coupler/dino\_step.py}{\code{DinoCoupledState}}). One coupling interval is
 a map

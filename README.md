@@ -318,6 +318,16 @@ and `sbatch` (the cache must be the same path, visible from login and compute no
 If you use Chronos-ESM in academic work, please cite it via [`CITATION.cff`](CITATION.cff)
 (GitHub renders a "Cite this repository" button from it).
 
+**Please also cite the component sources.** Chronos-ESM is a differentiable
+coupling and diagnostics layer wrapping mostly standard, published physics and
+third-party data. [`docs/ATTRIBUTION.md`](docs/ATTRIBUTION.md) maps every
+component to its origin (genuine vs. borrowed) and citation, with full BibTeX in
+[`docs/manual/references.bib`](docs/manual/references.bib). In particular, any
+result using the bundled datasets must cite **WOA18** (Locarnini et al. 2018;
+Zweng et al. 2018), **ERA5** (Hersbach et al. 2020), and **ETOPO1** (Amante &
+Eakins 2009), and the multi-level atmosphere relies on the **`dinosaur`** dycore
+(Kochkov et al. 2024).
+
 **Getting a DOI (recommended for citability):** archive the repository on
 [Zenodo](https://zenodo.org) — sign in with GitHub, flip **ESMB** on under
 *Settings → GitHub*, then (re-)publish a GitHub release. Zenodo mints a permanent

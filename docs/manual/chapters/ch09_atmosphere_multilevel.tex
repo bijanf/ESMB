@@ -18,7 +18,7 @@ tracks, the eddy-driven jet, and the surface westerlies. \model{}'s production
 atmosphere therefore replaces it with a genuine multi-level spectral
 primitive-equation dynamical core. Rather than re-implement a spectral transform
 core from scratch, \model{} wraps Google's \dino{} dycore --- the differentiable
-\jax{} spectral primitive-equation solver that underlies NeuralGCM
+\jax{} spectral primitive-equation solver \citep{dinosaur_software} that underlies NeuralGCM
 \citep{kochkov2024neuralgcm} --- and supplies the column physics
 (thermal forcing, drag, and a moisture cycle) as additional explicit tendencies.
 Everything in this chapter lives in

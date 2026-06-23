@@ -65,13 +65,13 @@ returning native-grid NumPy arrays}:
 \begin{description}[leftmargin=1.5em,style=nextline]
   \item[Ocean --- WOA18.] The World Ocean Atlas 2018 annual climatology supplies
   sea-surface temperature ($\Temp$, the topmost level) and sea-surface salinity
-  ($\Salt$). WOA18 is also the dataset used to \emph{initialise} the ocean
+  ($\Salt$) \citep{locarnini2018woa,zweng2018woa}. WOA18 is also the dataset used to \emph{initialise} the ocean
   (Ch.~\ref{chap:ch04_ocean_equations}), so the surface-temperature comparison
   must be read with care: in the flux-corrected control the surface heat flux
-  \emph{restores} SST toward WOA (Haney restoring; Ch.~\ref{chap:ch13_coupler_fluxes}),
+  \emph{restores} SST toward WOA (Haney restoring \citep{haney1971}; Ch.~\ref{chap:ch13_coupler_fluxes}),
   so SST skill is partly imposed, not predicted. The genuinely emergent ocean
   field is salinity, which evolves freely.
-  \item[Atmosphere --- ERA5.] The ECMWF ERA5 reanalysis (monthly means,
+  \item[Atmosphere --- ERA5.] The ECMWF ERA5 reanalysis \citep{hersbach2020era5} (monthly means,
   averaged to an annual climatology) supplies 2~m air temperature ($\Tair$),
   10~m zonal and meridional winds ($\uu_{\mathrm{sfc}},\vv_{\mathrm{sfc}}$),
   total precipitation, and mean sea-level pressure (\code{mslp}). ERA5 is an
@@ -127,7 +127,7 @@ perfect spatial pattern regardless of amplitude. The \emph{std ratio}
 $\stdr<1$ means the model is too smooth (too little spatial contrast),
 $\stdr>1$ means it is too noisy or too sharp. A perfect model sits at
 $\bias=0$, $\corrp=1$, $\stdr=1$. The pair $(\corrp,\stdr)$ are the polar
-coordinates of a Taylor diagram \citep{eyring2016cmip6}, which the framework also
+coordinates of a Taylor diagram \citep{taylor2001}, which the framework also
 emits, and they are exactly the right summary for a climatology because they are
 insensitive to a constant offset that a flux correction may impose.
 

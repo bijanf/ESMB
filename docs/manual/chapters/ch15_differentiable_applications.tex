@@ -71,7 +71,7 @@ Calibration tunes $\param$ so the model reproduces data. The classical
 approach perturbs each parameter and reruns; with $P$ parameters this is
 $P{+}1$ runs per gradient step. Differentiability collapses that to \emph{one}
 run plus one adjoint, \emph{independent of $P$}. Given targets
-$\mathbf{y}_k$ (e.g.\ WOA18 SST/SSS, ERA5 winds) sampled by an observation
+$\mathbf{y}_k$ (e.g.\ WOA18 SST/SSS \citep{locarnini2018woa,zweng2018woa}, ERA5 winds \citep{hersbach2020era5}) sampled by an observation
 operator $\mathcal{H}$, minimise
 \begin{equation}
   \Jcost(\param)

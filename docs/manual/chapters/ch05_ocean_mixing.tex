@@ -68,7 +68,7 @@ the genuine instability.
 
 Steep isopycnals near the surface mixed layer and at boundary currents produce very
 large $|\Sslope|$, which would make the GM and Redi terms numerically explosive.
-The standard remedy is to taper the slope. \model{} replaces the conventional hard
+The standard remedy is to taper the slope \citep{danabasoglu1995,large1997}. \model{} replaces the conventional hard
 clip $|\Sslope|\le S_{\max}$ with a \emph{smooth, differentiable} soft clip:
 \begin{equation}
 \widetilde{S} \;=\; \frac{S}{\sqrt{1 + (S/S_{\max})^2}},
@@ -135,7 +135,7 @@ the grid converges.
 
 Diffusion of heat and salt in the ocean interior is overwhelmingly \emph{along}
 isopycnals, not across them; diapycnal mixing is weaker by $\mathcal{O}(10^7)$.
-The Redi tensor rotates an isotropic diffusivity $\kiso$ into the local isopycnal
+The Redi tensor \citep{redi1982} rotates an isotropic diffusivity $\kiso$ into the local isopycnal
 plane. In the small-slope approximation \citep{griffies2004},
 \begin{equation}
 \mathbf{K} \;=\; \frac{\kiso}{1+S^2}
@@ -197,7 +197,7 @@ RK4 with a $\Delta t=900\,\mathrm{s}$ ocean step.
 
 When a column becomes statically unstable ($\partial_z\dens<0$, denser water over
 lighter) the ocean overturns and mixes rapidly. The classical implementation is a
-hard switch---set $\kv$ to a huge value wherever $\Delta\dens<0$. \model{} rejects
+hard switch---set $\kv$ to a huge value wherever $\Delta\dens<0$ \citep{rahmstorf1993}. \model{} rejects
 this for two reasons documented in the source: (i) a $0/1$ switch fires patchily
 column-by-column and produces grid-scale SST noise that grows toward the poles, and
 (ii) a large $\kv$ at the thin surface layer violates the explicit-diffusion
@@ -240,7 +240,7 @@ surface stability with deep mixing.
 
 Centred advection on a C-grid admits a $2\Delta x$ ``checkerboard'' mode that carries
 no physical signal but is invisible to Laplacian diffusion at large scales. \model{}
-removes it with a scale-selective \emph{biharmonic} (Shapiro) filter applied to the
+removes it with a scale-selective \emph{biharmonic} (Shapiro) filter \citep{shapiro1970} applied to the
 new $\Temp$ and $\Salt$ after each RK4 update:
 \begin{equation}
 C \;\longmapsto\; C - \frac{\sigma}{16}\,\lap\!\big(\lap C\big),

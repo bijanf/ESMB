@@ -43,7 +43,7 @@ failure: a single level simply has nowhere to put the vertical motion that makes
 The \textbf{multi-level spectral atmosphere} built on the \dino{} dycore
 (Chapter~\ref{chap:ch09_atmosphere_multilevel}) does have the necessary vertical structure. It
 carries prognostic specific humidity as an advected tracer, evaporates moisture from the surface
-with a bulk formula, and rains out supersaturation through a large-scale condensation closure
+with a bulk formula \citep{largeyeager2004}, and rains out supersaturation through a large-scale condensation closure
 that latent-heats the column. As the resolved Hadley circulation spins up, that closure
 concentrates rainfall in the deep tropics and dries the subtropics --- a real ITCZ forming
 \emph{from the resolved circulation}, with no explicit convection scheme. \model{} therefore
@@ -74,7 +74,7 @@ observational climatology bundled with the validation framework
 
 Figures~\ref{fig:dino_circ}--\ref{fig:precip_bias} are the present tropical validation
 dashboard, generated from a short SST-forced spin-up of the multi-level atmosphere on the WOA18
-SST climatology. The quantitative scorecard is refreshed from the latest control run; a 30-year
+SST climatology \citep{locarnini2018woa}. The quantitative scorecard is refreshed from the latest control run; a 30-year
 time mean of the coupled \dino{}\,$\leftrightarrow$\,ocean control is being generated to replace
 the short-spin-up numbers quoted below with an equilibrated climatology.
 
@@ -144,7 +144,7 @@ $\rightarrow$ deep convection $\rightarrow$ Hadley ascent $\rightarrow$ equatori
   \item \textbf{Tropical SST limits the convection.} The free-running coupled model carries a
     tropical cold-tongue bias (tropical SST several degrees below WOA), which suppresses the deep
     convection that should drive the ITCZ. The control run quoted above relies on a Haney SST
-    restoring toward WOA to remove that bias; the ITCZ is therefore partly \emph{earned} by the
+    restoring \citep{haney1971} toward WOA to remove that bias; the ITCZ is therefore partly \emph{earned} by the
     flux correction rather than freely predicted. A free-running warm tropical SST remains a
     standing target (Chapter~\ref{chap:ch13_coupler_fluxes}).
   \item \textbf{No strong interannual (ENSO-like) variability.} At this configuration \model{}
