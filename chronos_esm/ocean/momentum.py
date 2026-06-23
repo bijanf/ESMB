@@ -98,12 +98,200 @@ def spin_up(rho, *, f, dx, dy, dz, dt, r, n_steps, nu=0.0, mask=None, rho0=RHO0)
     return u, v
 
 
+# ===========================================================================
+# SPHERICAL, IMPLICITLY-VISCOUS, NO-SLIP baroclinic momentum core (P3 / S5a).
+#
+# The Cartesian core above blows up at the poles when explicit lateral viscosity
+# is added (the viscous CFL dt < dx^2/(4 A_h) collapses as dx -> 0 toward the
+# poles), and a giant Rayleigh drag is the only thing that holds the spurious
+# coarse-grid geostrophic transport down -- which also crushes the real
+# overturning. This version fixes both:
+#   * proper SPHERICAL metric (cos(phi) factors) in the pressure-gradient force;
+#   * IMPLICIT harmonic lateral viscosity solved with the existing CG elliptic
+#     machinery -> unconditionally stable for any A_h/dt (no polar CFL, no NaN);
+#   * NO-SLIP boundaries: the viscous Laplacian sees land/edges as zero, so a
+#     frictional (Munk) western boundary layer forms instead of a free-slip wall.
+# This is the building block the realistic prognostic AMOC needs; it is still
+# STANDALONE (not wired into veros_driver/main) until the barotropic-baroclinic
+# split (S5b) and the spin-up tuning (S5c).
+# ===========================================================================
+from chronos_esm.ocean.solver import jacobi_preconditioner, solve_cg  # noqa: E402
+
+OMEGA = 7.292e-5  # Earth rotation rate [1/s]
+COS_MIN = 0.087  # polar cos(phi) floor (~85 deg); matches solver._sphere_* metric
+
+
+def _face_conductances(lat, dlon, dlat, a, cos_min=COS_MIN):
+    """Unit-coefficient spherical Laplacian face conductances + cell area for a
+    centred lat-lon grid, returned as (1, ny, 1) arrays for 3-D (nz, ny, nx)
+    broadcasting. Mirrors solver._sphere_conductances with coef == 1."""
+    cosc = jnp.maximum(jnp.cos(lat), cos_min)
+    lat_n = 0.5 * (lat + jnp.concatenate([lat[1:], lat[-1:]]))
+    lat_s = 0.5 * (lat + jnp.concatenate([lat[:1], lat[:-1]]))
+    cosn = jnp.maximum(jnp.cos(lat_n), cos_min)
+    coss = jnp.maximum(jnp.cos(lat_s), cos_min)
+    cE = dlat / (cosc * dlon)
+    cW = cE
+    cN = cosn * dlon / dlat
+    cS = coss * dlon / dlat
+    area = (a**2) * cosc * dlon * dlat
+
+    def col(z):
+        return z[None, :, None]
+
+    return col(cE), col(cW), col(cN), col(cS), col(area)
+
+
+def _lap3d(field, cE, cW, cN, cS):
+    """Area-weighted spherical operator sum_faces C(field - field_nbr) per level
+    (= -area * div(grad), symmetric SPD). No-slip: land/edge neighbours are zero.
+    field: (nz, ny, nx); cE.. : (1, ny, 1)."""
+    pe = jnp.roll(field, -1, axis=2)  # periodic in longitude
+    pw = jnp.roll(field, 1, axis=2)
+    z = jnp.zeros_like(field[:, :1, :])
+    pn = jnp.concatenate([field[:, 1:, :], z], axis=1)  # no-slip north edge
+    ps = jnp.concatenate([z, field[:, :-1, :]], axis=1)  # no-slip south edge
+    return cE * (field - pe) + cW * (field - pw) + cN * (field - pn) + cS * (field - ps)
+
+
+def implicit_viscosity_sphere(
+    field, alpha, lat, dlon, dlat, a, mask, max_iter=200, tol=1e-7, cos_min=COS_MIN
+):
+    """Solve the spherical Helmholtz system (I - alpha * lap) x = field with no-slip
+    (x = 0 on land), per level, via preconditioned CG. ``alpha = dt * A_h``.
+    Unconditionally stable for any alpha (implicit) -> no viscous CFL / polar blow-up.
+    Differentiable. field: (nz, ny, nx); mask: (nz, ny, nx) 1=ocean."""
+    nz, ny, nx = field.shape
+    cE, cW, cN, cS, area = _face_conductances(lat, dlon, dlat, a, cos_min)
+    m3 = mask
+
+    def op(xflat):
+        x = xflat.reshape(nz, ny, nx)
+        mm = area * x + alpha * _lap3d(x, cE, cW, cN, cS)  # area*(I - alpha*lap)
+        return (mm * m3 + x * (1.0 - m3)).flatten()  # identity on land
+
+    diag = (area + alpha * (cE + cW + cN + cS)) * m3 + (1.0 - m3)
+    precond = jacobi_preconditioner(jnp.broadcast_to(diag, field.shape).flatten())
+    b = (area * field * m3).flatten()
+    x, _ = solve_cg(
+        op, b, field.flatten(), max_iter=max_iter, tol=tol, preconditioner=precond
+    )
+    return x.reshape(nz, ny, nx) * m3
+
+
+def pgf_sphere(p, lat, dlon, dlat, a, rho0=RHO0, mask=None, cos_min=COS_MIN):
+    """Spherical horizontal pressure-gradient acceleration from pressure p (nz,ny,nx):
+        a_lon = -(1/(rho0 a cos phi)) dp/dlon,  a_lat = -(1/(rho0 a)) dp/dphi.
+    Periodic in longitude, one-sided at the lat edges. lat: (ny,) [rad]."""
+    cosc = jnp.maximum(jnp.cos(lat), cos_min)[None, :, None]
+    dpdl = (jnp.roll(p, -1, axis=2) - jnp.roll(p, 1, axis=2)) / (2.0 * dlon)
+    pn = jnp.concatenate([p[:, 1:, :], p[:, -1:, :]], axis=1)
+    ps = jnp.concatenate([p[:, :1, :], p[:, :-1, :]], axis=1)
+    dpdphi = (pn - ps) / (2.0 * dlat)
+    ax = -dpdl / (rho0 * a * cosc)
+    ay = -dpdphi / (rho0 * a)
+    if mask is not None:
+        ax, ay = ax * mask, ay * mask
+    return ax, ay
+
+
+def step_momentum_sphere(
+    u,
+    v,
+    rho,
+    *,
+    lat,
+    dlon,
+    dlat,
+    a,
+    dz,
+    dt,
+    A_h,
+    mask,
+    omega=OMEGA,
+    r=0.0,
+    rho0=RHO0,
+    visc_iter=200,
+    visc_tol=1e-7,
+):
+    """One step of the spherical baroclinic momentum core: hydrostatic PGF (from rho)
+    -> semi-implicit Coriolis -> implicit harmonic viscosity (no-slip). ``A_h`` is the
+    lateral eddy viscosity [m^2/s]; ``r`` an optional weak linear drag [1/s]."""
+    f = (2.0 * omega * jnp.sin(lat))[None, :, None]
+    p = hydrostatic_pressure(rho, dz)
+    ax, ay = pgf_sphere(p, lat, dlon, dlat, a, rho0, mask)
+    u1, v1 = coriolis_semi_implicit(u, v, ax - r * u, ay - r * v, f, dt)
+    if A_h > 0.0:
+        alpha = dt * A_h
+        u1 = implicit_viscosity_sphere(
+            u1, alpha, lat, dlon, dlat, a, mask, visc_iter, visc_tol
+        )
+        v1 = implicit_viscosity_sphere(
+            v1, alpha, lat, dlon, dlat, a, mask, visc_iter, visc_tol
+        )
+    return u1 * mask, v1 * mask
+
+
+def spin_up_sphere(
+    rho,
+    *,
+    lat,
+    dlon,
+    dlat,
+    a,
+    dz,
+    dt,
+    A_h,
+    r,
+    n_steps,
+    mask,
+    omega=OMEGA,
+    rho0=RHO0,
+    visc_iter=200,
+    visc_tol=1e-7,
+):
+    """Integrate the spherical baroclinic momentum from rest under a fixed density
+    field to (near) steady state. Differentiable (lax.scan). Returns (u, v)."""
+    u = jnp.zeros_like(rho)
+    v = jnp.zeros_like(rho)
+
+    def body(carry, _):
+        u, v = carry
+        u, v = step_momentum_sphere(
+            u,
+            v,
+            rho,
+            lat=lat,
+            dlon=dlon,
+            dlat=dlat,
+            a=a,
+            dz=dz,
+            dt=dt,
+            A_h=A_h,
+            mask=mask,
+            omega=omega,
+            r=r,
+            rho0=rho0,
+            visc_iter=visc_iter,
+            visc_tol=visc_tol,
+        )
+        return (u, v), None
+
+    (u, v), _ = jax.lax.scan(body, (u, v), None, length=n_steps)
+    return u, v
+
+
 __all__ = [
     "hydrostatic_pressure",
     "pressure_gradient_accel",
     "coriolis_semi_implicit",
     "step_momentum",
     "spin_up",
+    "pgf_sphere",
+    "implicit_viscosity_sphere",
+    "step_momentum_sphere",
+    "spin_up_sphere",
     "G",
     "RHO0",
+    "OMEGA",
 ]
