@@ -89,6 +89,18 @@ def main_cli():
         help="keep the THC closure on even with --prognostic[-spherical]",
     )
     ap.add_argument(
+        "--qflux",
+        default=None,
+        help="path to a frozen q-flux .npy -> FREE mode (q-flux + weak restoring) so "
+        "SST/density can relax; needed for a realistic prognostic AMOC magnitude",
+    )
+    ap.add_argument(
+        "--restore-tau-days",
+        type=float,
+        default=3650.0,
+        help="weak anomaly-restoring timescale [days] in FREE mode (with --qflux)",
+    )
+    ap.add_argument(
         "--seasonal",
         action="store_true",
         help="P5: real seasonal cycle (insolation from the model day) instead of "
@@ -117,6 +129,23 @@ def main_cli():
         _mom_kw.update(prognostic_spherical=True, ah=args.ocean_ah)
         if not args.keep_thc:
             _mom_kw["thc_k_vel"] = 0.0
+    if args.qflux is not None:
+        # FREE mode: frozen q-flux + weak anomaly restoring so SST/density can RELAX
+        # (the prognostic AMOC only reaches a realistic magnitude when the too-sharp WOA
+        # density is allowed to adjust to the model's own equilibrium). Strong restoring
+        # (default) pins the surface and keeps the overturning elevated.
+        import numpy as _np
+
+        _mom_kw.update(
+            q_flux=jnp.asarray(_np.load(args.qflux)),
+            restore_tau_days=args.restore_tau_days,
+        )
+        print(
+            f"FREE mode: q-flux from {args.qflux} (mean "
+            f"{float(jnp.mean(jnp.asarray(_np.load(args.qflux)))):.2f} W/m2), "
+            f"restore_tau {args.restore_tau_days}d",
+            flush=True,
+        )
     if args.seasonal:
         _orbit = {"pi": orbital.ORBIT_PI, "6ka": orbital.ORBIT_6KA}[args.orbit]
         _mom_kw.update(seasonal=True, orbit=_orbit)
