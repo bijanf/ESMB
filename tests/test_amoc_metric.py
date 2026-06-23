@@ -53,6 +53,52 @@ def test_amoc_metric_scores_clean_cell_positive():
     ), f"upper_cell should be ~+15 Sv, got {float(r['upper_cell_26N']):+.3f}"
 
 
+def _shallow_ekman_state(target_sv=20.0):
+    """A purely SHALLOW overturning cell (northward in the top ~160 m, returning by
+    ~500 m, zero below) -- a wind-driven Ekman cell, NOT the AMOC. The full-column max
+    would wrongly report it; the RAPID below-500 m max must exclude it."""
+    ny, nx, nz = OCEAN_GRID.nlat, OCEAN_GRID.nlon, len(OCEAN_DZ)
+    dz = np.asarray(OCEAN_DZ)
+    depths = np.cumsum(dz)
+    lat = np.linspace(-90, 90, ny)
+    dx = 2 * np.pi * EARTH_RADIUS * np.cos(np.deg2rad(lat)) / nx
+    atl = np.asarray(create_atlantic_mask(ny, nx))
+    j26 = int(np.argmin(np.abs(lat - 26.5)))
+
+    up = (depths <= 163.0).astype(float)  # northward in the top ~2 layers
+    ret = (depths > 163.0) & (depths <= 500.0)  # return flow, all above 500 m
+    prof = up.copy()
+    prof[ret] = -((up * dz).sum()) / (dz[ret].sum())  # integral zero, zero below 500 m
+    width = atl[j26].sum() * dx[j26]
+    scale = target_sv * 1e6 / ((np.where(up > 0, prof, 0) * dz).sum() * width)
+    v = np.stack([scale * prof[k] * atl for k in range(nz)], axis=0)
+    z = jnp.zeros((nz, ny, nx))
+    return OceanState(
+        u=z,
+        v=jnp.asarray(v),
+        w=z,
+        temp=jnp.full((nz, ny, nx), 283.0),
+        salt=jnp.full((nz, ny, nx), 35.0),
+        psi=jnp.zeros((ny, nx)),
+        rho=z,
+        dic=z,
+    )
+
+
+def test_amoc_excludes_shallow_ekman_cell():
+    """The RAPID below-500 m max must NOT report a shallow wind-driven Ekman cell;
+    the legacy full-column max (min_depth_m=0) would."""
+    st = _shallow_ekman_state(20.0)
+    full = compute_amoc(st, min_depth_m=0.0)  # legacy full-column max
+    rapid = compute_amoc(st, min_depth_m=500.0)  # RAPID convention (default)
+    assert (
+        float(full["upper_cell_26N"]) > 10.0
+    ), "full-column should see the shallow cell"
+    assert (
+        float(rapid["upper_cell_26N"]) < 1.0
+    ), f"below-500m must exclude the Ekman cell, got {float(rapid['upper_cell_26N']):.2f}"
+
+
 def test_amoc_metric_sign_distinguishes_anti_amoc():
     """The metric must distinguish a real AMOC from a reversed circulation: a real
     cell scores a large POSITIVE upper cell; a reversed cell scores ~0 upper and a

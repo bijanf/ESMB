@@ -129,6 +129,7 @@ def compute_amoc(
     ocean_mask: jnp.ndarray = None,
     remove_barotropic: bool = True,
     ocean_mask_3d: jnp.ndarray = None,
+    min_depth_m: float = 500.0,
 ) -> dict:
     """
     Compute Atlantic Meridional Overturning Circulation (AMOC).
@@ -150,6 +151,9 @@ def compute_amoc(
                         exclude land cells (whose velocities are spurious).
         remove_barotropic : subtract the section depth-mean v per latitude so the
                         streamfunction measures overturning, not net throughflow.
+        min_depth_m   : take the upper/lower-cell extrema only BELOW this depth
+                        (default 500 m, the RAPID convention) to exclude the shallow
+                        wind-driven Ekman cell. Set 0.0 for the legacy full-column max.
 
     Returns a dict with:
         streamfunction: (nz, ny) Atlantic overturning in Sv
@@ -223,8 +227,23 @@ def compute_amoc(
     lat_26n_idx = jnp.argmin(jnp.abs(lat - 26.5))
     profile_26n = amoc_sv[:, lat_26n_idx]
 
-    upper_cell = jnp.max(profile_26n)  # AMOC upper cell [Sv] (positive, northward NADW)
-    lower_cell = jnp.min(profile_26n)  # AABW lower cell [Sv] (negative)
+    # RAPID convention: the AMOC strength is the max of the overturning streamfunction
+    # at 26.5N taken BELOW ~500 m, to exclude the shallow wind-driven Ekman cell (a
+    # near-surface overturning that is NOT the AMOC). Psi[k] sits at the bottom of layer
+    # k (depth cumsum(dz)[k]); we mask out the levels shallower than min_depth_m.
+    depths = jnp.cumsum(jnp.asarray(dz).reshape(-1))  # (nz,) bottom-interface depth
+    deep = depths >= min_depth_m
+    any_deep = jnp.any(deep)
+    upper_cell = jnp.where(
+        any_deep,
+        jnp.max(jnp.where(deep, profile_26n, -jnp.inf)),
+        jnp.max(profile_26n),
+    )  # AMOC upper cell [Sv] (positive, northward NADW), below the Ekman layer
+    lower_cell = jnp.where(
+        any_deep,
+        jnp.min(jnp.where(deep, profile_26n, jnp.inf)),
+        jnp.min(profile_26n),
+    )  # AABW lower cell [Sv] (negative)
 
     return {
         "streamfunction": amoc_sv,
