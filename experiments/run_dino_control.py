@@ -70,9 +70,23 @@ def main_cli():
         help="linear momentum drag timescale [days] for --prognostic",
     )
     ap.add_argument(
+        "--prognostic-spherical",
+        action="store_true",
+        help="P3/S5d: use the NEW spherical prognostic ocean core (implicitly-viscous "
+        "no-slip momentum + Munk barotropic streamfunction + GM, mass-conserving); "
+        "sets thc_k_vel=0 unless --keep-thc, and a Munk-resolving Ah (--ocean-ah)",
+    )
+    ap.add_argument(
+        "--ocean-ah",
+        type=float,
+        default=5.0e6,
+        help="lateral viscosity Ah [m^2/s] for --prognostic-spherical (Munk-resolving "
+        "at T31 ~ 5e6)",
+    )
+    ap.add_argument(
         "--keep-thc",
         action="store_true",
-        help="keep the THC closure on even with --prognostic",
+        help="keep the THC closure on even with --prognostic[-spherical]",
     )
     ap.add_argument(
         "--seasonal",
@@ -97,6 +111,10 @@ def main_cli():
         _mom_kw = dict(
             prognostic_momentum=True, mom_drag=1.0 / (86400.0 * args.mom_drag_days)
         )
+        if not args.keep_thc:
+            _mom_kw["thc_k_vel"] = 0.0
+    if args.prognostic_spherical:
+        _mom_kw.update(prognostic_spherical=True, ah=args.ocean_ah)
         if not args.keep_thc:
             _mom_kw["thc_k_vel"] = 0.0
     if args.seasonal:

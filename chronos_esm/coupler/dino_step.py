@@ -84,6 +84,8 @@ class DinoCoupledModel:
         thc_k_vel=1.0e-4,
         thc_inertia_days=730.0,
         prognostic_momentum=False,
+        prognostic_spherical=False,
+        ah=2.0e5,
         mom_drag=1.0 / (86400.0 * 30.0),
         seasonal=False,
         orbit=None,
@@ -122,6 +124,11 @@ class DinoCoupledModel:
         self.thc_inertia_days = thc_inertia_days
         # P3/S5: opt-in prognostic baroclinic momentum + rigid-lid mass conservation.
         self.prognostic_momentum = prognostic_momentum
+        # P3/S5d: opt-in NEW spherical prognostic core (momentum + Munk streamfunction +
+        # GM, mass-conserving). ah is the lateral viscosity it uses (Munk-resolving ~5e6
+        # at T31); also the diagnostic-path Ah. mom_drag retained for the old prognostic path.
+        self.prognostic_spherical = prognostic_spherical
+        self.ah = ah
         self.mom_drag = mom_drag
 
         nz = base.ocean.u.shape[0]
@@ -339,6 +346,8 @@ class DinoCoupledModel:
                     thc_k_vel=self.thc_k_vel,
                     thc_amp_override=thc_amp_new,
                     prognostic_momentum=self.prognostic_momentum,
+                    prognostic_spherical=self.prognostic_spherical,
+                    Ah=self.ah,
                     mom_drag=self.mom_drag,
                     hosing_sv=hosing_sv,
                 ),

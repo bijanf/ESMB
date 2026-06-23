@@ -11,12 +11,21 @@ import jax.numpy as jnp
 
 from chronos_esm.config import (  # noqa: F401
     DT_OCEAN,
+    EARTH_RADIUS,
     GRAVITY,
     OCEAN_GRID,
     OMEGA,
     RHO_WATER,
 )
-from chronos_esm.ocean import barotropic, gm, mixing, momentum, overturning, solver
+from chronos_esm.ocean import (  # noqa: F401
+    barotropic,
+    gm,
+    mixing,
+    momentum,
+    overturning,
+    prognostic,
+    solver,
+)
 
 
 class OceanState(NamedTuple):
@@ -45,7 +54,18 @@ def equation_of_state(temp: jnp.ndarray, salt: jnp.ndarray) -> jnp.ndarray:
 
 
 @partial(
-    jax.jit, static_argnames=["nz", "ny", "nx", "dt", "prognostic_momentum", "gm_on"]
+    jax.jit,
+    static_argnames=[
+        "nz",
+        "ny",
+        "nx",
+        "dt",
+        "prognostic_momentum",
+        "prognostic_spherical",
+        "gm_on",
+        "Ah",
+        "kappa_gm",
+    ],
 )
 def step_ocean(
     state: OceanState,
@@ -73,6 +93,7 @@ def step_ocean(
     thc_contrast_depth_m: Optional[float] = None,
     hosing_sv: float = 0.0,
     prognostic_momentum: bool = False,
+    prognostic_spherical: bool = False,
     mom_drag: float = 1.0 / (86400.0 * 30.0),
     gm_on: bool = False,
     thc_amp_override: Optional[jnp.ndarray] = None,
@@ -217,6 +238,43 @@ def step_ocean(
         u_new = (u_bt[None, :, :] + (u_mom - u_mom_bar[None, :, :])) * maskC
         v_new = (v_bt[None, :, :] + (v_mom - v_mom_bar[None, :, :])) * maskC
 
+    # --- S5d: the new SPHERICAL prognostic ocean core (opt-in; default off) ---------
+    # The assembled chronos_esm/ocean/prognostic.py: spherical implicitly-viscous no-slip
+    # baroclinic momentum (density-driven overturning) + Munk barotropic streamfunction
+    # (wind-driven gyres) + GM bolus, mass-conserving BY CONSTRUCTION (the psi formulation
+    # makes the depth-integrated transport non-divergent, so the corrector below is skipped).
+    # state.psi carries the transport streamfunction; zeta is recomputed from it each step.
+    # Flat-bottom coef (=surf2d) -- the topographic 1/H is ill-conditioned on real bathymetry.
+    if prognostic_spherical:
+        lat_r = jnp.deg2rad(jnp.linspace(-90.0, 90.0, ny))
+        dlon = 2.0 * jnp.pi / nx
+        dlat = jnp.pi / ny
+        zeta0 = solver.apply_elliptic_varcoef_sphere(
+            state.psi, surf2d, lat_r, dlon, dlat, EARTH_RADIUS, surf2d
+        )
+        u_new, v_new, psi_new, _ = prognostic.step_prognostic_dynamics(
+            state.u,
+            state.v,
+            state.psi,
+            zeta0,
+            rho,
+            tau_x,
+            tau_y,
+            lat=lat_r,
+            dlon=dlon,
+            dlat=dlat,
+            a=EARTH_RADIUS,
+            dz=dz,
+            dt=dt,
+            A_h_bc=Ah,
+            A_h_bt=Ah,
+            mask3d=maskC,
+            coef=surf2d,
+            kappa_gm=kappa_gm,
+            r_bt=1.0 / (86400.0 * 30.0),
+            n_bt_sub=8,
+        )
+
     # --- Barotropic mass-conservation corrector ------------------------------------
     # A flat-bottom velocity streamfunction (Stommel) applied over VARIABLE bathymetry
     # leaves a large spurious NET meridional transport: the depth-integrated transport
@@ -231,7 +289,8 @@ def step_ocean(
         # transport (solve lap(chi)=div(U,V), subtract grad(chi)/H) while preserving the
         # baroclinic overturning. Supersedes the crude per-latitude net removal.
         u_new, v_new = barotropic.rigid_lid_project(u_new, v_new, dz, dx, dy, maskC)
-    else:
+    elif not prognostic_spherical:
+        # the spherical prognostic core already mass-conserves (psi formulation) -> skip
         col_dz = dz_3d * maskC
         net_v = jnp.sum(v_new * col_dz, axis=(0, 2))  # (ny,)  ~ net transport / dx
         area_v = jnp.sum(col_dz, axis=(0, 2)) + 1e-20  # (ny,)  wet x-z area / dx
