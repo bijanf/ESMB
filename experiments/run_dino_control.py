@@ -84,6 +84,13 @@ def main_cli():
         "at T31 ~ 5e6)",
     )
     ap.add_argument(
+        "--kappa-gm",
+        type=float,
+        default=1000.0,
+        help="GM eddy diffusivity [m^2/s] (flattens isopycnals; the lever for the "
+        "prognostic-AMOC magnitude -- try 2000-5000 to cut the overshoot)",
+    )
+    ap.add_argument(
         "--keep-thc",
         action="store_true",
         help="keep the THC closure on even with --prognostic[-spherical]",
@@ -126,7 +133,9 @@ def main_cli():
         if not args.keep_thc:
             _mom_kw["thc_k_vel"] = 0.0
     if args.prognostic_spherical:
-        _mom_kw.update(prognostic_spherical=True, ah=args.ocean_ah)
+        _mom_kw.update(
+            prognostic_spherical=True, ah=args.ocean_ah, kappa_gm=args.kappa_gm
+        )
         if not args.keep_thc:
             _mom_kw["thc_k_vel"] = 0.0
     if args.qflux is not None:

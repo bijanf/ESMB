@@ -86,6 +86,7 @@ class DinoCoupledModel:
         prognostic_momentum=False,
         prognostic_spherical=False,
         ah=2.0e5,
+        kappa_gm=1000.0,
         mom_drag=1.0 / (86400.0 * 30.0),
         seasonal=False,
         orbit=None,
@@ -129,6 +130,10 @@ class DinoCoupledModel:
         # at T31); also the diagnostic-path Ah. mom_drag retained for the old prognostic path.
         self.prognostic_spherical = prognostic_spherical
         self.ah = ah
+        # GM eddy diffusivity [m^2/s]: the lever that flattens isopycnals and cuts the
+        # coarse-resolution overturning overshoot (residual-mean). Tunable for the
+        # prognostic-AMOC magnitude (real coarse models use ~800-3000+).
+        self.kappa_gm = kappa_gm
         self.mom_drag = mom_drag
 
         nz = base.ocean.u.shape[0]
@@ -348,6 +353,7 @@ class DinoCoupledModel:
                     prognostic_momentum=self.prognostic_momentum,
                     prognostic_spherical=self.prognostic_spherical,
                     Ah=self.ah,
+                    kappa_gm=self.kappa_gm,
                     mom_drag=self.mom_drag,
                     hosing_sv=hosing_sv,
                 ),
