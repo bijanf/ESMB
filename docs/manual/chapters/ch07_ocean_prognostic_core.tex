@@ -5,22 +5,38 @@
 \providecommand{\tauy}{\tau^{y}}                 % meridional wind stress
 \providecommand{\wbc}{\delta_{\mathrm{S}}}        % Stommel western boundary-layer width
 
-The ocean velocities used by the live, coupled \model{} are \emph{diagnostic}: the
+The ocean velocities used by the production, coupled \model{} are \emph{diagnostic}: the
 horizontal flow is read off the density field through an algebraic thermal-wind inversion,
-and the overturning is closed with an interim Stommel/box parameterization
+and the overturning is closed with an interim thermohaline (THC) box parameterization
 (Chapter~\ref{chap:ch08_ocean_overturning}). That design is numerically robust but it
 breaks a property we want for tipping-point science: in the diagnostic core the sensitivity
 of the Atlantic overturning to a density perturbation, $\partial(\mathrm{AMOC})/\partial\dens$,
 is controlled by the closure rather than by momentum dynamics, so a bifurcation cannot be
 \emph{earned} by the physics. This chapter documents the prognostic-momentum ocean core that
-is being built to replace that closure. It is a set of standalone, fully differentiable
-building blocks --- a variable-coefficient elliptic solver, a prognostic barotropic
-vorticity equation, and a prognostic baroclinic momentum equation --- each validated against
-an analytic balance. \textbf{None of it is yet wired into \code{veros\_driver}/\code{main};}
-it lives apart precisely so that it can be validated with zero regression risk to the running
-model. The standard reference for every balance below is \citet{vallis2017}.
+replaces that closure with genuine dynamics. It is built in four stages (S5a--d), each
+validated standalone and now wired \emph{opt-in} into the live driver:
+\begin{itemize}
+  \item \textbf{S5a} --- a spherical, implicitly-viscous, no-slip baroclinic momentum core
+        (\code{momentum.py}): hydrostatic pressure-gradient force from density,
+        semi-implicit Coriolis, and \emph{implicit} harmonic lateral viscosity solved as a
+        Helmholtz system, so it is unconditionally stable (no viscous CFL, no polar blow-up);
+  \item \textbf{S5b} --- the prognostic transport streamfunction with a \citet{munk1950}
+        lateral-viscosity western boundary layer (\code{barotropic.py});
+  \item \textbf{S5c} --- the assembly (\code{prognostic.py}): baroclinic (depth-mean removed
+        $\to$ density-driven \emph{overturning}) plus barotropic (transport/$H$ from $\psib$
+        $\to$ wind-driven \emph{gyres}), with the \citet{gentmcwilliams1990} eddy bolus added
+        as a residual-mean, mass-conserving by construction;
+  \item \textbf{S5d} --- the opt-in wiring through \code{veros\_driver.step\_ocean}
+        (\code{prognostic\_spherical} flag) up to
+        \code{run\_dino\_control.py\ --prognostic-spherical}; default OFF, so the production
+        control still runs the THC closure with zero regression risk.
+\end{itemize}
+This is a $z$-level, hydrostatic primitive-equation ocean in the \citet{bryan1969} lineage,
+written in pure \jax{} and fully differentiable throughout
+(cf. the differentiable JAX ocean \code{Veros}, \citealp{hafner2018veros}). The standard
+reference for every balance below is \citet{vallis2017}.
 
-\section{The variable-coefficient elliptic invert}
+\section{The variable-coefficient elliptic invert}\label{sec:varcoef}
 
 A streamfunction $\psib$ is the natural prognostic object for a rotating, nearly-nondivergent
 ocean: the horizontal transport is $\uvec=\kvec\times\grad\psib$, which is divergence-free by
@@ -170,6 +186,41 @@ and $\beq\approx2\times10^{-11}\,\mathrm{m^{-1}s^{-1}}$ this gives $\wbc\approx2
 few grid cells --- just resolved.
 \codref{tests/test\_barotropic\_gyre.py}{\code{test\_stommel\_gyre\_sverdrup\_and\_western\_intensification}, spherical variant}
 
+\subsection*{S5b: the Munk lateral-viscosity boundary layer (the implemented core)}
+
+The Stommel balance above closes the western boundary layer with a Rayleigh bottom drag $r$,
+giving the width $\wbc=r/\beq$ of Eq.~\eqref{eq:wbc}. That drag is a \emph{parameterization},
+not real friction. The implemented S5b barotropic core instead closes it with a true
+\emph{lateral viscosity} $A_h$ \citep{munk1950}: the vorticity equation carries the viscous
+term $A_h\lap\vort$ (equivalently a biharmonic $A_h\nabla^{4}\psib$ on the streamfunction),
+\begin{equation}\label{eq:munk}
+  \pd{\vort}{t}=-\frac{2\Om}{\Erad^{2}}\,\pd{\psib}{\lon}-r\,\vort+F+A_h\lap\vort,
+  \qquad \vort=\diver(c\grad\psib),
+\end{equation}
+with $r$ now an optional residual drag. The western boundary layer that collects the Sverdrup
+return flow then has the \emph{Munk width}
+\begin{equation}\label{eq:munk-width}
+  \delta_{\mathrm M}=\left(\frac{A_h}{\beq}\right)^{1/3},
+\end{equation}
+the cube-root scaling that is the physical signature distinguishing the viscous (Munk)
+boundary current from the linear-drag (Stommel) one of Eq.~\eqref{eq:wbc}. The viscous term is
+treated \emph{implicitly}: $\vort^{*}$ is advanced explicitly in $\beta$-advection, drag, and
+forcing, then $(\mathrm I-\Delta t\,A_h\lap)\vort^{n+1}=\vort^{*}$ is solved per step with the
+same Jacobi-preconditioned CG Helmholtz machinery as the S5a momentum core
+(\S\ref{sec:s5a}). This removes the viscous CFL entirely, so there is no polar blow-up at any
+$A_h$. Each step closes by re-diagnosing $\psib$ from $\vort^{n+1}$ with the spherical elliptic
+invert. The result is the prognostic transport streamfunction; because the transport is
+$\uvec=\kvec\times\grad\psib$, the depth-integrated flow is non-divergent by construction.
+\codref{chronos\_esm/ocean/barotropic.py}{\code{step\_barotropic\_munk\_sphere}, \code{spin\_up\_munk\_gyre\_sphere}}
+
+The cube-root law is what the validation pins down. Spinning the Munk gyre up from rest, an
+$8\times$ increase in $A_h$ widens the western boundary current by $8^{1/3}\approx2\times$, not
+$8\times$ --- the test measures a width ratio in $[1.4,3.2]$ (theory $2.0$) and asserts it stays
+well below the linear $4\times$ a Stommel/drag closure would give, so the two closures are
+empirically distinguished. The gyre is western-intensified (jet peak in the western third) and
+the spin-up is differentiable end-to-end (finite, nonzero $\partial(\text{gyre})/\partial\tau$).
+\codref{tests/test\_barotropic\_munk.py}{\code{test\_munk\_boundary\_layer\_scaling}, \code{test\_munk\_gyre\_forms\_and\_western\_intensified}, \code{test\_munk\_gyre\_differentiable}}
+
 \begin{example}[Sverdrup transport from the wind]
 For the subtropical North Atlantic, a curl of order
 $(\curl\boldsymbol\tau)_z\sim-2\times10^{-7}\,\mathrm{N\,m^{-3}}$ over
@@ -180,7 +231,7 @@ wind-driven gyre --- and the same $30\Sv$ must return in the western boundary cu
 reproduces this partition; verify it yourself in Exercise~\ref{ex:sverdrup}.
 \end{example}
 
-\section{The prognostic baroclinic momentum equation}
+\section{S5a: the prognostic baroclinic momentum equation}\label{sec:s5a}
 
 The barotropic core fixes the gyre circulation but not the overturning, which is set by
 \emph{density gradients} acting through the vertical structure of the flow. This is the role of
@@ -255,6 +306,40 @@ separate test confirms the semi-implicit Coriolis stays bounded ($|\uu|<5\,\math
 timestep that would explode under explicit Coriolis.
 \codref{tests/test\_momentum.py}{\code{test\_thermal\_wind\_balance}, \code{test\_coriolis\_semi\_implicit\_stable}}
 
+\subsection*{Spherical metric and implicit no-slip viscosity (the implemented core)}
+
+The Cartesian step above is the prototype; the core actually wired into the model is its
+\emph{spherical} sibling, which adds two things the live grid demands. First, the
+pressure-gradient force carries the spherical metric,
+\begin{equation}\label{eq:pgf-sphere}
+  a_\lon=-\frac{1}{\densz\,\Erad\cos\lat}\pd{\pres}{\lon},\qquad
+  a_\lat=-\frac{1}{\densz\,\Erad}\pd{\pres}{\lat},
+\end{equation}
+with $\cos\lat$ floored at \code{cos\_min}$=0.087$ ($\approx85^\circ$) to keep the polar
+factor finite, matching the elliptic solver's metric. Second, and decisively for stability, the
+lateral viscosity $A_h\lap\uvec$ is treated \emph{implicitly}. An \emph{explicit} harmonic
+viscosity has a diffusive CFL $\Delta t\,A_h/\Delta x^2\lesssim\tfrac14$ that collapses at the
+poles where the zonal grid spacing $\Erad\cos\lat\,\Delta\lon\to0$; the earlier explicit-viscosity
+ocean core went NaN there. The implemented core instead solves, per level, the Helmholtz system
+\begin{equation}\label{eq:helmholtz-visc}
+  \big(\mathrm I-\Delta t\,A_h\,\lap\big)\,\uvec^{n+1}=\uvec^{*},
+\end{equation}
+with $\uvec^{*}$ the velocity after the pressure-gradient, drag, and Coriolis updates. The
+operator is the same area-weighted, symmetric, SPD spherical Laplacian as the elliptic invert
+(\S\ref{sec:s5a} above and \code{solver.py}), so the same Jacobi-preconditioned CG inverts it.
+Because Eq.~\eqref{eq:helmholtz-visc} is backward-Euler in the diffusion, it is unconditionally
+stable for \emph{any} $A_h$ and $\Delta t$ --- there is no viscous CFL and no polar blow-up.
+\codref{chronos\_esm/ocean/momentum.py}{\code{pgf\_sphere}, \code{implicit\_viscosity\_sphere}, \code{step\_momentum\_sphere}, \code{spin\_up\_sphere}}
+
+The viscous Laplacian sees land and grid edges as zero-velocity neighbours, which imposes a
+\emph{no-slip} boundary condition: tangential flow vanishes at the coast, so a frictional
+(Munk-type) western boundary layer forms in the baroclinic field as well, rather than the
+unphysical free-slip wall a masked (no-flux) Laplacian would give. The validation confirms the
+Helmholtz solve recovers a manufactured no-slip solution, that the integration is pole-stable
+where an explicit scheme is not, that $A_h$ acts as a controlled lever on the spurious transport,
+and that the whole spin-up is differentiable in the density and viscosity.
+\codref{tests/test\_momentum\_sphere.py}{\code{test\_implicit\_viscosity\_solves\_helmholtz\_with\_noslip}, \code{test\_spin\_up\_is\_pole\_stable}, \code{test\_viscosity\_reduces\_spurious\_transport}, \code{test\_spin\_up\_differentiable}}
+
 \begin{proposition}[Density drives a clean overturning]
 Couple the baroclinic shear of Eq.~\eqref{eq:thermal-wind} to mass continuity. A meridional
 density (hence buoyancy) contrast sets, via thermal wind, a sheared meridional flow; continuity
@@ -267,27 +352,79 @@ the precondition for a clean, rather than closure-imposed, AMOC bifurcation
 where the overturning--density relation is \emph{postulated}.
 \end{proposition}
 
-\section{Status: validated standalone, not yet wired in}
+\section{S5c: assembling the prognostic ocean}\label{sec:s5c}
 
-To be unambiguous: the three components above (\code{solver.py}, \code{barotropic.py},
-\code{momentum.py}) are validated against the Stommel/Sverdrup gyre balance, manufactured elliptic
-solutions, and thermal-wind balance, and every piece is differentiable end-to-end (the gyre
-amplitude has a finite, nonzero gradient with respect to the wind-stress amplitude; the momentum
-solution with respect to the density forcing). They are \textbf{not} called by the live ocean driver
-\code{veros\_driver} or by \code{main.step\_coupled}. The coupled model still uses the diagnostic
-thermal-wind velocities plus the interim box overturning closure of
-Chapter~\ref{chap:ch08_ocean_overturning}. Wiring the prognostic core into the live model ---
-replacing the algebraic inversion with the time-integrated barotropic$+$baroclinic split, on the
-real bathymetric $c=1/\dep$ over the spherical grid --- is the next major ocean milestone. Until
-then this chapter documents a tested, trustworthy laboratory, not a production path.
+The two cores are combined into a single mass-conserving step. The total horizontal velocity is
+split into a \emph{baroclinic} (vertically-sheared, depth-mean zero) part that carries the
+density-driven overturning and a \emph{barotropic} (depth-uniform) part that carries the
+wind-driven gyres,
+\begin{equation}\label{eq:split}
+  \uvec=\uvec_{\mathrm{bc}}+\uvec_{\mathrm{bt}},\qquad
+  \langle\uvec_{\mathrm{bc}}\rangle_z=0,\qquad
+  \uvec_{\mathrm{bt}}=\frac{1}{\dep}\,\kvec\times\grad\psib .
+\end{equation}
+Each step: (i) the depth mean is removed from $\uvec$, the residual is advanced one
+\code{step\_momentum\_sphere} step (S5a) under the density pressure-gradient force, and the depth
+mean is re-removed so the baroclinic mode stays strictly $\langle\cdot\rangle_z=0$ --- the
+barotropic pressure gradient, which is balanced by the unknown rigid-lid surface pressure, drops
+out with the depth mean and never has to be solved for; (ii) the Munk barotropic streamfunction
+(S5b) is sub-stepped under the wind-stress curl forcing (the barotropic mode is the fast
+Rossby/topographic-wave mode, so it is integrated \code{n\_bt\_sub} times per baroclinic step with
+a weak residual drag), giving $\uvec_{\mathrm{bt}}=(\kvec\times\grad\psib)/\dep$; (iii) the two are
+summed. The depth-integrated transport is $\dep\,\uvec_{\mathrm{bt}}=\kvec\times\grad\psib$, which
+is non-divergent \emph{by construction} --- exact rigid-lid mass conservation with no projection
+step or corrector needed.
+\codref{chronos\_esm/ocean/prognostic.py}{\code{step\_prognostic\_dynamics}, \code{spin\_up\_prognostic\_dynamics}}
 
-The differentiability is not incidental. Because both inverts and both time-steppers are written in
+Finally the \citet{gentmcwilliams1990} eddy-induced (bolus) velocity is added as a
+\emph{residual mean}: $\uvec_{\mathrm{res}}=\uvec_{\mathrm{mean}}+\uvec^{*}$, where the bolus
+$\uvec^{*}$ has zero depth integral (it adiabatically stirs isopycnals and opposes the steep mean
+overturning) so it transports tracers without changing the depth-integrated mass budget. This is
+the same GM core as Chapter~\ref{chap:ch05_ocean_mixing} (\code{ocean/gm.py}), entering here as a
+residual-mean correction to the prognostic velocity rather than as a tracer-only flux
+\citep{gentmcwilliams1990,griffies2004}. The assembled step is verified to be bounded and stable,
+to change the circulation when GM is switched on, and to be differentiable end-to-end.
+\codref{tests/test\_prognostic.py}{\code{test\_prognostic\_baroclinic\_stable\_and\_bounded}, \code{test\_prognostic\_gm\_changes\_circulation\_stably}, \code{test\_prognostic\_differentiable}}
+
+\section{S5d: opt-in wiring into the live model}\label{sec:s5d}
+
+The assembled core is wired into the coupled model behind a default-off flag, so the production
+control run is untouched. \code{veros\_driver.step\_ocean} takes a \code{prognostic\_spherical}
+switch that, when set, replaces the diagnostic thermal-wind velocities with one
+\code{step\_prognostic\_dynamics} step (reusing the existing tracer advection, convective
+adjustment, surface restoring, vertical velocity from continuity, and checkpointing unchanged).
+The switch is threaded up through \code{DinoCoupledModel} to the control harness as
+\code{run\_dino\_control.py\ --prognostic-spherical} (with \code{--ocean-ah} setting the Munk
+viscosity $A_h$). With the flag off --- the default --- the model runs exactly the THC box closure
+of Chapter~\ref{chap:ch08_ocean_overturning} as before.
+\codref{chronos\_esm/ocean/veros\_driver.py}{\code{step\_ocean} \code{prognostic\_spherical} branch}
+\codref{experiments/run\_dino\_control.py}{\code{--prognostic-spherical}, \code{--ocean-ah}}
+
+\begin{remark}[Honest status: prognostic, but not yet a tuned magnitude]
+The overturning produced by S5a--d is genuinely \emph{prognostic}: density drives it through the
+momentum balance of Eq.~\eqref{eq:momentum}, not through the prescribed
+$k_{\mathrm{vel}}\,\softplus(\text{contrast})$ box closure. That is the property the chapter set
+out to earn. Three caveats must be stated plainly. (1) On the \emph{fixed} observed WOA18 density
+field the core gives an overturning of order $160\Sv$ --- too strong, because the observed density
+has sharper gradients than a coarse, viscous model can sustain in balance. A realistic magnitude
+requires letting $T/S$ relax to the model's \emph{own} equilibrium in a free (q-flux) spin-up;
+that run is in progress on the GPU cluster and is \emph{not} yet equilibrated, so no tuned,
+realistic prognostic AMOC is claimed here. (2) The barotropic operator is run with a
+\emph{flat-bottom} coefficient ($c=1$); the topographic $c=1/\dep$ (the JEBAR form of
+\S\ref{sec:varcoef}) is ill-conditioned over real bathymetry and is deferred. (3) Consequently the
+\emph{production} coupled control --- the THC closure, default path --- remains the validated one:
+it gives a realistic AMOC of $19.35\Sv$ at $26.5^\circ$N (below-$500$\,m, per-column metric;
+RAPID observed $\approx15$--$20\Sv$) at $130$-year equilibrium. The prognostic core is correct,
+stable, and differentiable; its magnitude is not yet tuned.
+\end{remark}
+
+The differentiability is not incidental. Because both inverts and all time-steppers are written in
 pure \jax{} with \code{lax.scan} loops, the entire (density$\to$velocity$\to$transport) chain admits
 reverse-mode gradients, which is what will let later chapters fit the core to observations and probe
 the tipping manifold (Chapters~\ref{chap:ch15_differentiable_applications},
-\ref{chap:ch17_amoc_tipping}). For the GM/Redi eddy parameterization that the prognostic core will
-ultimately interact with, see Chapter~\ref{chap:ch05_ocean_mixing} and
-\citet{gentmcwilliams1990,griffies2004}.
+\ref{chap:ch17_amoc_tipping}); cf. the differentiable JAX ocean \code{Veros}
+\citep{hafner2018veros}, of which this is a $z$-level, hydrostatic relative
+\citep{bryan1969}.
 
 \section*{Exercises}
 

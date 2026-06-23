@@ -32,11 +32,21 @@ The model runs at T31 ($\sim 3.75\degr$), chosen so it can integrate hundreds of
 years per GPU-day. At this resolution it cannot resolve SST fronts, mesoscale
 ocean eddies, tropical cyclones, or sharp orographic precipitation. Mesoscale
 eddies are carried only through the Gent--McWilliams parameterization
-(Chapter~\ref{chap:ch05_ocean_mixing}). A more fundamental consequence is in the
-ocean dynamics: at T31 the fully prognostic-momentum core gives a geostrophic
-overturning $20$--$40\times$ too large, so the \emph{production} AMOC is supplied
-by a thermohaline closure instead (cross-referenced in
-Chapters~\ref{chap:ch08_ocean_overturning} and \ref{chap:ch17_amoc_tipping}).
+(Chapter~\ref{chap:ch05_ocean_mixing}). The ocean dynamics carry a related
+caveat. A full spherical \emph{prognostic} ocean core --- an implicit-viscous
+no-slip baroclinic momentum balance, a Munk-boundary-layer transport
+streamfunction, and GM, mass-conserving by construction --- is now implemented
+and wired opt-in (\code{run\_dino\_control --prognostic-spherical}; see
+Chapter~\ref{chap:ch07_ocean_prognostic_core}). It is genuinely density-driven:
+the overturning emerges from the momentum balance, not from a box closure. Its
+realistic \emph{magnitude}, however, is still being established through a free
+(q-flux) spin-up --- on the fixed observed WOA density the geostrophic transport
+overshoots to $\sim 160\Sv$, because the observed density has sharper gradients
+than a coarse viscous model can sustain. The \emph{production} default therefore
+remains the thermohaline closure, which at $130$-yr equilibrium gives a realistic
+AMOC of $19.35\Sv$ at $26.5\degr$N (below-$500$~m, per-column metric; within the
+RAPID observed $\sim 15$--$20\Sv$ range), cross-referenced in
+Chapters~\ref{chap:ch08_ocean_overturning} and \ref{chap:ch17_amoc_tipping}.
 
 % ----------------------------------------------------------------------
 \section{Atmosphere}\label{sec:appE_atmosphere}
