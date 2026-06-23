@@ -223,6 +223,121 @@ def rigid_lid_project(u, v, dz, dx, dy, maskC, max_iter=300, tol=1e-7):
     return u_out, v_out
 
 
+# ---------------------------------------------------------------------------
+# MUNK barotropic streamfunction (P3 / S5b): the Stommel cores above close the
+# western boundary layer with a Rayleigh drag r (Stommel width delta_S = r/beta),
+# which is a parameterization, not real friction. The Munk balance closes it with
+# LATERAL VISCOSITY A_h instead (Munk width delta_M = (A_h/beta)^(1/3)) -- the
+# physical boundary current. Added as A_h*lap(zeta) in the vorticity equation,
+# solved IMPLICITLY (reusing the S5a Helmholtz machinery) so there is no viscous
+# CFL / polar blow-up. This is the prognostic transport streamfunction.
+# ---------------------------------------------------------------------------
+from chronos_esm.ocean.momentum import implicit_viscosity_sphere  # noqa: E402
+
+
+def step_barotropic_munk_sphere(
+    zeta,
+    psi,
+    F,
+    *,
+    lat,
+    dlon,
+    dlat,
+    a,
+    omega,
+    dt,
+    r,
+    A_h,
+    mask,
+    coef,
+    max_iter=600,
+    tol=1e-8,
+    visc_iter=200,
+    visc_tol=1e-8,
+):
+    """One step of the barotropic vorticity equation with MUNK lateral viscosity:
+        d zeta/dt = -(2 Omega/a^2) dpsi/dlon - r zeta + F + A_h lap(zeta),
+        zeta = div(coef grad psi).
+    The implicit A_h*lap(zeta) term gives a western boundary layer of Munk width
+    (A_h/beta)^(1/3); r is an optional residual drag. Returns (zeta_new, psi_new)."""
+    beta_v = (2.0 * omega / a**2) * ddx_centered(psi, dlon)
+    tend = (-beta_v - r * zeta + F) * mask
+    zeta_star = (zeta + dt * tend) * mask
+    if A_h > 0.0:
+        zeta_star = implicit_viscosity_sphere(
+            zeta_star[None],
+            dt * A_h,
+            lat,
+            dlon,
+            dlat,
+            a,
+            mask[None],
+            visc_iter,
+            visc_tol,
+        )[0]
+    psi_new, _ = solve_elliptic_varcoef_sphere(
+        coef,
+        zeta_star,
+        lat,
+        dlon,
+        dlat,
+        a,
+        mask=mask,
+        x0=psi,
+        max_iter=max_iter,
+        tol=tol,
+    )
+    return zeta_star, psi_new
+
+
+def spin_up_munk_gyre_sphere(
+    F,
+    *,
+    lat,
+    dlon,
+    dlat,
+    a,
+    omega,
+    dt,
+    r,
+    A_h,
+    mask,
+    coef,
+    n_steps,
+    max_iter=600,
+    visc_iter=200,
+):
+    """Integrate the Munk barotropic gyre from rest to (near) steady state.
+    Returns (psi, zeta). Differentiable (lax.scan)."""
+    ny, nx = F.shape
+    z0 = jnp.zeros((ny, nx), F.dtype)
+    p0 = jnp.zeros((ny, nx), F.dtype)
+
+    def body(carry, _):
+        z, p = carry
+        z, p = step_barotropic_munk_sphere(
+            z,
+            p,
+            F,
+            lat=lat,
+            dlon=dlon,
+            dlat=dlat,
+            a=a,
+            omega=omega,
+            dt=dt,
+            r=r,
+            A_h=A_h,
+            mask=mask,
+            coef=coef,
+            max_iter=max_iter,
+            visc_iter=visc_iter,
+        )
+        return (z, p), None
+
+    (zeta, psi), _ = jax.lax.scan(body, (z0, p0), None, length=n_steps)
+    return psi, zeta
+
+
 __all__ = [
     "wind_stress_curl",
     "velocities_from_psi",
@@ -235,4 +350,6 @@ __all__ = [
     "step_barotropic_sphere",
     "spin_up_gyre_sphere",
     "rigid_lid_project",
+    "step_barotropic_munk_sphere",
+    "spin_up_munk_gyre_sphere",
 ]
