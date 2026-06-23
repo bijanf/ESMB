@@ -29,6 +29,7 @@ import jax
 import jax.numpy as jnp
 
 from chronos_esm.ocean import barotropic as bt
+from chronos_esm.ocean import gm
 from chronos_esm.ocean.momentum import OMEGA, RHO0, step_momentum_sphere
 
 
@@ -67,6 +68,7 @@ def step_prognostic_dynamics(
     r_bc=0.0,
     r_bt=0.0,
     n_bt_sub=1,
+    kappa_gm=0.0,
     visc_iter=120,
     bt_max_iter=400,
     bt_visc_iter=120,
@@ -150,6 +152,19 @@ def step_prognostic_dynamics(
     # --- 3. total velocity = baroclinic + barotropic ---------------------------
     u_new = (u_bc + u_bt2) * mask3d
     v_new = (v_bc + v_bt2) * mask3d
+
+    # --- 4. GM eddy-induced (bolus) velocity -> RESIDUAL-mean -------------------
+    # The eddy bolus (depth-integral zero) flattens isopycnals and opposes the steep
+    # mean overturning; adding it gives the residual velocity that transports tracers
+    # and sets the residual AMOC. (At T31 the bolus MOC is modest; the large-scale
+    # magnitude is ultimately set once T/S evolve to the model's own equilibrium.)
+    if kappa_gm > 0.0:
+        dx3 = gm.latitude_dx(rho.shape[1], rho.shape[2])
+        u_star, v_star = gm.eddy_induced_velocity(
+            kappa_gm, rho, dx3, a * dlat, jnp.asarray(dz), maskC=mask3d
+        )
+        u_new = (u_new + u_star) * mask3d
+        v_new = (v_new + v_star) * mask3d
     return u_new, v_new, psi, zeta
 
 
@@ -174,6 +189,7 @@ def spin_up_prognostic_dynamics(
     r_bc=0.0,
     r_bt=0.0,
     n_bt_sub=1,
+    kappa_gm=0.0,
     visc_iter=120,
     bt_max_iter=400,
     bt_visc_iter=120,
@@ -211,6 +227,7 @@ def spin_up_prognostic_dynamics(
             r_bc=r_bc,
             r_bt=r_bt,
             n_bt_sub=n_bt_sub,
+            kappa_gm=kappa_gm,
             visc_iter=visc_iter,
             bt_max_iter=bt_max_iter,
             bt_visc_iter=bt_visc_iter,

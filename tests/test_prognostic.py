@@ -67,6 +67,35 @@ def test_prognostic_baroclinic_stable_and_bounded():
     assert float(jnp.std(bc)) > 0.0
 
 
+def test_prognostic_gm_changes_circulation_stably():
+    """Turning on the GM eddy bolus (kappa_gm>0) alters the overturning while staying
+    finite -- the residual-mean coupling is wired in and stable."""
+    rho = _density()
+    mask = _mask()
+    zero = jnp.zeros((NY, NX))
+    kw = dict(
+        lat=LAT,
+        dlon=DLON,
+        dlat=DLAT,
+        a=A,
+        dz=DZ,
+        dt=1800.0,
+        A_h_bc=5.0e6,
+        A_h_bt=5.0e6,
+        mask3d=mask,
+        n_steps=25,
+        visc_iter=80,
+    )
+    _, v0, _, _ = prognostic.spin_up_prognostic_dynamics(
+        rho, zero, zero, kappa_gm=0.0, **kw
+    )
+    _, vg, _, _ = prognostic.spin_up_prognostic_dynamics(
+        rho, zero, zero, kappa_gm=1000.0, **kw
+    )
+    assert bool(jnp.isfinite(vg).all())
+    assert float(jnp.std((vg - v0) * mask)) > 0.0  # GM altered the circulation
+
+
 def test_prognostic_differentiable():
     """d(circulation)/d(density) flows through the assembled spin-up."""
     rho0 = _density()
