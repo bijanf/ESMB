@@ -342,6 +342,11 @@ def solve_helmholtz(
     """
     Solve the Helmholtz equation (nabla^2 - gamma) x = rhs for x.
 
+    RESEARCH / UNUSED: provided for a future semi-implicit atmospheric time step;
+    the active `dynamics.step_atmos` is forward Euler and never calls this (at
+    dt=30 s the gravity-wave CFL is tiny, so semi-implicit was not needed). Kept
+    for when the time step is raised.
+
     Uses the same FFT-in-x + tridiagonal-in-y approach as inverse_laplacian,
     but with the modified main diagonal: -(2 + kx^2*dy^2 + gamma*dy^2).
 

@@ -1,7 +1,12 @@
 """
 QTCM (Quasi-Equilibrium Tropical Circulation Model) Stepper.
 
-Main driver for the atmospheric component.
+LEGACY / NOT THE ACTIVE ATMOSPHERE. This single-level QTCM-style stepper
+(after Neelin & Zeng 2000) is superseded: the active coupled atmosphere is the
+multi-level `dinosaur` dycore (`chronos_esm/atmos/dino_atmos.py`), and the legacy
+single-level path uses `chronos_esm/atmos/dynamics.py`. This module is retained
+only for regression tests (`tests/test_atmos.py`); it is not imported by
+`main.py` or the coupled model. See `docs/ATTRIBUTION.md`.
 """
 
 from functools import partial

@@ -27,7 +27,10 @@ def sample_at_coords(
         lon_grid: Grid longitudes (nx,) or (ny, nx)
         target_lats: Target latitudes (n_obs,)
         target_lons: Target longitudes (n_obs,)
-        method: 'nearest' or 'bilinear' (bilinear not fully impl in this snippet)
+        method: 'nearest' (default) or 'bilinear'. Bilinear interpolates the four
+            surrounding cells (periodic in longitude, clamped in latitude) and is
+            smooth in the target coordinates -- preferred when a gradient w.r.t. the
+            sampled value or a sub-grid observation location is needed.
 
     Returns:
         sampled_values: Values at target locations (n_obs,)
@@ -56,16 +59,34 @@ def sample_at_coords(
     else:
         raise NotImplementedError("Only 1D lat/lon grids supported")
 
-    # Nearest neighbor
-    y_idx_int = jnp.round(y_idx).astype(int)
-    x_idx_int = jnp.round(x_idx).astype(int)
-
-    # Clip to bounds
     ny, nx = field.shape
-    y_idx_int = jnp.clip(y_idx_int, 0, ny - 1)
-    x_idx_int = jnp.clip(x_idx_int, 0, nx - 1)  # Periodic handling needed for lon?
 
-    return field[y_idx_int, x_idx_int]
+    if method == "nearest":
+        y_idx_int = jnp.clip(jnp.round(y_idx).astype(int), 0, ny - 1)
+        x_idx_int = jnp.clip(jnp.round(x_idx).astype(int), 0, nx - 1)
+        return field[y_idx_int, x_idx_int]
+
+    if method == "bilinear":
+        # Four-corner weighted average; latitude clamped, longitude periodic.
+        y0f = jnp.floor(y_idx)
+        x0f = jnp.floor(x_idx)
+        wy = y_idx - y0f
+        wx = x_idx - x0f
+        y0 = jnp.clip(y0f.astype(int), 0, ny - 1)
+        y1 = jnp.clip((y0f + 1).astype(int), 0, ny - 1)
+        x0 = jnp.mod(x0f.astype(int), nx)  # periodic longitude
+        x1 = jnp.mod((x0f + 1).astype(int), nx)
+        f00 = field[y0, x0]
+        f01 = field[y0, x1]
+        f10 = field[y1, x0]
+        f11 = field[y1, x1]
+        top = f00 * (1.0 - wx) + f01 * wx
+        bot = f10 * (1.0 - wx) + f11 * wx
+        return top * (1.0 - wy) + bot * wy
+
+    raise ValueError(
+        f"Unknown sampling method {method!r} (use 'nearest' or 'bilinear')"
+    )
 
 
 def create_mask(

@@ -1,0 +1,118 @@
+\chapter{Model Limitations and Honest Caveats}\label{chap:appE_limitations}
+
+A research model earns trust by being explicit about what it does \emph{not} do.
+The honest caveats that appear in context throughout the manual are consolidated
+here as a single back-matter reference. None of them is hidden; each is documented
+at its point of use and pointed to below. Read together, they fix the scientific
+tier of \model{}: an EMIC-class, idealized coupled GCM for teaching and for
+process and sensitivity studies, not a CMIP-class production Earth System Model.
+
+% ----------------------------------------------------------------------
+\section{Radiation and climate sensitivity}\label{sec:appE_radiation}
+% ----------------------------------------------------------------------
+
+\model{} has no multi-band radiative-transfer scheme and \emph{no top-of-atmosphere
+energy closure}. The CO\textsubscript{2} response is injected as a single
+surface-heat channel, so there is no Gregory regression, no effective radiative
+forcing, and no feedback parameter $\lambda$. The reported
+$0.43\,\mathrm{K\,(W\,m^{-2})^{-1}}$ is therefore a transient, TCR-like
+surface-forcing \emph{proxy} computed about a (cold-tropics) base state, not a
+calibrated equilibrium climate sensitivity (ECS) or transient climate response
+(TCR): the water-vapour, lapse-rate, cloud and albedo feedbacks that amplify the
+response in a full GCM are simply absent. The driver itself prints
+``TCR-like proxy, NOT equilibrium ECS''. See
+Chapter~\ref{chap:ch14_forcing_response} (\S\ref{sec:f14_honesty}) for the full
+discussion.
+
+% ----------------------------------------------------------------------
+\section{Resolution}\label{sec:appE_resolution}
+% ----------------------------------------------------------------------
+
+The model runs at T31 ($\sim 3.75\degr$), chosen so it can integrate hundreds of
+years per GPU-day. At this resolution it cannot resolve SST fronts, mesoscale
+ocean eddies, tropical cyclones, or sharp orographic precipitation. Mesoscale
+eddies are carried only through the Gent--McWilliams parameterization
+(Chapter~\ref{chap:ch05_ocean_mixing}). A more fundamental consequence is in the
+ocean dynamics: at T31 the fully prognostic-momentum core gives a geostrophic
+overturning $20$--$40\times$ too large, so the \emph{production} AMOC is supplied
+by a thermohaline closure instead (cross-referenced in
+Chapters~\ref{chap:ch08_ocean_overturning} and \ref{chap:ch17_amoc_tipping}).
+
+% ----------------------------------------------------------------------
+\section{Atmosphere}\label{sec:appE_atmosphere}
+% ----------------------------------------------------------------------
+
+The atmosphere uses single-humidity-column physics and produces a weak ITCZ
+(precipitation too dry and displaced into the subtropics). The active multi-level
+\dino{} spectral dycore fixes the structural gap of the legacy single-level
+atmosphere --- it generates baroclinic eddies, jets and synoptic systems --- but
+surface wind and mean-sea-level-pressure skill remains limited because the smoothed
+T31 equator-to-pole SST gradient is too weak to build the observed mid-latitude
+surface westerlies from the resolved eddy momentum flux
+(Chapter~\ref{chap:ch18_jets_stormtracks}).
+
+% ----------------------------------------------------------------------
+\section{Ocean}\label{sec:appE_ocean}
+% ----------------------------------------------------------------------
+
+The ocean uses a linear equation of state, and the vertical bolus velocity
+$w^\star$ is not formed from the Gent--McWilliams closed-form expression but
+recovered from continuity of the combined (resolved-plus-bolus) flow, so GM enters
+as a velocity rather than as a per-tracer skew-flux
+(Chapter~\ref{chap:ch05_ocean_mixing}). The control climate is maintained by a
+q-flux / flux-corrected restoring rather than by a fully free, CMIP-style
+pre-industrial control: this pins the global mean and frees the SST enough to give
+an honest forced response, but it is not an unconstrained \code{piControl}.
+
+% ----------------------------------------------------------------------
+\section{AMOC}\label{sec:appE_amoc}
+% ----------------------------------------------------------------------
+
+The Atlantic overturning is an \emph{interim} density-scaled thermohaline closure,
+not resolved circulation. As its source docstring states plainly, it adds a
+depth-integral-zero meridional overturning velocity over the Atlantic whose
+strength scales with the subpolar-minus-subtropical upper-ocean density contrast,
+with a \emph{prescribed} vertical shape but a physical strength and sensitivity and
+a tunable bistability. AMOC tipping therefore does \emph{not} emerge from resolved
+prognostic momentum; it is engineered into a Stommel/Marotzke-style box closure to
+unblock density-responsiveness and tipping experiments
+(Chapter~\ref{chap:ch17_amoc_tipping}). The fully prognostic-momentum core
+(JEBAR barotropic-vorticity solver plus a $\dt{\uvec}$ momentum core) is still
+under construction.
+\codref{chronos\_esm/ocean/overturning.py}{interim density-scaled THC closure (P3/S1)}
+
+% ----------------------------------------------------------------------
+\section{Earth-system completeness}\label{sec:appE_completeness}
+% ----------------------------------------------------------------------
+
+\model{} is a coupled physical climate model, not yet a full Earth System Model in
+the CMIP sense. Dissolved inorganic carbon is advected as a \emph{passive} tracer:
+there is no air--sea gas exchange and no interactive carbon cycle. Sea ice uses
+simplified Semtner thermodynamics with no ice \emph{dynamics}. The land surface is
+a bucket model. There is no aerosol, ozone, volcanic or land-use forcing, which
+limits fidelity for historical and scenario integrations. Atmospheric chemistry,
+dynamic vegetation and ice sheets are absent or stubbed
+(Chapter~\ref{chap:ch20_cmip7}, \S\ref{sec:c20_sci}).
+
+% ----------------------------------------------------------------------
+\section{Numerics}\label{sec:appE_numerics}
+% ----------------------------------------------------------------------
+
+To keep the model cleanly differentiable end to end, the iterative solvers use a
+\emph{fixed} iteration count rather than data-dependent convergence loops: the
+conjugate-gradient and \code{lax.scan}-based solvers run a frozen number of
+iterations instead of \code{while}-loop tolerance tests. This makes the
+computational graph static and reverse-mode-differentiable, at the cost of treating
+solver convergence as a tuned constant rather than a checked condition.
+
+% ----------------------------------------------------------------------
+
+\begin{remark}[These limits are documented, not hidden]
+Every caveat above is stated at its point of use in the body of the manual and,
+where it is a code-level choice, in the source docstrings themselves. They define
+the model's scientific scope rather than disqualify it: \model{} is positioned in
+the EMIC / idealized-GCM tier, where a fast, fully differentiable, honestly
+bounded coupled model is precisely the right instrument for teaching and for
+process- and sensitivity-study research --- not a substitute for a CMIP-class
+production ESM.
+\end{remark}

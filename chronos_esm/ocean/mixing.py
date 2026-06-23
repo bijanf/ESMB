@@ -2,9 +2,17 @@
 Differentiable mixing schemes for the Ocean component.
 
 Implements:
-1. Isopycnal diffusion (Redi)
-2. Gent-McWilliams (GM) parameterization
+1. Isopycnal diffusion (Redi 1982)
+2. Gent-McWilliams (GM 1990) parameterization
 3. Differentiable slope limiters
+4. Convective adjustment (`compute_vertical_diffusivity`)
+
+ACTIVE vs LEGACY: `compute_vertical_diffusivity` (the smooth convective-adjustment
+ramp) is on the active `step_ocean` path. The isopycnal-slope / GM-bolus helpers
+here (`compute_isopycnal_slopes`, `compute_gm_bolus_velocity`) are the LEGACY,
+default-off GM path -- the tapered, latitude-aware GM used when `gm_on=True` lives
+in `chronos_esm/ocean/gm.py` and supersedes them. The Redi tensor rotation is
+research code (not wired into the default tracer step). See `docs/ATTRIBUTION.md`.
 """
 
 from typing import Tuple

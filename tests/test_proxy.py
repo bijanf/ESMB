@@ -42,6 +42,31 @@ class TestProxyOps:
         expected = -1.0 / 4.8
         assert jnp.isclose(grad, expected)
 
+    def test_salinity_to_d18o_sw(self):
+        """Linear seawater d18O--salinity relation (LeGrande & Schmidt 2006)."""
+        salt = jnp.array([34.0, 35.0, 36.0])
+        d18o_sw = forward_ops.salinity_to_d18o_sw(salt)
+        # 0 at the reference salinity, slope 0.5 permil/psu, saltier -> heavier.
+        assert jnp.isclose(d18o_sw[1], 0.0)
+        assert jnp.isclose(d18o_sw[0], -0.5)
+        assert jnp.isclose(d18o_sw[2], 0.5)
+        assert d18o_sw[2] > d18o_sw[0]
+        # differentiable in salinity with gradient == slope
+        g = jax.grad(lambda s: forward_ops.salinity_to_d18o_sw(s).sum())(salt)
+        assert jnp.allclose(g, 0.5)
+
+    def test_full_chain_differentiable(self):
+        """S -> d18O_sw -> d18O_calcite chain flows a gradient end to end."""
+
+        def chain(sst_c, salt):
+            return forward_ops.bemis_d18o(sst_c, forward_ops.salinity_to_d18o_sw(salt))
+
+        # d(d18Oc)/dS = slope = 0.5 ; d(d18Oc)/dT = -1/4.8
+        gs = jax.grad(chain, argnums=1)(20.0, 35.0)
+        gt = jax.grad(chain, argnums=0)(20.0, 35.0)
+        assert jnp.isclose(gs, 0.5)
+        assert jnp.isclose(gt, -1.0 / 4.8)
+
 
 class TestSensor:
     """Test sensor masking and sampling."""
@@ -64,6 +89,38 @@ class TestSensor:
         )
 
         assert jnp.isclose(val[0], 1.0)
+
+    def test_sample_bilinear(self):
+        """Bilinear sampling interpolates between cells and stays differentiable."""
+        lat_grid = jnp.array([0.0, 10.0, 20.0])
+        lon_grid = jnp.array([0.0, 10.0, 20.0])
+        # field linear in the latitude index: row r has value r
+        field = jnp.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]])
+
+        # Target at lat=5 (halfway between rows 0 and 1) -> 0.5
+        val = sensor.sample_at_coords(
+            field,
+            lat_grid,
+            lon_grid,
+            jnp.array([5.0]),
+            jnp.array([5.0]),
+            method="bilinear",
+        )
+        assert jnp.isclose(val[0], 0.5)
+
+        # gradient of the sampled value w.r.t. the field is nonzero (interpolating)
+        def sampled(f):
+            return sensor.sample_at_coords(
+                f,
+                lat_grid,
+                lon_grid,
+                jnp.array([5.0]),
+                jnp.array([5.0]),
+                method="bilinear",
+            )[0]
+
+        g = jax.grad(sampled)(field)
+        assert float(jnp.sum(g)) > 0.0
 
 
 class TestLoss:

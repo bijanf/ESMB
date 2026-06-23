@@ -94,6 +94,55 @@ A theme of Part~III is that differentiability is powerful but not free: some tar
 bifurcations such as an AMOC collapse --- are non-smooth, and require the right formulation
 (fold continuation) rather than naive backpropagation through a long integration.
 
+\section{What is original to \model{}?}
+\label{sec:original_contributions}
+
+It is important to be honest about where \model{} stands relative to the literature. The
+governing physics is, almost entirely, \emph{standard and published}: the spectral
+primitive-equation atmosphere is Google's \dino{} dycore --- the differentiable core behind
+NeuralGCM \citep{kochkov2024neuralgcm} --- used essentially as-is; the ocean follows the same
+$z$-level Boussinesq tradition as Veros \citep{hafner2018veros}, down to a comparable
+Gent--McWilliams eddy closure. \model{} is best understood not as new climate physics but as a
+differentiable \emph{coupling and diagnostics layer} wrapped around mostly third-party,
+peer-reviewed components. Within that framing, the genuinely original or distinguishing
+contributions are:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{End-to-end differentiable coupling.} A single \jax{} program couples ocean,
+    coupler, sea ice, and land around the (already-differentiable) \dino{} atmosphere, so that a
+    gradient propagates cleanly through the \emph{entire} coupled system --- not just one
+    component. The synthesis, not any one part, is the artifact.
+  \item \textbf{The THC-inertia coupled-AMOC fix.} A diagnosis that the coupled overturning's
+    large temporal swings were numerical \emph{noise} rather than a wrong mean, resolved by
+    giving the thermohaline closure physical inertia (a standard relaxation timescale, not a new
+    parameterization). See Chapter~\ref{chap:ch08_ocean_overturning}.
+  \item \textbf{The per-column AMOC diagnostic.} An engineering fix to the overturning
+    diagnostic that removes the barotropic gyre on a per-column basis over variable bathymetry,
+    together with a corrected RAPID-array sign convention. This is a measurement fix, not a
+    physical advance.
+  \item \textbf{A consistent family of AD-safe smooth substitutions.} Clamps, masks, and
+    branches throughout the model are replaced by differentiable surrogates so that gradients do
+    not silently vanish or blow up; these are catalogued in \S\ref{sec:adsafe_substitutions}.
+  \item \textbf{Differentiable paleo, proxy, and data-assimilation scaffolding.} Orbital
+    forcing, proxy forward operators, and a variational assimilation harness are written in the
+    same differentiable style, so calibration against paleo and modern observations is a
+    gradient computation (Part~III).
+  \item \textbf{Speed and openness.} The whole coupled model integrates at roughly
+    $280\,\mathrm{yr}$ per GPU-day at T31, in about $8{,}000$ lines of Python, released under
+    Apache-2.0 --- fast and legible enough to use as a teaching instrument.
+\end{itemize}
+
+\begin{remark}
+None of the above is a new physical theory. The governing equations are standard and are cited
+to their originators throughout this book; the per-component provenance --- which dycore, which
+closures, which datasets --- is recorded in \code{docs/ATTRIBUTION.md}. \model{}'s contribution
+is the \emph{synthesis}: a small, fast, fully differentiable coupling of established components,
+with the diagnostic and AD-safety engineering needed to make that coupling usable. We
+deliberately avoid claims of being ``first'' or ``only''; adjacent and prior work --- notably
+NeuralGCM/\dino{} \citep{kochkov2024neuralgcm} and Veros \citep{hafner2018veros} --- is
+acknowledged as the foundation we build on.
+\end{remark}
+
 \section{How to read this book}
 
 Part~I develops the continuous and discrete mathematics common to all components, and the

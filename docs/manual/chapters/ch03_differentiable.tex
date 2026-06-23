@@ -7,6 +7,7 @@
 \providecommand{\state}{\mathbf{s}}         % model state vector
 \providecommand{\param}{\boldsymbol{\theta}}% parameter / control vector
 \providecommand{\loss}{\mathcal{L}}         % scalar loss / cost
+\providecommand{\drho}{\Delta\dens}         % subpolar-minus-subtropical density contrast (also in ch08)
 
 What makes \model{} different from a conventional climate model is not its physics --- the
 governing equations of the next chapters are the same primitive equations every ocean and
@@ -231,6 +232,129 @@ The standing caveat (developed in the applications chapters) is \emph{chaos}: fo
 atmosphere the adjoint gradient of a long trajectory grows exponentially and becomes a poor
 descent direction, so the useful differentiable targets are short windows, time-mean statistics, or
 the better-conditioned ocean/coupled steady states.
+
+\section{Smooth approximations for gradient-preserving physics}
+\label{sec:adsafe_substitutions}
+
+Section~\ref{sec:scancg} dealt with the \emph{control flow} of differentiability --- loops and
+solvers. There is a second, pointwise requirement. Reverse-mode AD can only transpose operations
+that are differentiable almost everywhere; the everyday idioms of parameterised physics ---
+\code{if}-style on/off switches, hard clips, and $\max$ saturations --- are not. A hard clamp
+$\mathrm{clip}(x,a,b)$ has \emph{zero} gradient outside $[a,b]$, so any parameter pushed into the
+saturated region becomes invisible to \code{jax.grad}; a step switch has a derivative that is zero
+everywhere except an infinite spike on a measure-zero set, which AD simply reads as zero. Either way
+the sensitivity that should flow through the parameterisation is silently killed. \model{} therefore
+replaces the hard operators with smooth surrogates that agree with the physics to leading order but
+carry a non-zero gradient through the transition. The substitutions below are applied consistently
+across the ocean, atmosphere, and ice components.
+
+\paragraph{Soft isopycnal-slope limiter (GM).} The Gent--McWilliams bolus transport needs the
+neutral slope $s$ bounded so a near-vertical isopycnal does not produce a singular eddy velocity.
+A hard $|s|\le S_{\max}$ clip would zero $\partial(\text{bolus})/\partial s$ exactly where the slope
+matters most. \model{} uses the smooth saturating limiter
+\begin{equation}
+  \mathrm{softclip}(s) = \frac{s}{\sqrt{1+(s/S_{\max})^{2}}},
+  \qquad S_{\max}=10^{-2},
+  \label{eq:softclip-slope}
+\end{equation}
+which is the identity for $|s|\ll S_{\max}$, asymptotes to $\pm S_{\max}$, and has a strictly
+positive derivative everywhere
+(\codref{chronos\_esm/ocean/gm.py}{\code{softclip}, line~53}).
+
+\paragraph{Smooth convective-adjustment ramp.} Static instability ($\drho<0$, denser water over
+lighter) should switch on a large vertical diffusivity. A hard on/off switch at $\drho<0$ has no
+gradient with respect to the density field. Instead the interface diffusivity ramps continuously
+\begin{equation}
+  \kappa = \kappa_{\mathrm{bg}} + (\kappa_{\mathrm{conv}}-\kappa_{\mathrm{bg}})\,r,
+  \qquad
+  r = 1-\exp\!\big(-\,\mathrm{instab}/r_{\mathrm{scale}}\big),
+  \qquad
+  \mathrm{instab}=\max(-\drho,0),
+  \label{eq:conv-ramp}
+\end{equation}
+so $r$ runs smoothly from $0$ (stable) toward $1$ (strongly unstable) and density gradients flow
+into the mixing (\codref{chronos\_esm/ocean/mixing.py}{\code{kappa} ramp, line~245}). The single
+$\max(-\drho,0)$ retains a kink at neutral stability but is differentiable on either side, unlike a
+Boolean switch.
+
+\paragraph{Smooth precipitation trigger.} Large-scale condensation should fire when humidity $q$
+exceeds a critical value $q_c=\,$\code{qc\_ref}$\,\cdot q_{\mathrm{sat}}$. The hard parameterisation
+is $P=(q-q_c)/\tau$ if $q>q_c$ else $0$, whose derivative jumps discontinuously at threshold. The
+model computes precipitation from a smooth function of the normalised humidity excess
+$\mathrm{excess}=(q-q_c)/\epsilon$, designed around the softplus surrogate
+$P=\mathrm{softplus}(\mathrm{excess})\,\epsilon/\tau$ (documented in the source); the active line
+uses the closely related $P=\mathrm{relu}(\mathrm{excess})\,\epsilon/\tau$, which removes the
+threshold discontinuity in value and is differentiable away from the single kink at $q=q_c$
+(\codref{chronos\_esm/atmos/physics.py}{\code{precip}, line~79; commented softplus form line~52}).
+
+\paragraph{Smooth sea-ice concentration.} Ice concentration $A$ as a function of thickness $h$ is a
+classic step ($A=1$ if $h>h_0$). \model{} replaces it with
+\begin{equation}
+  A = \tanh\!\big(h/0.5\big),
+  \label{eq:ice-conc}
+\end{equation}
+which rises smoothly from $0$, so $\partial A/\partial h\neq 0$ through the marginal-ice zone
+(\codref{chronos\_esm/ice/driver.py}{\code{a\_new}, line~141}).
+
+\paragraph{Sigmoid sea-ice albedo transitions.} Surface albedo would naturally be selected by
+branching (frozen vs.\ melting; thick vs.\ thin ice), giving a piecewise-constant, zero-gradient
+field. The model blends with sigmoids of temperature and thickness,
+\begin{equation}
+  f_{\mathrm{melt}} = \sigma\!\Big(\tfrac{T_s+0.5}{w}\Big),
+  \qquad
+  f_{\mathrm{thin}} = \sigma\!\Big(\tfrac{0.5-h}{0.1}\Big),
+  \qquad w=0.5,
+  \label{eq:ice-albedo}
+\end{equation}
+and forms $\alpha$ as the convex combination of ice/melt and (ice,ocean) albedos, so albedo varies
+smoothly --- and differentiably --- across the melt and thin-ice transitions
+(\codref{chronos\_esm/ice/thermodynamics.py}{\code{melt\_fraction}, \code{thin\_ice\_fraction},
+lines~44,50}).
+
+\paragraph{General soft clip.} Where a state variable must be range-limited, the model provides a
+$\tanh$-based clip with a tunable sharpness,
+\begin{equation}
+  \mathrm{soft\_clip}(x;a,b)
+  = m + \tfrac{b-a}{2}\,\tanh\!\Big(\sigma_{\!s}\,\tfrac{x-m}{(b-a)/2}\Big),
+  \qquad m=\tfrac{a+b}{2},
+  \label{eq:soft-clip}
+\end{equation}
+which behaves like \code{jnp.clip} in the interior but keeps a \emph{non-zero boundary gradient}, so
+a parameter driven to the limit is not differentiably orphaned
+(\codref{chronos\_esm/ocean/utils.py}{\code{soft\_clip}, lines~6--27}).
+
+\paragraph{Softplus thermohaline response.} The thermohaline overturning amplitude responds to the
+subpolar-minus-subtropical density contrast. A rectified-linear or thresholded response would zero
+$\partial(\text{AMOC})/\partial(\text{density})$ on one side; the model uses softplus,
+\begin{equation}
+  \mathrm{amp} = k_{\mathrm{vel}}\,\mathrm{softplus}\!\big(\mathrm{contrast}/\drho_{\mathrm{scale}}\big),
+  \label{eq:thc-softplus}
+\end{equation}
+so the overturning responds smoothly and positively to the density contrast and
+$\partial(\text{AMOC})/\partial(\text{density})$ flows everywhere --- the property that lets the
+AMOC fold be calibrated by AD (Chapter~\ref{chap:ch17_amoc_tipping})
+(\codref{chronos\_esm/ocean/overturning.py}{\code{thc\_overturning\_amplitude}, line~89}).
+
+\paragraph{The one deliberate hard clip.} Not every clamp is smoothed. The ocean tracer update
+applies a \emph{hard} \code{jnp.clip} as a physics-stability safety net --- salinity to
+$[30,38]\,\mathrm{psu}$ and temperature to $[250,320]\,\mathrm{K}$ ---
+(\codref{chronos\_esm/ocean/veros\_driver.py}{salt/temp \code{jnp.clip}, lines~413--414}). This is
+an honest exception: \code{jnp.clip} has subgradient $1$ in the interior and $0$ at the boundaries
+(a straight-through estimator), so it preserves gradients only \emph{inside} the band. It is
+retained as a hard clip on purpose because it is a guard against numerical blow-up, not a tunable
+parameterisation, and --- as recorded in the source --- it is not hit in normal coupled runs (the
+high-latitude salinity sponge and volume renormalisation keep the fields well inside the band), so
+no real sensitivity is lost.
+
+\begin{remark}
+None of these surrogates is a novel operator: they are the standard relaxations of
+differentiable programming --- $\tanh$/sigmoid for switches, softplus/ReLU for thresholds, and
+saturating rational functions for clips --- applied consistently so that a single
+end-to-end \code{jax.grad} of a multi-decade run returns a non-zero, physically meaningful gradient
+with respect to every parameterisation it passes through. The design goal is uniform: keep the model
+differentiable-almost-everywhere so the cheap-gradient principle of Eq.~\eqref{eq:cheap-gradient}
+holds for the whole coupled system, not just its linear-algebra core.
+\end{remark}
 
 \begin{exercise}[Forward vs reverse cost]
 A configuration has $P=12$ scalar parameters and you want the gradient of a single time-mean AMOC

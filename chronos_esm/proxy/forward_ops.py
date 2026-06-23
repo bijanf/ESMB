@@ -27,15 +27,35 @@ def bemis_d18o(sst_c: jnp.ndarray, d18o_sw: jnp.ndarray = 0.0) -> jnp.ndarray:
     return d18o_sw + (BEMIS_A - sst_c) / BEMIS_B
 
 
-def salinity_to_d18o_sw(salinity: jnp.ndarray) -> jnp.ndarray:
-    """
-    Simple linear relationship between Salinity and d18O_sw.
+# Global surface salinity--d18O_sw relationship. The slope ~0.5 permil/psu is the
+# global-ocean surface mean of LeGrande & Schmidt (2006); we reference it to the
+# global-mean salinity S_ref = 35 psu so that d18O_sw = 0 (VSMOW) at S_ref.
+# Regional slopes differ markedly (e.g. high-latitude meltwater lines are steeper);
+# pass `slope`/`s_ref` to override for a basin-specific calibration.
+D18OSW_SLOPE = 0.5  # permil per psu (LeGrande & Schmidt 2006, global surface mean)
+D18OSW_S_REF = 35.0  # psu (reference salinity, d18O_sw = 0 here)
 
-    d18O_sw = alpha * S + beta
-    Global relationship approx: d18O_sw = 0.5 * S - 17.5 (rough approx)
-    Or regional.
 
-    For now, return 0.0 or a simple placeholder.
+def salinity_to_d18o_sw(
+    salinity: jnp.ndarray,
+    slope: float = D18OSW_SLOPE,
+    s_ref: float = D18OSW_S_REF,
+) -> jnp.ndarray:
     """
-    # Placeholder: assume constant 0.0 SMOW for now unless requested
-    return jnp.zeros_like(salinity)
+    Linear seawater d18O--salinity relationship (LeGrande & Schmidt 2006).
+
+        d18O_sw = slope * (S - s_ref)
+
+    The default global slope (0.5 permil/psu, referenced to S_ref = 35 psu) is a
+    first-order surface approximation; supply `slope`/`s_ref` for a regional
+    calibration. Fully differentiable in the input salinity and the coefficients.
+
+    Args:
+        salinity: Practical salinity [psu]
+        slope: d(d18O_sw)/dS [permil/psu] (default global-mean 0.5)
+        s_ref: reference salinity at which d18O_sw = 0 [psu] (default 35)
+
+    Returns:
+        d18o_sw: Seawater d18O [permil, VSMOW]
+    """
+    return slope * (salinity - s_ref)
